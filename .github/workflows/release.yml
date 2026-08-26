@@ -1,0 +1,49 @@
+name: Release
+on:
+  workflow_dispatch:
+  push: { tags: ['v*'] }
+permissions: { contents: write }
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked --release
+      - name: Smoke tested executables
+        shell: pwsh
+        run: |
+          mkdir smoke-root; 'reactor pressure valve' | Set-Content smoke-root/reactor.txt
+          & target/release/AXPIndexerDaemon.exe health --db smoke.db
+          & target/release/AXPIndexerDaemon.exe scan --root smoke-root --db smoke.db
+          $r=& target/release/AXPIndexerClient.exe search --db smoke.db --query 'reactor pressure'; if($r -notmatch 'reactor.txt'){throw 'smoke failed'}
+          $p=Start-Process target/release/AXPIndexerClient.exe -ArgumentList 'serve','--db','smoke.db','--port','18765' -PassThru
+          try { Start-Sleep 2; Invoke-WebRequest http://127.0.0.1:18765/health; Invoke-WebRequest http://127.0.0.1:18765/; Invoke-WebRequest 'http://127.0.0.1:18765/api/search?q=reactor' } finally { Stop-Process $p -ErrorAction SilentlyContinue }
+      # Future signing and Authenticode verification belong here, before packaging.
+      - name: Package, hash, and report
+        id: package
+        shell: pwsh
+        run: |
+          $v=if('${{ github.ref_type }}' -eq 'tag'){'${{ github.ref_name }}'}else{'0.1.0-dev'}
+          $name="AXPIndexerNG-windows-x86_64-$v"; mkdir dist/$name/daemon,dist/$name/client
+          cp target/release/AXPIndexerDaemon.exe dist/$name/daemon/; cp target/release/AXPIndexerClient.exe dist/$name/client/; cp README.md dist/$name/
+          Compress-Archive dist/$name/* dist/$name.zip
+          $hash=(Get-FileHash dist/$name.zip -Algorithm SHA256).Hash.ToLower(); "$hash  $name.zip" | Set-Content dist/$name.zip.sha256
+          $d=(Get-Item target/release/AXPIndexerDaemon.exe).Length;$c=(Get-Item target/release/AXPIndexerClient.exe).Length;$z=(Get-Item dist/$name.zip).Length
+          if($d -gt 30MB -or $c -gt 30MB -or ($d+$c) -gt 50MB){throw 'binary budget exceeded'}
+          "Daemon: $d; Client: $c; Combined: $($d+$c); ZIP: $z; SHA256: $hash"
+          "name=$name" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with: { name: '${{ steps.package.outputs.name }}', path: 'dist/*.zip*' }
+      - name: Classify prerelease
+        if: github.ref_type == 'tag'
+        id: pre
+        shell: pwsh
+        run: echo "value=$('${{ github.ref_name }}' -match '-(alpha|beta|rc)')" >> $env:GITHUB_OUTPUT
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          prerelease: '${{ steps.pre.outputs.value }}'
+          files: dist/*.zip*
