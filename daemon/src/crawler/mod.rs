@@ -1,2 +1,2 @@
 mod scanner;
-pub use scanner::{ScanSummary, scan};
+pub use scanner::scan;
