@@ -1,0 +1,32 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustc --version; cargo --version
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked --release
+      - name: Executable and HTTP smoke tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory smoke-root
+          'AXPIndexer unique smoke phrase reactor-421 pressure valve' | Set-Content smoke-root/reactor.txt
+          & target/release/AXPIndexerDaemon.exe health --db smoke.db
+          & target/release/AXPIndexerDaemon.exe scan --root smoke-root --db smoke.db
+          & target/release/AXPIndexerClient.exe health --db smoke.db
+          $result = & target/release/AXPIndexerClient.exe search --db smoke.db --query 'reactor pressure'
+          if ($result -notmatch 'reactor.txt') { throw 'CLI search smoke failed' }
+          $server = Start-Process target/release/AXPIndexerClient.exe -ArgumentList 'serve','--db','smoke.db','--host','127.0.0.1','--port','18765' -PassThru
+          try { Start-Sleep 2; (Invoke-WebRequest http://127.0.0.1:18765/health).StatusCode; (Invoke-WebRequest http://127.0.0.1:18765/).StatusCode; $body=(Invoke-WebRequest 'http://127.0.0.1:18765/api/search?q=reactor').Content; if($body -notmatch 'reactor.txt'){throw 'HTTP search smoke failed'} } finally { Stop-Process $server -ErrorAction SilentlyContinue }
+      - name: Enforce binary budgets
+        shell: pwsh
+        run: |
+          $d=(Get-Item target/release/AXPIndexerDaemon.exe).Length; $c=(Get-Item target/release/AXPIndexerClient.exe).Length; $t=$d+$c
+          "Daemon: $d bytes`nClient: $c bytes`nCombined: $t bytes"
+          if($d -gt 30MB -or $c -gt 30MB -or $t -gt 50MB){throw 'Binary size budget exceeded'}
