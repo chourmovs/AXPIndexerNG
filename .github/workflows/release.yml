@@ -47,11 +47,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseArgs = @(
-            'release', 'create', $env:GITHUB_REF_NAME,
-            $env:ARTIFACT, "$env:ARTIFACT.sha256", '--generate-notes'
-          )
-          if ($env:GITHUB_REF_NAME -match '-(alpha|beta|rc)') {
-            $releaseArgs += '--prerelease'
+          # A rerun may target a release created by an earlier, partially failed job.
+          $null = gh release view $env:GITHUB_REF_NAME 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME `
+              $env:ARTIFACT "$env:ARTIFACT.sha256" --clobber
+          } else {
+            $releaseArgs = @(
+              'release', 'create', $env:GITHUB_REF_NAME,
+              $env:ARTIFACT, "$env:ARTIFACT.sha256", '--generate-notes'
+            )
+            if ($env:GITHUB_REF_NAME -match '-(alpha|beta|rc)') {
+              $releaseArgs += '--prerelease'
+            }
+            gh @releaseArgs
           }
-          gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw 'GitHub release publication failed'
+          }
