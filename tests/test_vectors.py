@@ -1,5 +1,4 @@
 import pytest
-
 from axp_core.database import connect
 from axp_core.vectors import search, upsert
 
