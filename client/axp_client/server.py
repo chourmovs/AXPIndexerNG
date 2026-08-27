@@ -26,8 +26,10 @@ def make_handler(db, embedder):
                 return self.send_json({"status": "ok"})
             if url.path == "/api/search":
                 q = parse_qs(url.query).get("q", [""])[0]
+                explain = parse_qs(url.query).get("explain", ["0"])[0] == "1"
+                profile = parse_qs(url.query).get("profile", ["hybrid"])[0]
                 with connect(db, readonly=True) as con:
-                    return self.send_json(search(con, embedder, q) if q else [])
+                    return self.send_json(search(con, embedder, q, profile=profile, explain=explain) if q else [])
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])

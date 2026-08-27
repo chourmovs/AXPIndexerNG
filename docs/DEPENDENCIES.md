@@ -1,5 +1,17 @@
-# Dependencies
+# Dependencies and model packs
 
-Direct runtime roots are FastEmbed 0.8.0, sqlite-vec 0.1.9, PyMuPDF, python-docx, and python-pptx. FastEmbed supplies the CPU ONNX inference path; its heavyweight transitives include ONNX Runtime, NumPy, and tokenizers. There is one ONNX Runtime implementation and no GPU/DirectML package.
+Retrieval Engine V2 adds no heavyweight Python dependency. SQLite FTS5 and `sqlite-vec` remain the indexes;
+FastEmbed supplies both dense `TextEmbedding` and optional `LateInteractionTextEmbedding`. No Torch,
+sentence-transformers, FAISS, PyArrow, Pandas, or service is used.
 
-Native components visible to IT/SOC are the standard WinPython `python.exe`/Python DLL, ONNX Runtime, sqlite-vec's SQLite extension, and PyMuPDF native modules. The application intentionally excludes LanceDB, PyArrow, pandas, scientific-distribution extras, web frameworks, and Node tooling. The embedding model cache is separately provisioned and excluded from the runtime ZIP.
+Models are independent caches and are never placed in the runtime ZIP:
+
+| Pack | Model ID | Purpose | Dimension | License / verification |
+|---|---|---|---:|---|
+| `dense-balanced/` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | default multilingual dense retrieval | 384 | Apache-2.0; verify files against the provider cache metadata |
+| `dense-quality/` | `intfloat/multilingual-e5-large` | optional higher-quality prefixed dense retrieval | 1024 | MIT; verify provider cache metadata |
+| `reranker-quality/` | `answerdotai/answerai-colbert-small-v1` | multilingual late-interaction reranking | token matrix width is model-defined | Apache-2.0; verify provider cache metadata |
+
+Provision packs explicitly with the existing model-cache process. Runtime search uses local-only mode and
+will not download missing artifacts. The committed unit suite uses deterministic stubs; the manual workflow
+provisions real models.
