@@ -44,6 +44,14 @@ jobs:
       - name: Release tagged build
         if: github.ref_type == 'tag'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $pre=$env:GITHUB_REF_NAME -match '-(alpha|beta|rc)'
-          gh release create $env:GITHUB_REF_NAME $env:ARTIFACT "$env:ARTIFACT.sha256" --generate-notes $(if($pre){'--prerelease'})
+          $releaseArgs = @(
+            'release', 'create', $env:GITHUB_REF_NAME,
+            $env:ARTIFACT, "$env:ARTIFACT.sha256", '--generate-notes'
+          )
+          if ($env:GITHUB_REF_NAME -match '-(alpha|beta|rc)') {
+            $releaseArgs += '--prerelease'
+          }
+          gh @releaseArgs
