@@ -1,6 +1,9 @@
-/target/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 *.db
-*.db-shm
 *.db-wal
-/smoke-root/
-/dist/
+*.db-shm
+model-cache/
+dist/
