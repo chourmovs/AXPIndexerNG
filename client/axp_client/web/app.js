@@ -1,0 +1,2 @@
+const form=document.querySelector('form'), results=document.querySelector('#results');
+form.addEventListener('submit',async e=>{e.preventDefault();results.textContent='Searching…';const q=form.querySelector('input').value;const rows=await (await fetch('/api/search?q='+encodeURIComponent(q))).json();results.replaceChildren(...rows.map(r=>{const a=document.createElement('article');const h=document.createElement('h2');h.textContent=r.path;const p=document.createElement('p');p.textContent=r.snippet;a.append(h,p);return a;}));});

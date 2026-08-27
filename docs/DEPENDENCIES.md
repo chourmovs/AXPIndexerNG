@@ -1,16 +1,5 @@
-# Direct dependencies
+# Dependencies
 
-| Crate | Used by | Purpose and architectural impact |
-|---|---|---|
-| `anyhow` | all | Small application/library error context; no runtime service. |
-| `rusqlite` (`bundled`) | core | Typed, parameterized SQLite API and statically bundled SQLite/FTS5; the principal native dependency. |
-| `serde` | core, client | Derives JSON response serialization. |
-| `serde_json` | client | Emits the small HTTP API payloads. |
-| `clap` (`derive`) | daemon, client | Validated native command-line parsing. |
-| `sha2` | daemon | Streaming-compatible SHA-256 change identity. |
-| `walkdir` | daemon | Robust recursive traversal without a platform runtime. |
-| `tracing`, `tracing-subscriber` | daemon/client | Contextual operational logging. |
-| `tiny_http` | client | Small synchronous HTTP server; avoids an async runtime. |
-| `tempfile` | test only | Isolated filesystem/database tests. |
+Direct runtime roots are FastEmbed 0.8.0, sqlite-vec 0.1.9, PyMuPDF, python-docx, and python-pptx. FastEmbed supplies the CPU ONNX inference path; its heavyweight transitives include ONNX Runtime, NumPy, and tokenizers. There is one ONNX Runtime implementation and no GPU/DirectML package.
 
-`cargo tree` and `cargo tree -d` are reviewed in PR checks. There is no async runtime, ORM, frontend toolchain, or dynamic SQLite dependency.
+Native components visible to IT/SOC are the standard WinPython `python.exe`/Python DLL, ONNX Runtime, sqlite-vec's SQLite extension, and PyMuPDF native modules. The application intentionally excludes LanceDB, PyArrow, pandas, scientific-distribution extras, web frameworks, and Node tooling. The embedding model cache is separately provisioned and excluded from the runtime ZIP.
