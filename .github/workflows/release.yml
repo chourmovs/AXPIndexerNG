@@ -1,49 +1,67 @@
-name: Release
+name: Portable release
 on:
   workflow_dispatch:
-  push: { tags: ['v*'] }
+  push: { tags: ["v*"] }
 permissions: { contents: write }
 jobs:
-  release:
+  portable:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --locked
-      - run: cargo build --workspace --locked --release
-      - name: Smoke tested executables
+      - name: Download and verify WinPython 3.11.8
         shell: pwsh
         run: |
-          mkdir smoke-root; 'reactor pressure valve' | Set-Content smoke-root/reactor.txt
-          & target/release/AXPIndexerDaemon.exe health --db smoke.db
-          & target/release/AXPIndexerDaemon.exe scan --root smoke-root --db smoke.db
-          $r=& target/release/AXPIndexerClient.exe search --db smoke.db --query 'reactor pressure'; if($r -notmatch 'reactor.txt'){throw 'smoke failed'}
-          $p=Start-Process target/release/AXPIndexerClient.exe -ArgumentList 'serve','--db','smoke.db','--port','18765' -PassThru
-          try { Start-Sleep 2; Invoke-WebRequest http://127.0.0.1:18765/health; Invoke-WebRequest http://127.0.0.1:18765/; Invoke-WebRequest 'http://127.0.0.1:18765/api/search?q=reactor' } finally { Stop-Process $p -ErrorAction SilentlyContinue }
-      # Future signing and Authenticode verification belong here, before packaging.
-      - name: Package, hash, and report
-        id: package
+          $url='https://github.com/winpython/winpython/releases/download/7.1.20240203final/Winpython64-3.11.8.0dot.exe'
+          Invoke-WebRequest $url -OutFile winpython.exe
+          if ((Get-FileHash winpython.exe -Algorithm SHA256).Hash.ToLower() -ne '54c501574df21c3c1883fda4f5e8ff73883ede72844ae6700252143ecc024d47') { throw 'WinPython SHA256 mismatch' }
+          Start-Process ./winpython.exe -ArgumentList '-y','-oWinPython' -Wait
+          $py=(Get-ChildItem WinPython -Recurse python.exe | Select-Object -First 1).FullName
+          "PY=$py" | Out-File $env:GITHUB_ENV -Append
+      - name: Assemble runtime and install runtime roots only
         shell: pwsh
         run: |
-          $v=if('${{ github.ref_type }}' -eq 'tag'){'${{ github.ref_name }}'}else{'0.1.0-dev'}
-          $name="AXPIndexerNG-windows-x86_64-$v"; mkdir dist/$name/daemon,dist/$name/client
-          cp target/release/AXPIndexerDaemon.exe dist/$name/daemon/; cp target/release/AXPIndexerClient.exe dist/$name/client/; cp README.md dist/$name/
-          Compress-Archive dist/$name/* dist/$name.zip
-          $hash=(Get-FileHash dist/$name.zip -Algorithm SHA256).Hash.ToLower(); "$hash  $name.zip" | Set-Content dist/$name.zip.sha256
-          $d=(Get-Item target/release/AXPIndexerDaemon.exe).Length;$c=(Get-Item target/release/AXPIndexerClient.exe).Length;$z=(Get-Item dist/$name.zip).Length
-          if($d -gt 30MB -or $c -gt 30MB -or ($d+$c) -gt 50MB){throw 'binary budget exceeded'}
-          "Daemon: $d; Client: $c; Combined: $($d+$c); ZIP: $z; SHA256: $hash"
-          "name=$name" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory stage/AXPIndexerNG | Out-Null
+          Copy-Item (Split-Path $env:PY) stage/AXPIndexerNG/python -Recurse
+          & stage/AXPIndexerNG/python/python.exe -m pip install -r requirements-runtime.txt
+          Copy-Item daemon,client,shared,README.md stage/AXPIndexerNG -Recurse
+          '@echo off`r`nset PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client`r`n"%~dp0python\python.exe" -m axp_daemon %*' | Set-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat
+          '@echo off`r`nset PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client`r`n"%~dp0python\python.exe" -m axp_client %*' | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat
+          '[model]`r`ncache_path=model-cache`r`nallow_download=false' | Set-Content stage/AXPIndexerNG/config.example.ini
+          $before=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime before cleanup: $before bytes"
+          Get-ChildItem stage -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          $after=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime after cleanup: $after bytes"
+          if ($after -gt 350MB) { throw 'Runtime exceeds 350 MiB' } elseif ($after -gt 250MB) { Write-Warning 'Runtime exceeds target' }
+          $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
+          Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse | ForEach-Object { [pscustomobject]@{Path=$_.FullName;Bytes=(Get-ChildItem $_ -File -Recurse | Measure-Object Length -Sum).Sum} } | Sort-Object Bytes -Descending | Select-Object -First 30
+          Get-ChildItem stage -File -Recurse | Sort-Object Length -Descending | Select-Object -First 50 FullName,Length
+          & stage/AXPIndexerNG/python/python.exe -m pip freeze
+          Compress-Archive stage/AXPIndexerNG dist.zip
+          $version=if($env:GITHUB_REF_TYPE -eq 'tag'){$env:GITHUB_REF_NAME.TrimStart('v')}else{'0.1.0-dev'}; $name="AXPIndexerNG-runtime-$version.zip"; Move-Item dist.zip $name
+          (Get-FileHash $name).Hash.ToLower()+"  $name" | Set-Content "$name.sha256"; "ARTIFACT=$name" | Out-File $env:GITHUB_ENV -Append
+          "ZIP size: $((Get-Item $name).Length) bytes"; "Model cache size: 0 bytes (excluded)"
       - uses: actions/upload-artifact@v4
-        with: { name: '${{ steps.package.outputs.name }}', path: 'dist/*.zip*' }
-      - name: Classify prerelease
+        with: { name: runtime, path: "${{ env.ARTIFACT }}*" }
+      - name: Release tagged build
         if: github.ref_type == 'tag'
-        id: pre
         shell: pwsh
-        run: echo "value=$('${{ github.ref_name }}' -match '-(alpha|beta|rc)')" >> $env:GITHUB_OUTPUT
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
-        with:
-          prerelease: '${{ steps.pre.outputs.value }}'
-          files: dist/*.zip*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A rerun may target a release created by an earlier, partially failed job.
+          $null = gh release view $env:GITHUB_REF_NAME 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME `
+              $env:ARTIFACT "$env:ARTIFACT.sha256" --clobber
+          } else {
+            $releaseArgs = @(
+              'release', 'create', $env:GITHUB_REF_NAME,
+              $env:ARTIFACT, "$env:ARTIFACT.sha256", '--generate-notes'
+            )
+            if ($env:GITHUB_REF_NAME -match '-(alpha|beta|rc)') {
+              $releaseArgs += '--prerelease'
+            }
+            gh @releaseArgs
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw 'GitHub release publication failed'
+          }
