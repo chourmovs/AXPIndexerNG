@@ -1,7 +1,6 @@
 import hashlib
 from collections import OrderedDict
 
-
 RERANKER_MODEL = "answerdotai/answerai-colbert-small-v1"
 
 

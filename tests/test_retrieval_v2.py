@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from axp_client.reranker import EmbeddingLRU, maxsim
 from axp_core.fts import build_query
 from axp_core.hybrid import diversify

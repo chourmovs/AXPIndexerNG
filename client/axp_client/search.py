@@ -1,6 +1,7 @@
 import time
 
-from axp_core.hybrid import SearchConfig, search as hybrid_search
+from axp_core.hybrid import SearchConfig
+from axp_core.hybrid import search as hybrid_search
 from axp_core.metadata import validate_index_signature
 
 
