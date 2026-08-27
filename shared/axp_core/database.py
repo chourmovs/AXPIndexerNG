@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+from .metadata import IndexRebuildRequired
 from .schema import BASE_SCHEMA, SCHEMA_VERSION
 
 
@@ -9,7 +10,8 @@ class CapabilityError(RuntimeError):
 
 
 def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = False):
-    target = f"file:{Path(path).resolve()}?mode=ro" if readonly else str(path)
+    db_path = Path(path).resolve()
+    target = f"file:{db_path}?mode=ro" if readonly else str(db_path)
     con = sqlite3.connect(target, uri=readonly)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
@@ -21,22 +23,43 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
     except sqlite3.Error as exc:
         raise CapabilityError("SQLite FTS5 is required") from exc
     load_vectors(con)
-    if not readonly:
-        con.executescript(BASE_SCHEMA)
-        row = con.execute("SELECT version FROM schema_version").fetchone()
-        if row is None:
-            con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
-        elif row[0] != SCHEMA_VERSION:
-            raise CapabilityError(f"Unsupported schema version {row[0]}")
-        if dimension is not None:
-            con.execute(
-                f"CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(embedding float[{int(dimension)}])"
-            )
-            con.execute(
-                """CREATE TRIGGER IF NOT EXISTS chunks_vector_delete AFTER DELETE ON chunks BEGIN DELETE FROM chunk_vectors WHERE rowid=old.id; END"""
-            )
-        con.commit()
+    if readonly:
+        _check_version(con)
+        return con
+    # Refuse old populated schemas rather than allowing CREATE IF NOT EXISTS to disguise them.
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone():
+        _check_version(con)
+    if dimension is not None:
+        con.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(embedding float[{int(dimension)}] distance_metric=cosine)"
+        )
+    con.executescript(BASE_SCHEMA)
+    if dimension is not None:
+        con.execute("CREATE TRIGGER IF NOT EXISTS chunks_vector_delete AFTER DELETE ON chunks BEGIN DELETE FROM chunk_vectors WHERE rowid=old.id; END")
+    row = con.execute("SELECT version FROM schema_version").fetchone()
+    if row is None:
+        con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
+    con.commit()
     return con
+
+
+def _check_version(con):
+    try:
+        row = con.execute("SELECT version FROM schema_version").fetchone()
+    except sqlite3.Error as exc:
+        raise IndexRebuildRequired("Index rebuild required: unrecognized database schema") from exc
+    if row is None or row[0] != SCHEMA_VERSION:
+        value = "missing" if row is None else row[0]
+        raise IndexRebuildRequired(f"Index rebuild required: schema version {value} is incompatible")
+
+
+def rebuild(path, dimension):
+    db = Path(path)
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(str(db) + suffix)
+        if candidate.exists():
+            candidate.unlink()
+    return connect(path, dimension=dimension)
 
 
 def load_vectors(con):
