@@ -1,0 +1,5 @@
+fastembed==0.8.0
+sqlite-vec==0.1.9
+PyMuPDF
+python-docx
+python-pptx

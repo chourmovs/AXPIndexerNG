@@ -1,17 +1,20 @@
-# AXPIndexer NG
+# AXPIndexerNG
 
-AXPIndexer NG is a clean-sheet native Rust document index. It deliberately separates two processes: **AXPIndexerDaemon** owns filesystem scanning and index writes; **AXPIndexerClient** reads the shared SQLite database directly and provides CLI search, a localhost HTTP API, and an offline indexed-text viewer. SQLite WAL is their concurrency contract—there is no daemon search RPC.
+AXPIndexerNG is a clean-sheet Python 3.11 document indexer. It **no longer uses Rust** and **no longer uses LanceDB**. Its single process boundary contract is SQLite + FTS5 + sqlite-vec; embeddings use FastEmbed and ONNX Runtime CPU.
 
-PR1 supports recursive UTF-8 `.txt`, `.md`, and `.markdown` indexing and FTS5 lexical search. SQLite is bundled; distributed binaries need no Python, Node, Java, or SQLite installation.
+## Design
 
-```console
-AXPIndexerDaemon health --db axpindex.db
-AXPIndexerDaemon scan --root C:\Docs --db axpindex.db
-AXPIndexerDaemon status --db axpindex.db
-AXPIndexerClient search --db axpindex.db --query "reactor pressure" --limit 20
-AXPIndexerClient serve --db axpindex.db --host 127.0.0.1 --port 8765
+Two independent applications share `axpindex.db`: the daemon scans, extracts, chunks, embeds, and reconciles files; the client reads the database and provides CLI/localhost search and a viewer. Supported inputs are TXT, Markdown, PDF, DOCX, and PPTX.
+
+Set `PYTHONPATH=shared;daemon;client` on Windows (use `:` on Unix). The model is deliberately outside the runtime. Set `FASTEMBED_CACHE_PATH` to a provisioned model cache; runtime commands never download silently. CI may pass `--allow-download`.
+
+```text
+python -m axp_daemon health --db axpindex.db
+python -m axp_daemon scan --root documents --db axpindex.db
+python -m axp_daemon status --db axpindex.db
+python -m axp_client health --db axpindex.db
+python -m axp_client search --db axpindex.db --query "reactor pressure"
+python -m axp_client serve --db axpindex.db --host 127.0.0.1 --port 8765
 ```
 
-The viewer shows only database-backed paths, metadata, and extracted chunks; it cannot read arbitrary files. DOCX, PPTX, PDF, OCR, embeddings, sqlite-vec, hybrid ranking, tray/service support, installers, remote HTTP, and signing are intentionally deferred. PR1 binaries are unsigned.
-
-See [architecture](docs/ARCHITECTURE.md) and [dependency rationale](docs/DEPENDENCIES.md).
+Install Python 3.11 runtime roots with `pip install -r requirements-runtime.txt`; development checks additionally use `requirements-dev.txt`.
