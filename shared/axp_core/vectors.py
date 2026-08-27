@@ -18,7 +18,7 @@ def search(con, vector, limit=20):
         """SELECT v.rowid chunk_id,v.distance vector_distance,c.document_id,c.chunk_no,c.page_no,
  c.section_heading heading,d.path,d.filename,d.title,c.text snippet,c.identifiers
  FROM chunk_vectors v JOIN chunks c ON c.id=v.rowid JOIN documents d ON d.id=c.document_id
- WHERE embedding MATCH ? AND k=? ORDER BY vector_distance ASC, v.rowid ASC""",
+ WHERE embedding MATCH ? AND k=? ORDER BY distance""",
         (serialize(vector), limit),
     ).fetchall()
     return [dict(r) for r in rows]
