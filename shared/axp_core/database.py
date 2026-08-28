@@ -2,7 +2,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .metadata import IndexRebuildRequired
+from .metadata import IndexRebuildRequired, upgrade_v3_index_signature
 from .schema import BASE_SCHEMA, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, SOURCES_SCHEMA
 from .sources import default_label, detect_source_kind, normalize_source_path
 
@@ -112,6 +112,11 @@ def _migrate_v3_to_v4(con):
                 "ALTER TABLE documents ADD COLUMN ingestion_mode TEXT NOT NULL DEFAULT 'content' "
                 "CHECK(ingestion_mode IN ('content','metadata'))"
             )
+        signature_row = con.execute("SELECT value FROM metadata WHERE key='index_signature'").fetchone()
+        if signature_row:
+            upgraded_signature = upgrade_v3_index_signature(signature_row[0])
+            if upgraded_signature is not None:
+                con.execute("UPDATE metadata SET value=? WHERE key='index_signature'", (upgraded_signature,))
         con.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
         con.commit()
     except Exception:
