@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import ntpath
 import json
+import ntpath
 import os
 import re
 import time

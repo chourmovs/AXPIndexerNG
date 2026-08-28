@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
+import pytest
 from axp_core.database import connect
 from axp_core.sources import coverage_percentages, get_source
 from axp_daemon.indexer import scan
 from axp_daemon.scanner import discover
 from conftest import FakeEmbedder
-import pytest
 
 
 def test_mixed_coverage_and_metadata_only_is_searchable(tmp_path):
@@ -53,7 +53,7 @@ def test_xlsx_and_csv_content_through_scan(tmp_path):
     sheet = workbook.active
     sheet.title = "Scale-up"
     sheet.append(["Equipment", "Température", "Date"])
-    sheet.append(["R042500", 75.2, datetime(2026, 8, 28, 10, 30)])
+    sheet.append(["R042500", 75.2, datetime(2026, 8, 28, 10, 30, tzinfo=UTC)])
     hidden = workbook.create_sheet("Données cachées")
     hidden.sheet_state = "hidden"
     hidden.append(["Mélange", "réussi"])

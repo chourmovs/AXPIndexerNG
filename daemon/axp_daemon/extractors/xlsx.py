@@ -1,5 +1,6 @@
 from datetime import date, datetime, time
 
+
 def _display(value):
     if isinstance(value, (datetime, date, time)):
         return value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
