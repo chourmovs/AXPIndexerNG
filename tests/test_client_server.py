@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 
 import pytest
-
 from axp_client import server
 
 
