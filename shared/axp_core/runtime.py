@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -49,15 +51,36 @@ DEFAULT_SETTINGS = {
 }
 
 
+ATOMIC_WRITE_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4)
+
+
 def atomic_write_json(path, value):
+    """Atomically write JSON, tolerating brief filesystem/antivirus contention."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + f".{os.getpid()}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    for attempt in range(len(ATOMIC_WRITE_RETRY_DELAYS_S) + 1):
+        temporary = None
+        try:
+            descriptor, name = tempfile.mkstemp(
+                prefix=f"{target.name}.{os.getpid()}.", suffix=".tmp", dir=target.parent
+            )
+            temporary = Path(name)
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(value, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+            return
+        except OSError:
+            if attempt >= len(ATOMIC_WRITE_RETRY_DELAYS_S):
+                raise
+            time.sleep(ATOMIC_WRITE_RETRY_DELAYS_S[attempt])
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def read_json(path, default=None):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -59,3 +60,25 @@ class FileLock:
 
     def __exit__(self, *_):
         self.release()
+
+
+def daemon_lock_path(db_path, runtime_dir=None):
+    """Return the stable catalog-specific daemon lock path."""
+    catalog_key = hashlib.sha256(str(Path(db_path).resolve()).casefold().encode()).hexdigest()[:16]
+    if runtime_dir is None:
+        from .runtime import runtime_paths
+
+        runtime_dir = runtime_paths()["runtime"]
+    return Path(runtime_dir) / f"daemon-{catalog_key}.lock"
+
+
+def daemon_instance_running(db_path, runtime_dir=None):
+    """Non-destructively probe whether the catalog daemon owns its OS lock."""
+    probe = FileLock(daemon_lock_path(db_path, runtime_dir))
+    try:
+        probe.acquire()
+    except AlreadyLocked:
+        return True
+    else:
+        probe.release()
+        return False

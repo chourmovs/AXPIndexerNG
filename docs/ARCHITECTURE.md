@@ -79,9 +79,13 @@ source/file, counters, totals, error and heartbeat timestamp. `control.json` car
 network control API or messaging dependency is used. OS-backed locks enforce one tray per data directory and one
 daemon per catalog/data directory even when stale lock files survive crashes.
 
-The tray treats heartbeats older than 30 seconds as stale. Auto-restart is enabled by default, limited to once per
-60 seconds and gated by persisted desired state, so an intentional stop is not immediately undone. Exiting the
-tray exits only the UI and preserves daemon operation.
+The tray treats heartbeats older than 90 seconds as stale, deliberately tolerating thread-scheduling delays on
+slow or battery-throttled systems while the normal publication interval remains about two seconds. A stale
+heartbeat is not proof that the daemon is dead: the catalog-specific OS instance lock is authoritative. The tray
+probes that lock before every candidate restart and suppresses duplicate launches while it remains owned.
+Auto-restart is enabled by default, limited to once per 60 seconds and gated by persisted desired state, so an
+intentional stop is not immediately undone. Manual restart also waits for the old lock owner to exit rather than
+blindly spawning a replacement. Exiting the tray exits only the UI and preserves daemon operation.
 
 ## Retrieval Engine V2
 

@@ -11,7 +11,7 @@ import webbrowser
 from pathlib import Path
 
 from axp_core.database import connect
-from axp_core.locking import AlreadyLocked, FileLock
+from axp_core.locking import AlreadyLocked, FileLock, daemon_instance_running
 from axp_core.runtime import atomic_write_json, configure_logging, load_settings, read_json, runtime_paths
 from axp_daemon.service import send_control
 
@@ -45,6 +45,7 @@ class TrayApplication:
         self.state = read_daemon_state()
         self.icon_state = None
         self.last_restart = -60.0
+        self.last_stale_lock_warning = None
         self.ui_queue = queue.Queue()
         self.shutting_down = False
         establish_startup_desired(self.settings, self.paths)
@@ -167,8 +168,19 @@ class TrayApplication:
         self.state = read_daemon_state()
         desired = read_json(self.paths["desired"], {}) or {}
         should_run = desired.get("state", "running" if self.settings["auto_start_daemon"] else "stopped") == "running"
+        restart_candidate = should_run and (self.state.get("stale") or self.state.get("state") == "stopped")
+        instance_present = daemon_instance_running(self.settings["db_path"]) if restart_candidate else False
+        self.state["daemon_instance_present"] = instance_present
+        self.state["restart_suppressed"] = bool(restart_candidate and instance_present)
+        now = time.monotonic()
+        if self.state["restart_suppressed"] and (
+                self.last_stale_lock_warning is None or now - self.last_stale_lock_warning >= 60):
+            LOGGER.warning("Daemon heartbeat stale but daemon instance is still active; duplicate restart suppressed")
+            self.last_stale_lock_warning = now
+        elif not self.state["restart_suppressed"]:
+            self.last_stale_lock_warning = None
         if should_auto_restart(self.state, "running" if should_run else "stopped",
-                               self.settings["auto_restart_daemon"], self.last_restart, time.monotonic()):
+                               self.settings["auto_restart_daemon"], self.last_restart, now, instance_present):
             LOGGER.warning("Auto-restart: stale heartbeat age=%s ms old_pid=%s",
                            self.state.get("heartbeat_age_ms"), self.state.get("pid"))
             try:

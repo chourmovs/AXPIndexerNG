@@ -2,11 +2,15 @@ import time
 
 from axp_core.runtime import read_json, runtime_paths
 
+HEARTBEAT_STALE_AFTER_S = 90
+AUTO_RESTART_COOLDOWN_S = 60
 
-def read_daemon_state(stale_after_s=30):
+
+def read_daemon_state(stale_after_s=HEARTBEAT_STALE_AFTER_S, now_ms=None):
     value = read_json(runtime_paths()["state"], {}) or {}
     heartbeat = value.get("heartbeat_ms", 0)
-    age_ms = int(time.time() * 1000) - heartbeat if heartbeat else None
+    current_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    age_ms = current_ms - heartbeat if heartbeat else None
     value["heartbeat_age_ms"] = age_ms
     value["stale"] = age_ms is None or age_ms > stale_after_s * 1000
     if value["stale"] and value.get("state") not in {"stopped", "stopping"}:
@@ -30,8 +34,12 @@ def tooltip(state):
     return f"AXPIndexerNG — {current.upper()}"[:127]
 
 
-def should_auto_restart(state, desired_state, enabled, last_restart_monotonic, now_monotonic):
+def should_auto_restart(state, desired_state, enabled, last_restart_monotonic, now_monotonic,
+                        daemon_instance_present=False):
+    """Decide whether to spawn; an owned daemon lock always vetoes a spawn."""
+    if desired_state != "running" or not enabled or daemon_instance_present:
+        return False
+    needs_restart = state.get("stale") or state.get("state") == "stopped"
     return bool(
-        enabled and desired_state == "running" and (state.get("stale") or state.get("state") == "stopped")
-        and now_monotonic - last_restart_monotonic >= 60
+        needs_restart and now_monotonic - last_restart_monotonic >= AUTO_RESTART_COOLDOWN_S
     )
