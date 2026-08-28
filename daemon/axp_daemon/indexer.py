@@ -164,7 +164,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
     mark_source_status(con, source_id, "scanning", last_scan_started_ms=started_ms)
     seen, pending, pending_chunks = set(), [], 0
     disabled_during_scan = False
-    traversal = discover(source["path"], recursive=bool(source["recursive"]))
+    traversal = discover(source["path"], recursive=bool(source["recursive"]), include_ignored=True)
     try:
         for path in traversal:
             if _control_call(control, "should_stop"):

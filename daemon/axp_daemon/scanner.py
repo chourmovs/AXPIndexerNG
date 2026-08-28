@@ -26,6 +26,7 @@ def is_ignored_document(name):
 class Discovery:
     root: Path
     recursive: bool = True
+    include_ignored: bool = False
     complete: bool = True
     errors: list[str] = field(default_factory=list)
     discovered: int = 0
@@ -49,6 +50,8 @@ class Discovery:
                         if self.recursive and entry.name.casefold() not in DRIVE_IGNORES:
                             yield from self._walk(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
+                        if not self.include_ignored and is_ignored_document(entry.name):
+                            continue
                         self.discovered += 1
                         yield Path(entry.path)
                 except OSError as exc:
@@ -60,8 +63,9 @@ def path_key(path):
     return os.path.normcase(os.path.abspath(os.fspath(path))).casefold()
 
 
-def discover(root, recursive=True):
-    return Discovery(Path(root), recursive=recursive)
+def discover(root, recursive=True, *, include_ignored=False):
+    """Stream eligible files, optionally including ignored files for coverage accounting."""
+    return Discovery(Path(root), recursive=recursive, include_ignored=include_ignored)
 
 
 def sha256(path):

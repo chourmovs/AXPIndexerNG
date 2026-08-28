@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import date
 
 import pytest
 from axp_core.database import connect
@@ -53,7 +53,7 @@ def test_xlsx_and_csv_content_through_scan(tmp_path):
     sheet = workbook.active
     sheet.title = "Scale-up"
     sheet.append(["Equipment", "Température", "Date"])
-    sheet.append(["R042500", 75.2, datetime(2026, 8, 28, 10, 30, tzinfo=UTC)])
+    sheet.append(["R042500", 75.2, date(2026, 8, 28)])
     hidden = workbook.create_sheet("Données cachées")
     hidden.sheet_state = "hidden"
     hidden.append(["Mélange", "réussi"])
