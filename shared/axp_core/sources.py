@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ntpath
+import json
 import os
 import re
 import time
@@ -179,10 +180,26 @@ def source_stats(con, source_id):
     return {"documents": row[0], "chunks": row[1]}
 
 
+def coverage_percentages(seen, content, metadata):
+    """Return absorption and full-content percentages; ignored/failed remain in the denominator."""
+    if not seen:
+        return 0.0, 0.0
+    return 100.0 * (content + metadata) / seen, 100.0 * content / seen
+
+
+def extension_breakdown(source):
+    try:
+        return json.loads(source["last_extension_breakdown"] or "{}")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return {}
+
+
 def mark_source_status(con, source_id, status, *, error=None, **fields):
     if status not in VALID_STATUSES:
         raise SourceError(f"Invalid source status: {status}")
-    allowed = {"last_scan_started_ms", "last_scan_completed_ms", "last_success_ms", "last_file_count", "last_chunk_count"}
+    allowed = {"last_scan_started_ms", "last_scan_completed_ms", "last_success_ms", "last_file_count",
+               "last_chunk_count", "last_seen_count", "last_content_count", "last_metadata_count",
+               "last_ignored_count", "last_failed_count", "last_extension_breakdown"}
     values = {k: v for k, v in fields.items() if k in allowed}
     values.update(status=status, last_error=error, updated_ms=int(time.time() * 1000))
     assignments = ",".join(f"{key}=?" for key in values)

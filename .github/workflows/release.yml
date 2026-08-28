@@ -36,7 +36,7 @@ jobs:
             '"%~dp0python\python.exe" -m axp_client %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat -Encoding ascii
           $env:PYTHONPATH=(Resolve-Path stage/AXPIndexerNG/shared).Path+';'+(Resolve-Path stage/AXPIndexerNG/daemon).Path+';'+(Resolve-Path stage/AXPIndexerNG/client).Path+';'+(Resolve-Path stage/AXPIndexerNG/tray).Path
-          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL; assert __import__('pathlib').Path(r'stage/AXPIndexerNG/python/pythonw.exe').exists()"
+          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL,openpyxl; assert __import__('pathlib').Path(r'stage/AXPIndexerNG/python/pythonw.exe').exists()"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop imports or pythonw.exe check failed' }
           & stage/AXPIndexerNG/python/python.exe -m axp_tray self-test --db stage/tray-self-test.db
           if ($LASTEXITCODE -ne 0) { throw 'Packaged tray self-test failed' }

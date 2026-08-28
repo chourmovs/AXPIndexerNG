@@ -3,9 +3,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".docx", ".pptx"}
+SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".docx", ".pptx", ".xlsx", ".csv"}
 DRIVE_IGNORES = {"$recycle.bin", "system volume information"}
 TEMPORARY_PREFIXES = ("~$", ".~lock.")
+TEMPORARY_SUFFIXES = {".tmp", ".part", ".crdownload"}
 
 
 class SourceUnavailable(OSError):
@@ -13,8 +14,12 @@ class SourceUnavailable(OSError):
 
 
 def is_supported_document(name):
+    return not is_ignored_document(name) and Path(name).suffix.casefold() in SUPPORTED
+
+
+def is_ignored_document(name):
     folded = name.casefold()
-    return not folded.startswith(TEMPORARY_PREFIXES) and Path(name).suffix.casefold() in SUPPORTED
+    return folded.startswith(TEMPORARY_PREFIXES) or Path(folded).suffix in TEMPORARY_SUFFIXES
 
 
 @dataclass
@@ -43,7 +48,7 @@ class Discovery:
                     if entry.is_dir(follow_symlinks=False):
                         if self.recursive and entry.name.casefold() not in DRIVE_IGNORES:
                             yield from self._walk(Path(entry.path))
-                    elif entry.is_file(follow_symlinks=False) and is_supported_document(entry.name):
+                    elif entry.is_file(follow_symlinks=False):
                         self.discovered += 1
                         yield Path(entry.path)
                 except OSError as exc:

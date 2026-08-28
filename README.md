@@ -2,7 +2,20 @@
 
 AXPIndexerNG is a lightweight Python 3.11 desktop document indexer. It uses one portable SQLite catalog with
 FTS5, sqlite-vec and FastEmbed; it does not use LanceDB, a custom executable or a system Python installation.
-Supported inputs are TXT, Markdown, PDF, DOCX and PPTX.
+## Document ingestion and coverage
+
+**Full-content indexing:** TXT, Markdown, PDF, DOCX, PPTX, XLSX and CSV. XLSX worksheets and CSV rows retain
+their tabular structure in searchable text.
+
+**Metadata-only indexing:** every other useful regular file format is represented by one compact searchable
+chunk containing its filename, extension, folder/path and basic filesystem metadata. The binary contents are not
+read or parsed. Office/LibreOffice lock files and conservative transient suffixes (`.tmp`, `.part`,
+`.crdownload`) are ignored.
+
+Coverage uses mutually exclusive outcomes for every file seen: **content** (contents extracted), **metadata only**
+(searchable file metadata), **ignored** (explicit temporary policy), or **failed** (eligible but could not be
+indexed). **Absorption** is `(content + metadata) / seen`; **content coverage** is `content / seen`. Thus absorption
+describes files represented in the index, while content coverage describes files whose actual contents were parsed.
 
 ## Desktop usage
 
