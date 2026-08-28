@@ -39,6 +39,7 @@ def test_irrelevant_vector_tail_is_filtered_but_lexical_topic_survives(tmp_path)
     rows = search(c, "reactor pressure", [1, 0, 0])
     assert [row["chunk_id"] for row in rows] == [relevant]
     assert rows[0]["vector_similarity"] == pytest.approx(1.0)
+    assert {"relevance_score", "vector_similarity", "lexical_coverage"} <= rows[0].keys()
 
     rows = search(c, "bleach dosing", [1, 0, 0], config=SearchConfig(min_vector_similarity=0.9))
     assert lexical in {row["chunk_id"] for row in rows}

@@ -47,3 +47,4 @@ def test_watchdog_respects_intentional_stop_and_rate_limit():
     assert not should_auto_restart(stale, "stopped", True, 0, 100)
     assert not should_auto_restart(stale, "running", True, 50, 100)
     assert should_auto_restart(stale, "running", True, 40, 100)
+    assert should_auto_restart({"state": "stopped", "stale": False}, "running", True, 0, 100)

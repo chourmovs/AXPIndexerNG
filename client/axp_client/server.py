@@ -1,5 +1,7 @@
+import ipaddress
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -14,7 +16,19 @@ WEB = Path(__file__).parent / "web"
 LOGGER = configure_logging("axp_client", "client.log")
 
 
-def make_handler(db, embedder):
+def open_with_default_application(path):
+    """Open *path* using its Windows file association."""
+    os.startfile(str(path))
+
+
+def _is_loopback(address):
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
+def make_handler(db, embedder, open_file=open_with_default_application):
     quality_reranker = None
 
     class Handler(BaseHTTPRequestHandler):
@@ -29,7 +43,7 @@ def make_handler(db, embedder):
         def do_GET(self):
             url = urlparse(self.path)
             if url.path == "/health":
-                return self.send_json({"status": "ok"})
+                return self.send_json({"status": "ok", "pid": os.getpid()})
             if url.path == "/api/search":
                 nonlocal quality_reranker
                 q = parse_qs(url.query).get("q", [""])[0]
@@ -76,6 +90,41 @@ def make_handler(db, embedder):
             self.end_headers()
             self.wfile.write(data)
 
+        def do_POST(self):
+            url = urlparse(self.path)
+            if url.path == "/api/shutdown":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "shutdown is only available locally"}, 403)
+                LOGGER.info("Web client shutdown requested")
+                self.send_json({"status": "stopping", "pid": os.getpid()})
+                threading.Thread(target=self.server.shutdown, name="axp-client-shutdown", daemon=True).start()
+                return
+            parts = url.path.strip("/").split("/")
+            if len(parts) == 4 and parts[:2] == ["api", "document"] and parts[3] == "open":
+                try:
+                    document_id = int(parts[2])
+                except ValueError:
+                    return self.send_json({"error": "document not found"}, 404)
+                with connect(db, readonly=True) as con:
+                    row = con.execute("SELECT path FROM documents WHERE id=?", (document_id,)).fetchone()
+                if row is None:
+                    return self.send_json({"error": "document not found", "document_id": document_id}, 404)
+                path = Path(row["path"])
+                if not path.exists():
+                    return self.send_json(
+                        {"error": "The indexed file no longer exists on disk.", "document_id": document_id}, 410
+                    )
+                try:
+                    LOGGER.info("Opening indexed document id=%s path=%s", document_id, path)
+                    open_file(path)
+                except (AttributeError, OSError):
+                    LOGGER.exception("Could not open indexed document id=%s path=%s", document_id, path)
+                    return self.send_json(
+                        {"error": "The file could not be opened.", "document_id": document_id}, 500
+                    )
+                return self.send_json({"status": "opened", "document_id": document_id})
+            return self.send_json({"error": "not found"}, 404)
+
         def log_message(self, *args):
             LOGGER.info(*args)
 
@@ -83,4 +132,9 @@ def make_handler(db, embedder):
 
 
 def serve(db, embedder, host="127.0.0.1", port=8765):
-    ThreadingHTTPServer((host, port), make_handler(db, embedder)).serve_forever()
+    server = ThreadingHTTPServer((host, port), make_handler(db, embedder))
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        LOGGER.info("Web client stopped")

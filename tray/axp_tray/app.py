@@ -12,16 +12,22 @@ from pathlib import Path
 
 from axp_core.database import connect
 from axp_core.locking import AlreadyLocked, FileLock
-from axp_core.runtime import configure_logging, load_settings, read_json, runtime_paths
+from axp_core.runtime import atomic_write_json, configure_logging, load_settings, read_json, runtime_paths
 from axp_daemon.service import send_control
 
 from .icons import make_icon
-from .process import ensure_client, restart_daemon, start_daemon
+from .process import ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
 from .sources_window import SourcesWindow
 from .startup import is_enabled, repair_registration, set_enabled
 from .state import read_daemon_state, should_auto_restart, tooltip
 
 LOGGER = configure_logging("axp_tray", "tray.log")
+
+
+def establish_startup_desired(settings, paths):
+    """An explicit application launch supersedes a stopped state left by Exit."""
+    if settings["auto_start_daemon"]:
+        atomic_write_json(paths["desired"], {"state": "running", "updated_ms": int(time.time() * 1000)})
 
 
 class TrayApplication:
@@ -40,6 +46,8 @@ class TrayApplication:
         self.icon_state = None
         self.last_restart = -60.0
         self.ui_queue = queue.Queue()
+        self.shutting_down = False
+        establish_startup_desired(self.settings, self.paths)
         repair_registration()
         self.icon = pystray.Icon("AXPIndexerNG", make_icon("starting"), "AXPIndexerNG", menu=self._menu())
 
@@ -66,7 +74,7 @@ class TrayApplication:
             p.Menu.SEPARATOR,
             p.MenuItem("Start with Windows", self._toggle_startup, checked=lambda _: is_enabled()),
             p.Menu.SEPARATOR,
-            p.MenuItem("Exit tray", self._exit),
+            p.MenuItem("Exit AXPIndexerNG", self._exit),
         )
 
     def _on_tk(self, callback):
@@ -123,11 +131,39 @@ class TrayApplication:
             LOGGER.exception("Could not open %s", path)
 
     def _exit(self, *_):
-        # Deliberately preserve the daemon; exiting the UI is not stopping indexing.
-        self.icon.stop()
+        if self.shutting_down:
+            return
+        self.shutting_down = True
+        threading.Thread(target=self._shutdown_worker, name="axp-shutdown", daemon=True).start()
+
+    def _shutdown_worker(self):
+        try:
+            LOGGER.info("Daemon shutdown requested from tray exit")
+            stop_daemon(intentional=True)
+        except Exception:
+            LOGGER.exception("Daemon shutdown request failed")
+        try:
+            if stop_client(self.settings):
+                LOGGER.info("Web client shutdown requested from tray exit")
+        except Exception:
+            LOGGER.exception("Web client shutdown request failed")
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if read_daemon_state().get("state") == "stopped":
+                LOGGER.info("Daemon stopped")
+                break
+            time.sleep(0.1)
+        LOGGER.info("AXPIndexerNG tray exiting")
+        try:
+            self.icon.stop()
+        except Exception:
+            LOGGER.exception("Could not stop tray icon")
         self._on_tk(self.root.quit)
 
     def _poll(self):
+        if self.shutting_down:
+            return
         self.state = read_daemon_state()
         desired = read_json(self.paths["desired"], {}) or {}
         should_run = desired.get("state", "running" if self.settings["auto_start_daemon"] else "stopped") == "running"
