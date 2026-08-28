@@ -39,6 +39,8 @@ DEFAULT_SETTINGS = {
     "model_cache": "model-cache",
     "embedding_profile": "balanced",
     "embedding_batch_size": 64,
+    "download_missing_models": True,
+    "model_download_retry_s": 60,
     "scan_interval_s": 300,
     "web_host": "127.0.0.1",
     "web_port": 8765,
