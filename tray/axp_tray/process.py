@@ -63,7 +63,7 @@ def restart_daemon(settings, timeout=15):
 
 
 def client_healthy(settings, timeout=0.5):
-    url = f"http://{settings['web_host']}:{settings['web_port']}/health"
+    url = f"http://127.0.0.1:{settings['web_port']}/health"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return response.status == 200
@@ -76,3 +76,15 @@ def ensure_client(settings):
         return None
     return spawn("axp_client", ["serve", "--db", settings["db_path"], "--host", settings["web_host"],
                                 "--port", settings["web_port"]], settings)
+
+
+def stop_client(settings, timeout=1.0):
+    """Gracefully stop this installation's local web client, if it is running."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{settings['web_port']}/api/shutdown", data=b"", method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False

@@ -32,6 +32,6 @@ def tooltip(state):
 
 def should_auto_restart(state, desired_state, enabled, last_restart_monotonic, now_monotonic):
     return bool(
-        enabled and desired_state == "running" and state.get("stale")
+        enabled and desired_state == "running" and (state.get("stale") or state.get("state") == "stopped")
         and now_monotonic - last_restart_monotonic >= 60
     )
