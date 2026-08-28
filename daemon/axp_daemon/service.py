@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import threading
 import time
 from pathlib import Path
 
 from axp_core.database import connect
-from axp_core.locking import AlreadyLocked, FileLock
+from axp_core.locking import AlreadyLocked, FileLock, daemon_lock_path
 from axp_core.metadata import ensure_index_signature
 from axp_core.runtime import atomic_write_json, configure_logging, read_json, runtime_paths
 from axp_core.sources import get_source, list_sources, remove_source
@@ -32,7 +31,7 @@ def send_control(command, **values):
 
 
 class StatePublisher:
-    def __init__(self):
+    def __init__(self, interval_s=2, warning_interval_s=60):
         self.path = runtime_paths()["state"]
         self.started_ms = now_ms()
         self.value = {
@@ -45,6 +44,10 @@ class StatePublisher:
         }
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
+        self.interval_s = interval_s
+        self.warning_interval_s = warning_interval_s
+        self.write_failures = 0
+        self.last_failure_warning = None
         self.thread = threading.Thread(target=self._run, name="axp-heartbeat", daemon=True)
 
     def start(self):
@@ -56,13 +59,30 @@ class StatePublisher:
 
     def _write(self):
         with self.lock:
-            value = {**self.value, "heartbeat_ms": now_ms()}
+            value = {**self.value, "heartbeat_ms": now_ms(),
+                     "heartbeat_write_failures": self.write_failures}
         atomic_write_json(self.path, value)
 
-    def _run(self):
-        while not self.stop_event.wait(2):
+    def _publish_safely(self):
+        try:
             self._write()
-        self._write()
+        except (OSError, RuntimeError) as exc:
+            self.write_failures += 1
+            now = time.monotonic()
+            if self.last_failure_warning is None or now - self.last_failure_warning >= self.warning_interval_s:
+                LOGGER.warning("Heartbeat publication failed attempt=%s: %r", self.write_failures, exc)
+                self.last_failure_warning = now
+            return False
+        if self.write_failures:
+            LOGGER.info("Heartbeat publication recovered after %s failed writes", self.write_failures)
+            self.write_failures = 0
+            self.last_failure_warning = None
+        return True
+
+    def _run(self):
+        while not self.stop_event.wait(self.interval_s):
+            self._publish_safely()
+        self._publish_safely()
 
     def close(self, state="stopped"):
         self.update(state=state, current_file=None)
@@ -214,8 +234,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                allow_model_download=False, model_download_retry_s=60):
     paths = runtime_paths()
     try:
-        catalog_key = hashlib.sha256(str(Path(db).resolve()).casefold().encode()).hexdigest()[:16]
-        lock = FileLock(paths["runtime"] / f"daemon-{catalog_key}.lock").acquire()
+        lock = FileLock(daemon_lock_path(db, paths["runtime"])).acquire()
     except AlreadyLocked:
         return {"status": "already_running"}
     atomic_write_json(paths["desired"], {"state": "running", "updated_ms": now_ms()})

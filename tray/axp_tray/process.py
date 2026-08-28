@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from axp_core.locking import daemon_instance_running
 from axp_core.runtime import atomic_write_json, installation_root, runtime_paths
 from axp_daemon.service import send_control
 
@@ -53,13 +54,11 @@ def stop_daemon(intentional=True):
 def restart_daemon(settings, timeout=15):
     send_control("stop")
     deadline = time.monotonic() + timeout
-    from .state import read_daemon_state
-
     while time.monotonic() < deadline:
-        if read_daemon_state().get("state") == "stopped":
-            break
+        if not daemon_instance_running(settings["db_path"]):
+            return start_daemon(settings)
         time.sleep(0.25)
-    return start_daemon(settings)
+    raise RuntimeError("Manual daemon restart timed out: daemon instance lock is still held")
 
 
 def client_healthy(settings, timeout=0.5):
