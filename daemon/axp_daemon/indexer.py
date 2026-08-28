@@ -43,7 +43,6 @@ def _result():
         "files_modified", "files_deleted", "files_failed", "chunks_generated", "chunks_embedded",
     )
     value = {key: 0 for key in keys}
-    # Backward-compatible alpha3 names remain useful to existing automation.
     value.update(new=0, modified=0, unchanged=0, deleted=0, failed=0, db_insert_ms=0.0, embedding_ms=0.0)
     return value
 
@@ -53,21 +52,50 @@ def _control_call(control, name, *args):
     return function(*args) if function else None
 
 
+def _record_document_failure(item, exc, result, control):
+    result["files_failed"] += 1
+    result["failed"] += 1
+    _control_call(control, "file_error", item.path, exc)
+    _control_call(control, "progress", result)
+
+
+def _embed_group(items, embedder, result, control):
+    """Embed a group, recursively isolating a bad document or an oversized backend batch."""
+    if not items:
+        return []
+    inputs = [embedding_input(chunk, item.title, item.path.name) for item in items for chunk in item.chunks]
+    if not inputs:
+        return [(item, []) for item in items]
+    started = time.perf_counter()
+    try:
+        vectors = list(embedder.embed_documents(inputs))
+        if len(vectors) != len(inputs):
+            raise RuntimeError(f"Embedding backend returned {len(vectors)} vectors for {len(inputs)} chunks")
+    except Exception as exc:  # noqa: BLE001 -- split the batch before sacrificing a document
+        result["embedding_ms"] += (time.perf_counter() - started) * 1000
+        if len(items) > 1:
+            middle = len(items) // 2
+            return (_embed_group(items[:middle], embedder, result, control)
+                    + _embed_group(items[middle:], embedder, result, control))
+        _record_document_failure(items[0], RuntimeError(f"Embedding failed after batch isolation: {exc}"),
+                                 result, control)
+        return []
+    result["embedding_ms"] += (time.perf_counter() - started) * 1000
+    result["chunks_embedded"] += len(vectors)
+    embedded, offset = [], 0
+    for item in items:
+        item_vectors = vectors[offset : offset + len(item.chunks)]
+        offset += len(item.chunks)
+        embedded.append((item, item_vectors))
+    return embedded
+
+
 def _flush(con, source_id, pending, embedder, result, control):
     if not pending:
         return
-    inputs = [embedding_input(chunk, item.title, item.path.name) for item in pending for chunk in item.chunks]
-    started = time.perf_counter()
-    vectors = list(embedder.embed_documents(inputs)) if inputs else []
-    if len(vectors) != len(inputs):
-        raise RuntimeError(f"Embedding backend returned {len(vectors)} vectors for {len(inputs)} chunks")
-    result["embedding_ms"] += (time.perf_counter() - started) * 1000
-    result["chunks_embedded"] += len(vectors)
-    offset = 0
+    embedded = _embed_group(list(pending), embedder, result, control)
     db_started = time.perf_counter()
-    for item in pending:
-        item_vectors = vectors[offset : offset + len(item.chunks)]
-        offset += len(item.chunks)
+    for item, item_vectors in embedded:
         con.execute("SAVEPOINT document_write")
         try:
             now = int(time.time() * 1000)
@@ -108,11 +136,10 @@ def _flush(con, source_id, pending, embedder, result, control):
                 )
                 upsert(con, cur.lastrowid, vector)
             con.execute("RELEASE document_write")
-        except Exception:  # noqa: BLE001 -- isolate a failed document transaction
+        except Exception as exc:  # noqa: BLE001 -- isolate a failed document transaction
             con.execute("ROLLBACK TO document_write")
             con.execute("RELEASE document_write")
-            result["files_failed"] += 1
-            result["failed"] += 1
+            _record_document_failure(item, RuntimeError(f"Database write failed: {exc}"), result, control)
     con.commit()
     result["db_insert_ms"] += (time.perf_counter() - db_started) * 1000
     _control_call(control, "progress", result)
@@ -170,10 +197,10 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     _flush(con, source_id, pending, embedder, result, control)
                     pending_chunks = 0
             except Exception as exc:  # noqa: BLE001 -- isolate a bad document
-                con.rollback()
                 result["files_failed"] += 1
                 result["failed"] += 1
                 _control_call(control, "file_error", path, exc)
+                _control_call(control, "progress", result)
         _flush(con, source_id, pending, embedder, result, control)
     except (SourceUnavailable, OSError) as exc:
         con.rollback()
@@ -217,7 +244,6 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
 
 
 def scan(con, root, embedder, *, embedding_batch_size=64, control=None):
-    """Compatibility one-shot scan: register the root in the shared catalog if needed."""
     display, key = normalize_source_path(root)
     source = con.execute("SELECT * FROM sources WHERE path_key=?", (key,)).fetchone()
     if source is None:
