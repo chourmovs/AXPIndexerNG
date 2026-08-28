@@ -19,12 +19,14 @@ jobs:
         run: |
           import sqlite3, tempfile
           import sqlite_vec
-          from fastembed import TextEmbedding
+          from axp_daemon.embeddings import Embedder
           c=sqlite3.connect(':memory:'); c.enable_load_extension(True); sqlite_vec.load(c)
           assert c.execute('select vec_version()').fetchone()
           c.execute('create virtual table v using vec0(x float[2])')
           c.execute("insert into v(rowid,x) values(1,vec_f32('[1,0]'))")
           assert c.execute("select rowid from v where x match vec_f32('[1,0]') and k=1").fetchone()[0]==1
           c.execute('create virtual table f using fts5(x)'); c.execute("insert into f values('reactor pressure')"); assert c.execute("select * from f where f match 'reactor'").fetchone()
-          model=TextEmbedding(model_name='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-          assert len(next(iter(model.embed(['reactor pressure'])))) > 0
+          cache=tempfile.mkdtemp()
+          model=Embedder('balanced', cache_dir=cache, local_only=False, runtime_batch_size=2)
+          assert len(model.embed_documents(['reactor pressure','bleach dosing','storage']))==3
+          assert len(model.embed_query('reactor'))==384
