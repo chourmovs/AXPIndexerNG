@@ -2,8 +2,8 @@ import json
 
 import pytest
 from axp_client.reranker import EmbeddingLRU, maxsim
-from axp_core.fts import build_query
 from axp_core.database import connect
+from axp_core.fts import build_query
 from axp_core.hybrid import diversify, search
 from axp_core.identifiers import extract_identifiers
 from axp_core.metadata import IndexRebuildRequired, ensure_index_signature
