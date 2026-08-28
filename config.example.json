@@ -1,0 +1,11 @@
+{
+  "db_path": "data/axpindex.db",
+  "model_cache": "model-cache",
+  "embedding_profile": "balanced",
+  "embedding_batch_size": 64,
+  "scan_interval_s": 300,
+  "web_host": "127.0.0.1",
+  "web_port": 8765,
+  "auto_start_daemon": true,
+  "auto_restart_daemon": true
+}

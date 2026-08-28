@@ -4,11 +4,14 @@ import os
 
 from axp_core.database import capability_report, connect
 from axp_core.hybrid import SearchConfig
+from axp_core.runtime import configure_logging
 from axp_daemon.embeddings import embedder_for_index
 
 from .reranker import Reranker
 from .search import search
 from .server import serve
+
+LOGGER = configure_logging("axp_client", "client.log")
 
 
 def main(argv=None):

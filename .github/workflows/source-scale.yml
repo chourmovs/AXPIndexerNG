@@ -1,0 +1,12 @@
+name: Source scale benchmark
+on: { workflow_dispatch: {} }
+jobs:
+  synthetic-100k:
+    runs-on: windows-latest
+    env: { PYTHONPATH: "shared;daemon;client;tray" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python -m pip install -r requirements-runtime.txt
+      - run: python scripts/source_scale_benchmark.py --documents 100000 --vectors 10000

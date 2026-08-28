@@ -67,9 +67,13 @@ def test_maxsim_cache_and_diversification():
 def test_quality_result_normalizes_numpy_scores_for_json(tmp_path):
     np = pytest.importorskip("numpy")
     con = connect(tmp_path / "quality.db", dimension=3)
+    from axp_core.sources import add_source
+
+    source_id = add_source(con, tmp_path / "root")["id"]
     document_id = con.execute(
-        "INSERT INTO documents(source_root,path,path_key,extension,size_bytes,modified_unix_ms,sha256,"
-        "indexed_unix_ms,title,filename) VALUES('root','reactor.txt','reactor','.txt',1,1,'x',1,'Reactor','reactor.txt')"
+        "INSERT INTO documents(source_id,path,path_key,extension,size_bytes,modified_unix_ms,sha256,"
+        "indexed_unix_ms,title,filename) VALUES(?,'reactor.txt','reactor','.txt',1,1,'x',1,'Reactor','reactor.txt')",
+        (source_id,),
     ).lastrowid
     chunk_id = con.execute(
         "INSERT INTO chunks(document_id,chunk_no,text) VALUES(?,0,'reactor pressure control')", (document_id,)

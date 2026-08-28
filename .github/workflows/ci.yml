@@ -3,7 +3,7 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: windows-latest
-    env: { PYTHONPATH: "shared;daemon;client" }
+    env: { PYTHONPATH: "shared;daemon;client;tray" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -12,7 +12,7 @@ jobs:
       - run: python -m pip install -r requirements-runtime.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: ruff check .
-      - run: python -m compileall daemon client shared
+      - run: python -m compileall daemon client shared tray AXPIndexerTray.pyw
       - run: pytest -q
       - name: Real capabilities and inference
         shell: python
