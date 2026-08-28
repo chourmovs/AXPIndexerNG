@@ -40,7 +40,7 @@ class StatePublisher:
             "heartbeat_ms": now_ms(), "current_source_id": None, "current_source": None, "current_file": None,
             "files_discovered": 0, "files_processed": 0, "files_new": 0, "files_modified": 0,
             "files_failed": 0, "chunks_generated": 0, "chunks_embedded": 0,
-            "documents_total": 0, "chunks_total": 0, "last_error": None,
+            "documents_total": 0, "chunks_total": 0, "model_download_attempts": 0, "last_error": None,
         }
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -162,7 +162,51 @@ def _safe_reindex(con, source_id):
     con.commit()
 
 
-def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300, embedding_batch_size=64):
+def _wait_for_model_retry(control, seconds):
+    deadline = time.monotonic() + max(1, seconds)
+    while time.monotonic() < deadline:
+        control.poll()
+        if control.stop:
+            return False
+        time.sleep(0.25)
+    return True
+
+
+def _provision_embedder(profile, model_cache, allow_download, retry_s, publisher, control):
+    attempts = 0
+    while not control.stop:
+        try:
+            embedder = Embedder(profile, cache_dir=model_cache, local_only=True)
+            publisher.update(state="starting", last_error=None, model_download_attempts=attempts)
+            return embedder
+        except Exception as local_error:
+            if not allow_download:
+                raise RuntimeError(
+                    f"Required embedding model {profile!r} is missing or incomplete in {model_cache!s}. "
+                    "Start the desktop tray with model downloads enabled or provision this cache manually."
+                ) from local_error
+        attempts += 1
+        publisher.update(state="downloading_model", model_download_attempts=attempts, last_error=None)
+        LOGGER.warning("Embedding cache missing or incomplete; provisioning profile %s (attempt %s)", profile, attempts)
+        try:
+            embedder = Embedder(profile, cache_dir=model_cache, local_only=False)
+            LOGGER.info("Embedding model %s is ready in %s", embedder.model_id, model_cache)
+            publisher.update(state="starting", last_error=None, model_download_attempts=attempts)
+            return embedder
+        except Exception as download_error:
+            message = (
+                f"Could not provision embedding model {profile!r} in {model_cache!s}: {download_error}. "
+                f"Retrying in {max(1, retry_s)} seconds."
+            )
+            LOGGER.exception(message)
+            publisher.update(state="waiting_for_model", last_error=message, model_download_attempts=attempts)
+            if not _wait_for_model_retry(control, retry_s):
+                return None
+    return None
+
+
+def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300, embedding_batch_size=64,
+               allow_model_download=False, model_download_retry_s=60):
     paths = runtime_paths()
     try:
         catalog_key = hashlib.sha256(str(Path(db).resolve()).casefold().encode()).hexdigest()[:16]
@@ -174,7 +218,10 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
     control = DaemonControl(publisher)
     publisher.start()
     try:
-        embedder = Embedder(embedding_profile, cache_dir=model_cache, local_only=True)
+        embedder = _provision_embedder(embedding_profile, model_cache, allow_model_download,
+                                      model_download_retry_s, publisher, control)
+        if embedder is None:
+            return {"status": "stopped"}
         con = connect(db, dimension=embedder.dimension)
         ensure_index_signature(con, embedder.model_id, embedder.dimension, embedder.distance_metric)
         publisher.update(state="idle", **_catalog_totals(con))
@@ -193,7 +240,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                     try:
                         remove_source(con, remove_id)
                         LOGGER.info("Removed indexed source %s at a safe scan boundary", remove_id)
-                    except Exception as exc:  # noqa: BLE001 -- control error must not terminate daemon
+                    except Exception as exc:  # noqa: BLE001
                         LOGGER.error("Could not remove source %s: %s", remove_id, exc)
                         publisher.update(state="error", last_error=str(exc))
                 reindex_id = control.reindex_source_id
@@ -211,8 +258,11 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                     if control.should_stop():
                         break
                     try:
-                        scan_source(con, source["id"], embedder, embedding_batch_size=embedding_batch_size,
-                                    control=control)
+                        result = scan_source(con, source["id"], embedder,
+                                             embedding_batch_size=embedding_batch_size, control=control)
+                        LOGGER.info("Source scan completed: %s status=%s files=%s failed=%s chunks=%s",
+                                    source["path"], result["status"], result["files_scanned"],
+                                    result["files_failed"], result["chunks_embedded"])
                     except Exception as exc:
                         LOGGER.exception("Source scan failed: %s", source["path"])
                         publisher.update(state="error", last_error=str(exc))
@@ -222,7 +272,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                     try:
                         remove_source(con, remove_id)
                         LOGGER.info("Removed indexed source %s at a safe scan boundary", remove_id)
-                    except Exception as exc:  # noqa: BLE001 -- control error must not terminate daemon
+                    except Exception as exc:  # noqa: BLE001
                         LOGGER.error("Could not remove source %s: %s", remove_id, exc)
                         publisher.update(state="error", last_error=str(exc))
                 publisher.update(state="idle" if not control.paused else "paused", current_source_id=None,
