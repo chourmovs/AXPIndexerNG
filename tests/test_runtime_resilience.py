@@ -2,7 +2,6 @@ import json
 import threading
 
 import pytest
-
 from axp_core.locking import FileLock, daemon_instance_running, daemon_lock_path
 from axp_core.runtime import atomic_write_json
 from axp_daemon.service import StatePublisher
