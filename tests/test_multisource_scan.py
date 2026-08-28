@@ -84,3 +84,24 @@ def test_disabling_source_during_scan_never_reconciles_unseen_files(tmp_path):
     result = scan_source(con, source["id"], embedder, control=DisableAfterFirst())
     assert not result["scan_complete"] and result["status"] == "disabled"
     assert con.execute("SELECT count(*) FROM documents WHERE source_id=?", (source["id"],)).fetchone()[0] == 2
+
+
+def test_scan_source_indexes_documents_from_deep_subdirectories(tmp_path):
+    root = tmp_path / "source"
+    nested = root / "nested"
+    deeper = nested / "deeper"
+    deeper.mkdir(parents=True)
+    expected = {root / "first.txt", nested / "second.txt", deeper / "third.txt"}
+    for path in expected:
+        path.write_text(f"reactor document {path.name}")
+    con = connect(tmp_path / "recursive.db", dimension=3)
+    source = add_source(con, root, recursive=True)
+
+    result = scan_source(con, source["id"], FakeEmbedder(), embedding_batch_size=1)
+
+    indexed = {path for path, in con.execute("SELECT path FROM documents WHERE source_id=?", (source["id"],))}
+    assert indexed == {str(path) for path in expected}
+    assert result["scan_complete"]
+    assert result["files_discovered"] == 3
+    assert result["files_scanned"] == 3
+    assert result["files_new"] == 3

@@ -13,6 +13,7 @@ from axp_core.sources import (
     remove_source,
 )
 from axp_core.vectors import upsert
+from axp_tray.sources_window import add_gui_source
 
 
 def test_windows_path_normalization_and_source_kinds(tmp_path):
@@ -24,6 +25,25 @@ def test_windows_path_normalization_and_source_kinds(tmp_path):
     assert unc["kind"] == "unc" and unc["path_key"] == r"\\server\documentation"
     assert folder["kind"] == "folder"
     assert normalize_source_path(r"C:\Users\User\Documents\\")[0] == r"C:\Users\User\Documents"
+
+
+def test_gui_selected_source_is_explicitly_recursive(tmp_path):
+    con = connect(tmp_path / "gui-source.db", dimension=3)
+
+    source = add_gui_source(con, tmp_path / "selected")
+
+    assert source["recursive"] == 1
+    assert con.execute("SELECT recursive FROM sources WHERE id=?", (source["id"],)).fetchone()[0] == 1
+
+
+def test_repository_defaults_recursive_but_preserves_explicit_false(tmp_path):
+    con = connect(tmp_path / "recursion-policy.db", dimension=3)
+
+    default_source = add_source(con, tmp_path / "default")
+    flat_source = add_source(con, tmp_path / "flat", recursive=False)
+
+    assert default_source["recursive"] == 1
+    assert flat_source["recursive"] == 0
 
 
 def test_duplicates_overlap_and_false_prefix(tmp_path):
@@ -93,3 +113,4 @@ def test_schema_v2_forward_migration_preserves_index(tmp_path):
     assert migrated.execute("SELECT count(*) FROM chunks_fts").fetchone()[0] == 1
     assert migrated.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0] == 1
     assert migrated.execute("SELECT value FROM metadata WHERE key='index_signature'").fetchone()[0] == "preserved"
+    assert migrated.execute("SELECT recursive FROM sources").fetchone()[0] == 1
