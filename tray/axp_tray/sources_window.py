@@ -13,6 +13,11 @@ from .drives import list_drives
 from .state import read_daemon_state
 
 
+def add_gui_source(con, path):
+    """Persist a source selected in the desktop UI with the desktop recursion policy."""
+    return add_source(con, path, recursive=True)
+
+
 class SourcesWindow:
     def __init__(self, root, db_path):
         self.db_path = db_path
@@ -88,7 +93,7 @@ class SourcesWindow:
             return
         try:
             with self._connection() as con:
-                add_source(con, path)
+                add_gui_source(con, path)
             send_control("scan")
             self.refresh()
         except SourceError as exc:
