@@ -21,7 +21,12 @@ def main(argv=None):
         q.add_argument("--root", required=True)
         q.add_argument("--model-cache")
         q.add_argument("--allow-download", action="store_true")
-        q.add_argument("--embedding-profile", choices=("balanced", "quality"), default="balanced")
+        q.add_argument(
+            "--embedding-profile",
+            choices=("balanced", "quality"),
+            default="balanced",
+            help="dense indexing model (independent of the client's fast/hybrid/quality retrieval profile)",
+        )
     a = p.parse_args(argv)
     if a.cmd == "health":
         con = connect(a.db)

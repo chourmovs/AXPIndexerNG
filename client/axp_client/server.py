@@ -1,16 +1,20 @@
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from axp_core.database import connect
 
+from .reranker import Reranker
 from .search import search
 
 WEB = Path(__file__).parent / "web"
 
 
 def make_handler(db, embedder):
+    quality_reranker = None
+
     class Handler(BaseHTTPRequestHandler):
         def send_json(self, value, status=200):
             data = json.dumps(value).encode()
@@ -25,11 +29,25 @@ def make_handler(db, embedder):
             if url.path == "/health":
                 return self.send_json({"status": "ok"})
             if url.path == "/api/search":
+                nonlocal quality_reranker
                 q = parse_qs(url.query).get("q", [""])[0]
                 explain = parse_qs(url.query).get("explain", ["0"])[0] == "1"
                 profile = parse_qs(url.query).get("profile", ["hybrid"])[0]
+                if profile == "quality" and quality_reranker is None:
+                    quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
                 with connect(db, readonly=True) as con:
-                    return self.send_json(search(con, embedder, q, profile=profile, explain=explain) if q else [])
+                    return self.send_json(
+                        search(
+                            con,
+                            embedder,
+                            q,
+                            profile=profile,
+                            explain=explain,
+                            reranker=quality_reranker if profile == "quality" else None,
+                        )
+                        if q
+                        else []
+                    )
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])

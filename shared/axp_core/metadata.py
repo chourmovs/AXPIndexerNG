@@ -7,6 +7,23 @@ class IndexRebuildRequired(RuntimeError):
     pass
 
 
+def read_index_signature(con):
+    """Return and minimally validate the dense configuration recorded by the index."""
+    row = con.execute("SELECT value FROM metadata WHERE key='index_signature'").fetchone()
+    if not row:
+        raise IndexRebuildRequired("Index rebuild required: database has no index signature")
+    try:
+        signature = json.loads(row[0])
+        model_id = signature["embedding_model_id"]
+        dimension = int(signature["embedding_dimension"])
+        metric = signature["distance_metric"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise IndexRebuildRequired("Index rebuild required: database has an invalid index signature") from exc
+    if not isinstance(model_id, str) or not model_id or dimension <= 0 or metric != DISTANCE_METRIC:
+        raise IndexRebuildRequired("Index rebuild required: database has an incompatible index signature")
+    return signature
+
+
 def index_signature(model_id, dimension, distance_metric=DISTANCE_METRIC):
     return {
         "schema_version": SCHEMA_VERSION,

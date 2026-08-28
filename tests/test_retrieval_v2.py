@@ -2,10 +2,13 @@ import json
 
 import pytest
 from axp_client.reranker import EmbeddingLRU, maxsim
+from axp_core.database import connect
 from axp_core.fts import build_query
-from axp_core.hybrid import diversify
+from axp_core.hybrid import diversify, search
 from axp_core.identifiers import extract_identifiers
 from axp_core.metadata import IndexRebuildRequired, ensure_index_signature
+from axp_core.vectors import upsert
+from axp_daemon import embeddings
 from axp_daemon.chunker import chunk_text
 
 
@@ -59,3 +62,71 @@ def test_maxsim_cache_and_diversification():
     assert cache.get("a") is None and cache.get("c") == "c"
     rows = [{"document_id": 1, "n": n} for n in range(4)] + [{"document_id": 2, "n": 9}]
     assert [row["document_id"] for row in diversify(rows, 4, 3)] == [1, 2, 1, 1]
+
+
+def test_quality_result_normalizes_numpy_scores_for_json(tmp_path):
+    np = pytest.importorskip("numpy")
+    con = connect(tmp_path / "quality.db", dimension=3)
+    document_id = con.execute(
+        "INSERT INTO documents(source_root,path,path_key,extension,size_bytes,modified_unix_ms,sha256,"
+        "indexed_unix_ms,title,filename) VALUES('root','reactor.txt','reactor','.txt',1,1,'x',1,'Reactor','reactor.txt')"
+    ).lastrowid
+    chunk_id = con.execute(
+        "INSERT INTO chunks(document_id,chunk_no,text) VALUES(?,0,'reactor pressure control')", (document_id,)
+    ).lastrowid
+    con.execute(
+        "INSERT INTO chunks_fts(rowid,text,title,filename,heading,identifiers) VALUES(?,?,?,?,?,?)",
+        (chunk_id, "reactor pressure control", "Reactor", "reactor.txt", "", ""),
+    )
+    upsert(con, chunk_id, [1.0, 0.0, 0.0])
+    con.commit()
+
+    class Float32Reranker:
+        def score(self, query, candidates):
+            return [np.float32(0.75) for _ in candidates]
+
+    result = search(
+        con, "reactor", [1.0, 0.0, 0.0], profile="quality", reranker=Float32Reranker(), explain=True
+    )
+    assert type(result["results"][0]["reranker_score"]) is float
+    json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("profile", "model_id", "dimension"),
+    [("balanced", embeddings.BALANCED.model_id, 384), ("quality", embeddings.QUALITY.model_id, 1024)],
+)
+def test_client_uses_index_dense_configuration(tmp_path, monkeypatch, profile, model_id, dimension):
+    con = connect(tmp_path / f"{profile}.db")
+    ensure_index_signature(con, model_id, dimension)
+
+    class StubEmbedder:
+        def __init__(self, spec, **kwargs):
+            self.model_id = spec.model_id
+            self.dimension = spec.dimension
+            self.distance_metric = spec.distance_metric
+            self.spec = spec
+
+    monkeypatch.setattr(embeddings, "Embedder", StubEmbedder)
+    selected = embeddings.embedder_for_index(con)
+    assert selected.model_id == model_id
+    assert selected.dimension == dimension
+    assert selected.spec.query_prefix == embeddings.PROFILES[profile].query_prefix
+
+
+def test_client_rejects_incompatible_or_missing_dense_model(tmp_path, monkeypatch):
+    con = connect(tmp_path / "incompatible.db")
+    ensure_index_signature(con, embeddings.QUALITY.model_id, 384)
+    with pytest.raises(IndexRebuildRequired, match="requires 1024 dimensions"):
+        embeddings.embedder_for_index(con)
+
+    con = connect(tmp_path / "missing.db")
+    ensure_index_signature(con, embeddings.BALANCED.model_id, 384)
+
+    class MissingEmbedder:
+        def __init__(self, *args, **kwargs):
+            raise FileNotFoundError("not cached")
+
+    monkeypatch.setattr(embeddings, "Embedder", MissingEmbedder)
+    with pytest.raises(RuntimeError, match="not available in the local model cache"):
+        embeddings.embedder_for_index(con)

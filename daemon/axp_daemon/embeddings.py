@@ -58,3 +58,34 @@ class Embedder:
 
     def embed_query(self, text):
         return list(next(iter(self._model.embed([self.spec.query_prefix + text]))))
+
+
+def embedder_for_index(con, cache_dir=None, local_only=True):
+    """Construct the exact dense query model declared by a database index."""
+    from axp_core.metadata import IndexRebuildRequired, read_index_signature
+
+    signature = read_index_signature(con)
+    model_id = signature["embedding_model_id"]
+    expected_dimension = int(signature["embedding_dimension"])
+    spec = model_spec(model_id)
+    if not spec.dimension:
+        raise IndexRebuildRequired(
+            f"Index uses unsupported embedding model {model_id!r}; configure a compatible client model"
+        )
+    if spec.dimension != expected_dimension:
+        raise IndexRebuildRequired(
+            f"Index embedding configuration is inconsistent: {model_id!r} requires {spec.dimension} dimensions, "
+            f"but the database records {expected_dimension}"
+        )
+    try:
+        embedder = Embedder(spec, cache_dir=cache_dir, local_only=local_only)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Required index embedding model {model_id!r} ({expected_dimension} dimensions) is not available "
+            "in the local model cache"
+        ) from exc
+    if embedder.dimension != expected_dimension:
+        raise IndexRebuildRequired(
+            f"Index requires a {expected_dimension}-dimensional query model, got {embedder.dimension}"
+        )
+    return embedder
