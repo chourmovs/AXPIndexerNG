@@ -5,11 +5,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from axp_core.database import connect
+from axp_core.runtime import configure_logging
 
 from .reranker import Reranker
 from .search import search
 
 WEB = Path(__file__).parent / "web"
+LOGGER = configure_logging("axp_client", "client.log")
 
 
 def make_handler(db, embedder):
@@ -75,7 +77,7 @@ def make_handler(db, embedder):
             self.wfile.write(data)
 
         def log_message(self, *args):
-            pass
+            LOGGER.info(*args)
 
     return Handler
 

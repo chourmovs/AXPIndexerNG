@@ -23,18 +23,28 @@ jobs:
           New-Item -ItemType Directory stage/AXPIndexerNG | Out-Null
           Copy-Item (Split-Path $env:PY) stage/AXPIndexerNG/python -Recurse
           & stage/AXPIndexerNG/python/python.exe -m pip install -r requirements-runtime.txt
-          Copy-Item daemon,client,shared,README.md stage/AXPIndexerNG -Recurse
+          Copy-Item daemon,client,shared,tray,README.md,AXPIndexerTray.pyw,AXPIndexerTray.vbs,config.example.json stage/AXPIndexerNG -Recurse
+          New-Item -ItemType Directory stage/AXPIndexerNG/data,stage/AXPIndexerNG/data/logs,stage/AXPIndexerNG/data/runtime -Force | Out-Null
           @(
             '@echo off'
-            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client"'
+            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client;%~dp0tray"'
             '"%~dp0python\python.exe" -m axp_daemon %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat -Encoding ascii
           @(
             '@echo off'
-            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client"'
+            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client;%~dp0tray"'
             '"%~dp0python\python.exe" -m axp_client %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat -Encoding ascii
-          @('[model]','cache_path=model-cache','allow_download=false') | Set-Content stage/AXPIndexerNG/config.example.ini
+          $env:PYTHONPATH=(Resolve-Path stage/AXPIndexerNG/shared).Path+';'+(Resolve-Path stage/AXPIndexerNG/daemon).Path+';'+(Resolve-Path stage/AXPIndexerNG/client).Path+';'+(Resolve-Path stage/AXPIndexerNG/tray).Path
+          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL; assert __import__('pathlib').Path(r'stage/AXPIndexerNG/python/pythonw.exe').exists()"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop imports or pythonw.exe check failed' }
+          & stage/AXPIndexerNG/python/python.exe -m axp_tray self-test --db stage/tray-self-test.db
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged tray self-test failed' }
+          $sourceDb=(Join-Path (Resolve-Path stage).Path 'source-smoke.db')
+          & stage/AXPIndexerNG/python/python.exe -m axp_daemon source add --db $sourceDb --path 'D:\Process'
+          & stage/AXPIndexerNG/python/python.exe -m axp_daemon source add --db $sourceDb --path '\\SERVER\Documentation'
+          $sourceStatus=& stage/AXPIndexerNG/python/python.exe -m axp_daemon source list --db $sourceDb | ConvertFrom-Json
+          if ($sourceStatus.Count -ne 2) { throw 'Packaged multi-source CRUD smoke failed' }
           $launchers = Get-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat,stage/AXPIndexerNG/AXPIndexerClient.bat -Raw
           if ($launchers.Contains('`r`n')) { throw 'BAT launcher contains literal newline escape text' }
           New-Item -ItemType Directory stage/smoke-docs | Out-Null
@@ -57,6 +67,7 @@ jobs:
           $null = Invoke-Checked $client @('search','--db',$db,'--query','reactor','--profile','hybrid')
           $before=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime before cleanup: $before bytes"
           Get-ChildItem stage -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          Get-ChildItem stage/AXPIndexerNG/data -File -Recurse | Remove-Item -Force
           $after=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime after cleanup: $after bytes"
           if ($after -gt 350MB) { throw 'Runtime exceeds 350 MiB' } elseif ($after -gt 250MB) { Write-Warning 'Runtime exceeds target' }
           $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
@@ -66,7 +77,11 @@ jobs:
           Compress-Archive stage/AXPIndexerNG dist.zip
           $version=if($env:GITHUB_REF_TYPE -eq 'tag'){$env:GITHUB_REF_NAME.TrimStart('v')}else{'0.1.0-dev'}; $name="AXPIndexerNG-runtime-$version.zip"; Move-Item dist.zip $name
           (Get-FileHash $name).Hash.ToLower()+"  $name" | Set-Content "$name.sha256"; "ARTIFACT=$name" | Out-File $env:GITHUB_ENV -Append
-          "ZIP size: $((Get-Item $name).Length) bytes"; "Model cache size: 0 bytes (excluded)"
+          $zipBytes=(Get-Item $name).Length
+          $alpha2Bytes=109473024
+          "ZIP size: $zipBytes bytes"
+          "ZIP delta versus v0.2.0-alpha2: $($zipBytes-$alpha2Bytes) bytes (alpha3 had no published asset at implementation time)"
+          "Model cache size: 0 bytes (excluded)"
       - uses: actions/upload-artifact@v4
         with: { name: runtime, path: "${{ env.ARTIFACT }}*" }
       - name: Release tagged build

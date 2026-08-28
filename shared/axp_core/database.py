@@ -1,8 +1,10 @@
 import sqlite3
+import time
 from pathlib import Path
 
 from .metadata import IndexRebuildRequired
-from .schema import BASE_SCHEMA, SCHEMA_VERSION
+from .schema import BASE_SCHEMA, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, SOURCES_SCHEMA
+from .sources import default_label, detect_source_kind, normalize_source_path
 
 
 class CapabilityError(RuntimeError):
@@ -26,9 +28,13 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
     if readonly:
         _check_version(con)
         return con
-    # Refuse old populated schemas rather than allowing CREATE IF NOT EXISTS to disguise them.
+    # Alpha3 schema 2 has a lossless forward migration to multi-source schema 3.
     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone():
-        _check_version(con)
+        row = con.execute("SELECT version FROM schema_version").fetchone()
+        if row and row[0] == PREVIOUS_SCHEMA_VERSION:
+            _migrate_v2_to_v3(con)
+        else:
+            _check_version(con)
     if dimension is not None:
         con.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(embedding float[{int(dimension)}] distance_metric=cosine)"
@@ -51,6 +57,34 @@ def _check_version(con):
     if row is None or row[0] != SCHEMA_VERSION:
         value = "missing" if row is None else row[0]
         raise IndexRebuildRequired(f"Index rebuild required: schema version {value} is incompatible")
+
+
+def _migrate_v2_to_v3(con):
+    """Add administrative sources while preserving documents, FTS and vectors."""
+    now = int(time.time() * 1000)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute(SOURCES_SCHEMA)
+        columns = {row[1] for row in con.execute("PRAGMA table_info(documents)")}
+        if "source_id" not in columns:
+            con.execute("ALTER TABLE documents ADD COLUMN source_id INTEGER REFERENCES sources(id) ON DELETE CASCADE")
+        roots = [row[0] for row in con.execute("SELECT DISTINCT source_root FROM documents ORDER BY source_root")]
+        for root in roots:
+            display, key = normalize_source_path(root)
+            con.execute(
+                """INSERT OR IGNORE INTO sources(
+                path,path_key,label,kind,enabled,recursive,status,created_ms,updated_ms)
+                VALUES(?,?,?,?,1,1,'idle',?,?)""",
+                (display, key, default_label(display), detect_source_kind(display), now, now),
+            )
+            source_id = con.execute("SELECT id FROM sources WHERE path_key=?", (key,)).fetchone()[0]
+            con.execute("UPDATE documents SET source_id=? WHERE source_root=?", (source_id, root))
+        con.execute("CREATE INDEX IF NOT EXISTS documents_source ON documents(source_id)")
+        con.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
 
 
 def rebuild(path, dimension):

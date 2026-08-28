@@ -3,3 +3,5 @@ sqlite-vec==0.1.9
 PyMuPDF
 python-docx
 python-pptx
+pystray
+Pillow
