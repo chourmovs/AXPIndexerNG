@@ -24,9 +24,37 @@ jobs:
           Copy-Item (Split-Path $env:PY) stage/AXPIndexerNG/python -Recurse
           & stage/AXPIndexerNG/python/python.exe -m pip install -r requirements-runtime.txt
           Copy-Item daemon,client,shared,README.md stage/AXPIndexerNG -Recurse
-          '@echo off`r`nset PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client`r`n"%~dp0python\python.exe" -m axp_daemon %*' | Set-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat
-          '@echo off`r`nset PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client`r`n"%~dp0python\python.exe" -m axp_client %*' | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat
-          '[model]`r`ncache_path=model-cache`r`nallow_download=false' | Set-Content stage/AXPIndexerNG/config.example.ini
+          @(
+            '@echo off'
+            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client"'
+            '"%~dp0python\python.exe" -m axp_daemon %*'
+          ) | Set-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat -Encoding ascii
+          @(
+            '@echo off'
+            'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client"'
+            '"%~dp0python\python.exe" -m axp_client %*'
+          ) | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat -Encoding ascii
+          @('[model]','cache_path=model-cache','allow_download=false') | Set-Content stage/AXPIndexerNG/config.example.ini
+          $launchers = Get-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat,stage/AXPIndexerNG/AXPIndexerClient.bat -Raw
+          if ($launchers.Contains('`r`n')) { throw 'BAT launcher contains literal newline escape text' }
+          New-Item -ItemType Directory stage/smoke-docs | Out-Null
+          'reactor pressure control R042500' | Set-Content stage/smoke-docs/reactor.txt
+          $daemon = (Resolve-Path stage/AXPIndexerNG/AXPIndexerDaemon.bat).Path
+          $client = (Resolve-Path stage/AXPIndexerNG/AXPIndexerClient.bat).Path
+          $db = (Join-Path (Resolve-Path stage).Path 'launcher-smoke.db')
+          $root = (Resolve-Path stage/smoke-docs).Path
+          function Invoke-Checked([string]$launcher, [string[]]$arguments) {
+            $output = & $launcher @arguments
+            if ($LASTEXITCODE -ne 0) { throw "Generated BAT launcher failed: $launcher $arguments" }
+            if ($output -match '^(@echo|set |".*python)') { throw 'BAT launcher echoed its contents' }
+            $null = $output | ConvertFrom-Json -ErrorAction Stop
+            return $output
+          }
+          $null = Invoke-Checked $daemon @('health','--db',$db)
+          $null = Invoke-Checked $daemon @('scan','--db',$db,'--root',$root,'--allow-download')
+          $null = Invoke-Checked $daemon @('status','--db',$db)
+          $null = Invoke-Checked $client @('health','--db',$db)
+          $null = Invoke-Checked $client @('search','--db',$db,'--query','reactor','--profile','hybrid')
           $before=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime before cleanup: $before bytes"
           Get-ChildItem stage -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
           $after=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime after cleanup: $after bytes"

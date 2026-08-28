@@ -15,3 +15,12 @@ Models are independent caches and are never placed in the runtime ZIP:
 Provision packs explicitly with the existing model-cache process. Runtime search uses local-only mode and
 will not download missing artifacts. The committed unit suite uses deterministic stubs; the manual workflow
 provisions real models.
+
+The dense embedding profile (`balanced` or `quality`) is index configuration and is recorded in the database
+signature. It is distinct from the search retrieval profile (`fast`, `hybrid`, or `quality`); retrieval quality
+means hybrid retrieval plus the ColBERT reranker. Clients derive the model ID, vector dimension, and E5 query
+prefix from that signature and never substitute a differently sized model.
+
+Windows users without symlink privilege may see Hugging Face's non-fatal `WinError 1314` cache warning. Its
+supported copy fallback remains usable; do not run as Administrator or enable Developer Mode solely for this.
+Optionally set `HF_HUB_DISABLE_SYMLINKS_WARNING=1` to suppress the warning without changing cache behavior.

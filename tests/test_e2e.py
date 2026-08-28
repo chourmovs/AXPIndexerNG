@@ -36,3 +36,39 @@ def test_e2e_delete(tmp_path):
 
     remaining_results = search(c, "reactor", e.embed_query("reactor"))
     assert all(not result["path"].endswith("reactor.txt") for result in remaining_results)
+
+
+def test_retrieval_golden_rank_one(tmp_path):
+    class GoldenEmbedder:
+        model_id = "golden"
+        dimension = 3
+
+        def embed_documents(self, texts):
+            return [self.embed_query(text) for text in texts]
+
+        def embed_query(self, text):
+            lowered = text.casefold()
+            if "stock" in lowered or "logistique" in lowered or "palette" in lowered or "magasin" in lowered:
+                return [0.0, 1.0, 0.0]
+            if "f040100" in lowered or "formulaire" in lowered:
+                return [0.0, 0.0, 1.0]
+            return [1.0, 0.0, 0.0]
+
+    root = tmp_path / "golden"
+    root.mkdir()
+    (root / "reactor.txt").write_text("R042500 reactor relief valve prevents dangerous overpressure.")
+    (root / "warehouse.txt").write_text("Warehouse pallets support stock and logistics operations.")
+    (root / "F040100.txt").write_text("The F040100 quality control form and its instructions.")
+    embedder = GoldenEmbedder()
+    con = connect(tmp_path / "golden.db", dimension=embedder.dimension)
+    scan(con, root, embedder)
+
+    cases = {
+        "R042500": "reactor.txt",
+        "how is semantic overpressure prevented": "reactor.txt",
+        "stock logistics query": "warehouse.txt",
+        "F040100": "F040100.txt",
+    }
+    for query, expected in cases.items():
+        results = search(con, query, embedder.embed_query(query), profile="hybrid")
+        assert results[0]["filename"] == expected

@@ -1,6 +1,7 @@
 [
  {"id":"overpressure","query":"comment éviter une pression excessive dans la cuve","document":"Le clapet de décharge protège le réacteur contre les surpressions."},
  {"id":"identifier","query":"R042500","document":"La procédure de maintenance R042500 exige une consignation."},
+ {"id":"form_identifier","query":"F040100","document":"Le formulaire F040100 consigne le contrôle qualité."},
  {"id":"logistics","query":"gestion logistique du stock","document":"Les palettes sont enregistrées dans le magasin central."},
  {"id":"ambiguity","query":"pression du réacteur chimique","document":"Le réacteur chimique maintient sa pression de fonctionnement."}
 ]

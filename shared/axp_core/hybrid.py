@@ -89,7 +89,9 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
         head = ranked[: config.rerank_candidates]
         scores = reranker.score(query, head)
         for item, score in zip(head, scores):
-            item["reranker_score"] = score
+            # Model libraries commonly return numpy scalar types.  Search results are
+            # a public boundary (CLI and HTTP), so never leak model-specific values.
+            item["reranker_score"] = float(score)
         # Exact identifiers are protected; otherwise MaxSim is final and RRF breaks ties.
         head.sort(key=lambda x: (-x["exact_priority"], -x["reranker_score"], x["rrf_rank"]))
         ranked = head + ranked[config.rerank_candidates :]
