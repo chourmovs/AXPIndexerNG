@@ -28,11 +28,14 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
     if readonly:
         _check_version(con)
         return con
-    # Alpha3 schema 2 has a lossless forward migration to multi-source schema 3.
+    # Supported schemas migrate losslessly and sequentially.
     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone():
         row = con.execute("SELECT version FROM schema_version").fetchone()
-        if row and row[0] == PREVIOUS_SCHEMA_VERSION:
+        if row and row[0] == 2:
             _migrate_v2_to_v3(con)
+            row = con.execute("SELECT version FROM schema_version").fetchone()
+        if row and row[0] == PREVIOUS_SCHEMA_VERSION:
+            _migrate_v3_to_v4(con)
         else:
             _check_version(con)
     if dimension is not None:
@@ -80,6 +83,35 @@ def _migrate_v2_to_v3(con):
             source_id = con.execute("SELECT id FROM sources WHERE path_key=?", (key,)).fetchone()[0]
             con.execute("UPDATE documents SET source_id=? WHERE source_root=?", (source_id, root))
         con.execute("CREATE INDEX IF NOT EXISTS documents_source ON documents(source_id)")
+        con.execute("UPDATE schema_version SET version=3")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+
+
+def _migrate_v3_to_v4(con):
+    """Add ingestion and coverage metadata without rebuilding FTS or vector tables."""
+    source_columns = {
+        "last_seen_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_content_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_metadata_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_ignored_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_failed_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_extension_breakdown": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        existing = {row[1] for row in con.execute("PRAGMA table_info(sources)")}
+        for name, declaration in source_columns.items():
+            if name not in existing:
+                con.execute(f"ALTER TABLE sources ADD COLUMN {name} {declaration}")
+        document_columns = {row[1] for row in con.execute("PRAGMA table_info(documents)")}
+        if "ingestion_mode" not in document_columns:
+            con.execute(
+                "ALTER TABLE documents ADD COLUMN ingestion_mode TEXT NOT NULL DEFAULT 'content' "
+                "CHECK(ingestion_mode IN ('content','metadata'))"
+            )
         con.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
         con.commit()
     except Exception:

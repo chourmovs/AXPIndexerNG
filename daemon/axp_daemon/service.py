@@ -39,6 +39,7 @@ class StatePublisher:
             "pid": os.getpid(), "state": "starting", "started_ms": self.started_ms,
             "heartbeat_ms": now_ms(), "current_source_id": None, "current_source": None, "current_file": None,
             "files_discovered": 0, "files_processed": 0, "files_new": 0, "files_modified": 0,
+            "files_seen": 0, "files_content": 0, "files_metadata": 0, "files_ignored": 0,
             "files_failed": 0, "chunks_generated": 0, "chunks_embedded": 0,
             "documents_total": 0, "chunks_total": 0, "model_download_attempts": 0, "last_error": None,
         }
@@ -124,11 +125,15 @@ class DaemonControl:
             state="scanning", current_source_id=source["id"], current_source=source["path"], current_file=str(path),
             files_discovered=result["files_discovered"], files_processed=result["files_scanned"],
             files_new=result["files_new"], files_modified=result["files_modified"], files_failed=result["files_failed"],
+            files_seen=result["files_seen"], files_content=result["files_content"],
+            files_metadata=result["files_metadata"], files_ignored=result["files_ignored"],
             chunks_generated=result["chunks_generated"], chunks_embedded=result["chunks_embedded"],
         )
 
     def progress(self, result):
         self.publisher.update(files_new=result["files_new"], files_modified=result["files_modified"],
+                              files_seen=result["files_seen"], files_content=result["files_content"],
+                              files_metadata=result["files_metadata"], files_ignored=result["files_ignored"],
                               files_failed=result["files_failed"], chunks_generated=result["chunks_generated"],
                               chunks_embedded=result["chunks_embedded"])
 
@@ -260,9 +265,17 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                     try:
                         result = scan_source(con, source["id"], embedder,
                                              embedding_batch_size=embedding_batch_size, control=control)
-                        LOGGER.info("Source scan completed: %s status=%s files=%s failed=%s chunks=%s",
-                                    source["path"], result["status"], result["files_scanned"],
-                                    result["files_failed"], result["chunks_embedded"])
+                        LOGGER.info(
+                            "Source scan completed: %s status=%s seen=%s content=%s metadata=%s ignored=%s failed=%s chunks=%s",
+                            source["path"], result["status"], result["files_seen"], result["files_content"],
+                            result["files_metadata"], result["files_ignored"], result["files_failed"],
+                            result["chunks_embedded"],
+                        )
+                        metadata_formats = sorted(
+                            ((ext, values["metadata"]) for ext, values in result["extension_breakdown"].items()
+                             if values["metadata"]), key=lambda item: (-item[1], item[0]))[:5]
+                        if metadata_formats:
+                            LOGGER.info("Metadata-only formats: %s", " ".join(f"{ext}={count}" for ext, count in metadata_formats))
                     except Exception as exc:
                         LOGGER.exception("Source scan failed: %s", source["path"])
                         publisher.update(state="error", last_error=str(exc))

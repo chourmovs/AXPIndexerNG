@@ -108,9 +108,10 @@ def test_schema_v2_forward_migration_preserves_index(tmp_path):
     con.commit()
     con.close()
     migrated = connect(db, dimension=3)
-    assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+    assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 4
     assert migrated.execute("SELECT count(*) FROM documents WHERE source_id IS NOT NULL").fetchone()[0] == 1
     assert migrated.execute("SELECT count(*) FROM chunks_fts").fetchone()[0] == 1
     assert migrated.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0] == 1
     assert migrated.execute("SELECT value FROM metadata WHERE key='index_signature'").fetchone()[0] == "preserved"
     assert migrated.execute("SELECT recursive FROM sources").fetchone()[0] == 1
+    assert migrated.execute("SELECT ingestion_mode FROM documents").fetchone()[0] == "content"
