@@ -2,9 +2,15 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .fts import TOKEN_RE
 from .fts import search as lexical_search
 from .identifiers import extract_identifiers, normalize_identifier
 from .vectors import search as vector_search
+
+QUERY_STOPWORDS = {
+    "avec", "dans", "des", "est", "les", "par", "pour", "que", "qui", "sur", "une",
+    "and", "for", "from", "the", "this", "with",
+}
 
 
 @dataclass(frozen=True)
@@ -15,12 +21,18 @@ class SearchConfig:
     rrf_k: int = 60
     max_chunks_per_document: int = 3
     vector_warning_threshold: int = 100_000
+    min_vector_similarity: float = 0.35
+    min_lexical_coverage: float = 0.5
 
     def __post_init__(self):
         if not 1 <= self.lexical_candidates <= 500 or not 1 <= self.vector_candidates <= 500:
             raise ValueError("candidate depths must be between 1 and 500")
         if not 10 <= self.rerank_candidates <= 100:
             raise ValueError("rerank_candidates must be between 10 and 100")
+        if not -1.0 <= self.min_vector_similarity <= 1.0:
+            raise ValueError("min_vector_similarity must be between -1 and 1")
+        if not 0.0 <= self.min_lexical_coverage <= 1.0:
+            raise ValueError("min_lexical_coverage must be between 0 and 1")
 
 
 def diversify(rows, limit, maximum=3):
@@ -40,6 +52,33 @@ def diversify(rows, limit, maximum=3):
                 if len(result) == limit:
                     return result
     return result
+
+
+def _meaningful_terms(value):
+    return {
+        match.group(0).casefold()
+        for match in TOKEN_RE.finditer(value or "")
+        if len(match.group(0)) >= 3 and match.group(0).casefold() not in QUERY_STOPWORDS
+    }
+
+
+def _relevance(item, query_terms, config):
+    candidate_text = " ".join(
+        str(item.get(field) or "") for field in ("title", "filename", "heading", "snippet", "identifiers")
+    )
+    candidate_terms = _meaningful_terms(candidate_text)
+    coverage = len(query_terms & candidate_terms) / len(query_terms) if query_terms else 0.0
+    distance = item.get("vector_distance")
+    similarity = None if distance is None else max(-1.0, min(1.0, 1.0 - float(distance)))
+    accepted = bool(
+        item["exact_priority"]
+        or (similarity is not None and similarity >= config.min_vector_similarity)
+        or (item.get("lexical_rank") is not None and coverage >= config.min_lexical_coverage)
+    )
+    item["vector_similarity"] = similarity
+    item["lexical_coverage"] = float(coverage)
+    item["relevance_score"] = float(max(coverage, similarity if similarity is not None else -1.0))
+    return accepted
 
 
 def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile="hybrid", reranker=None, explain=False):
@@ -73,7 +112,6 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
         item["exact_identifier_match"] = bool(query_ids & item_ids)
         item["exact_filename_match"] = bool(query.strip() and query.strip().casefold() == stem)
         item["exact_phrase_match"] = any(x.casefold() in item["snippet"].casefold() for x in quoted)
-        # A small rank-only safeguard; raw retriever scores remain untouched.
         item["exact_priority"] = sum(
             (item["exact_identifier_match"], item["exact_filename_match"], item["exact_phrase_match"])
         )
@@ -89,10 +127,7 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
         head = ranked[: config.rerank_candidates]
         scores = reranker.score(query, head)
         for item, score in zip(head, scores):
-            # Model libraries commonly return numpy scalar types.  Search results are
-            # a public boundary (CLI and HTTP), so never leak model-specific values.
             item["reranker_score"] = float(score)
-        # Exact identifiers are protected; otherwise MaxSim is final and RRF breaks ties.
         head.sort(key=lambda x: (-x["exact_priority"], -x["reranker_score"], x["rrf_rank"]))
         ranked = head + ranked[config.rerank_candidates :]
         for rank, item in enumerate(head, 1):
@@ -101,13 +136,23 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
     for item in ranked:
         item.setdefault("reranker_score", None)
         item.setdefault("rerank_rank", None)
+    unfiltered_count = len(ranked)
+    query_terms = _meaningful_terms(query)
+    ranked = [item for item in ranked if _relevance(item, query_terms, config)]
     final = diversify(ranked, limit, config.max_chunks_per_document)
     for rank, item in enumerate(final, 1):
         item["final_rank"] = rank
     timings["total_ms"] = (time.perf_counter() - started) * 1000
     diagnostics = {
         "timings": timings,
-        "candidate_counts": {"lexical": len(lexical), "vector": len(vector), "union": len(merged)},
+        "candidate_counts": {
+            "lexical": len(lexical), "vector": len(vector), "union": len(merged),
+            "relevant": len(ranked), "filtered_out": unfiltered_count - len(ranked),
+        },
+        "relevance_thresholds": {
+            "min_vector_similarity": config.min_vector_similarity,
+            "min_lexical_coverage": config.min_lexical_coverage,
+        },
         "total_chunks": con.execute("SELECT count(*) FROM chunks").fetchone()[0],
         "total_vectors": con.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0],
     }

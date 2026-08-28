@@ -35,10 +35,13 @@ def spawn(module, arguments, settings):
 
 def start_daemon(settings):
     atomic_write_json(runtime_paths()["desired"], {"state": "running", "updated_ms": int(time.time() * 1000)})
-    return spawn("axp_daemon", ["run", "--db", settings["db_path"], "--model-cache", settings["model_cache"],
-                                "--embedding-profile", settings["embedding_profile"], "--scan-interval",
-                                settings["scan_interval_s"], "--embedding-batch-size",
-                                settings["embedding_batch_size"]], settings)
+    arguments = ["run", "--db", settings["db_path"], "--model-cache", settings["model_cache"],
+                 "--embedding-profile", settings["embedding_profile"], "--scan-interval",
+                 settings["scan_interval_s"], "--embedding-batch-size", settings["embedding_batch_size"],
+                 "--model-download-retry", settings["model_download_retry_s"]]
+    if settings.get("download_missing_models", True):
+        arguments.append("--allow-download")
+    return spawn("axp_daemon", arguments, settings)
 
 
 def stop_daemon(intentional=True):

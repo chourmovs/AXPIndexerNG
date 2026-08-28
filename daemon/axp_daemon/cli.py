@@ -45,9 +45,11 @@ def main(argv=None):
     run = sub.add_parser("run")
     run.add_argument("--db", required=True)
     run.add_argument("--model-cache")
+    run.add_argument("--allow-download", action="store_true")
     run.add_argument("--embedding-profile", choices=("balanced", "quality"), default="balanced")
     run.add_argument("--embedding-batch-size", type=int, default=64)
     run.add_argument("--scan-interval", type=int, default=300)
+    run.add_argument("--model-download-retry", type=int, default=60)
     source = sub.add_parser("source")
     source_sub = source.add_subparsers(dest="source_cmd", required=True)
     for name in ("list", "add", "enable", "disable", "remove"):
@@ -71,8 +73,11 @@ def main(argv=None):
         print(json.dumps(send_control(args.action)))
         return
     if args.cmd == "run":
-        value = run_daemon(args.db, args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"), args.embedding_profile,
-                           max(1, args.scan_interval), max(1, args.embedding_batch_size))
+        value = run_daemon(
+            args.db, args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"), args.embedding_profile,
+            max(1, args.scan_interval), max(1, args.embedding_batch_size), args.allow_download,
+            max(1, args.model_download_retry),
+        )
         print(json.dumps(value))
         return
     con = connect(args.db)

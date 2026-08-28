@@ -5,10 +5,16 @@ from pathlib import Path
 
 SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".docx", ".pptx"}
 DRIVE_IGNORES = {"$recycle.bin", "system volume information"}
+TEMPORARY_PREFIXES = ("~$", ".~lock.")
 
 
 class SourceUnavailable(OSError):
     pass
+
+
+def is_supported_document(name):
+    folded = name.casefold()
+    return not folded.startswith(TEMPORARY_PREFIXES) and Path(name).suffix.casefold() in SUPPORTED
 
 
 @dataclass
@@ -37,7 +43,7 @@ class Discovery:
                     if entry.is_dir(follow_symlinks=False):
                         if self.recursive and entry.name.casefold() not in DRIVE_IGNORES:
                             yield from self._walk(Path(entry.path))
-                    elif entry.is_file(follow_symlinks=False) and Path(entry.name).suffix.casefold() in SUPPORTED:
+                    elif entry.is_file(follow_symlinks=False) and is_supported_document(entry.name):
                         self.discovered += 1
                         yield Path(entry.path)
                 except OSError as exc:
@@ -46,8 +52,6 @@ class Discovery:
 
 
 def path_key(path):
-    # Documents have to exist while scanning, so absolute is sufficient and does
-    # not inherit strict Path.resolve behaviour on temporarily disconnected roots.
     return os.path.normcase(os.path.abspath(os.fspath(path))).casefold()
 
 
