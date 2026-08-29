@@ -15,6 +15,7 @@ class EvidenceBlock:
     chunk_nos: list[int]
     relevance_score: float
     text: str
+    relevance_signals: dict = field(default_factory=dict)
 
     def source(self):
         value = asdict(self)
@@ -27,6 +28,7 @@ class EvidenceBlock:
 class ContextResult:
     prompt_text: str
     blocks: list[EvidenceBlock] = field(default_factory=list)
+    diagnostics: dict = field(default_factory=dict)
 
 
 SearchHit = dict[str, Any]

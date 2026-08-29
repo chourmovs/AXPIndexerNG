@@ -7,7 +7,10 @@ from axp_core.hybrid import SearchConfig
 from axp_core.runtime import configure_logging, load_settings
 from axp_daemon.embeddings import embedder_for_index
 
-from .rag.llama_cpp_backend import LlamaCppBackend
+from .rag.factory import create_chat_backend
+from .rag.model import import_model, model_status, remove_model
+from .rag.answerability import decide_answerability
+from .rag.evaluation import evaluate, format_summary, load_cases, threshold_sweep
 from .rag.service import ChatUnavailableError, GenerationFailedError, RagService
 from .reranker import Reranker
 from .search import search
@@ -19,6 +22,19 @@ LOGGER = configure_logging("axp_client", "client.log")
 def main(argv=None):
     p = argparse.ArgumentParser()
     s = p.add_subparsers(dest="cmd", required=True)
+    model = s.add_parser("chat-model")
+    model_sub = model.add_subparsers(dest="model_cmd", required=True)
+    model_import = model_sub.add_parser("import")
+    model_import.add_argument("--file", required=True)
+    model_sub.add_parser("status")
+    model_remove = model_sub.add_parser("remove")
+    model_remove.add_argument("--yes", action="store_true")
+    evaluation = s.add_parser("rag-eval")
+    evaluation.add_argument("--db", required=True)
+    evaluation.add_argument("--cases", required=True)
+    evaluation.add_argument("--full", action="store_true")
+    evaluation.add_argument("--output")
+    evaluation.add_argument("--sweep", action="store_true")
     for cmd in ("health", "search", "serve", "ask"):
         q = s.add_parser(cmd)
         q.add_argument("--db", required=True)
@@ -42,11 +58,64 @@ def main(argv=None):
             q.add_argument("--question", required=True)
             q.add_argument("--debug", action="store_true")
     a = p.parse_args(argv)
+    if a.cmd == "chat-model":
+        path = load_settings()["chat_model_path"]
+        if a.model_cmd == "import":
+            print(json.dumps(import_model(a.file, path)))
+        elif a.model_cmd == "status":
+            print(json.dumps(model_status(path)))
+        elif not a.yes:
+            p.error("chat-model remove requires --yes")
+        else:
+            remove_model(path)
+            print(json.dumps({"removed": True}))
+        return
     if a.cmd == "health":
         print(json.dumps(capability_report(connect(a.db))))
         return
     con = connect(a.db, readonly=True)
     e = embedder_for_index(con, cache_dir=os.getenv("FASTEMBED_CACHE_PATH"), local_only=True)
+    if a.cmd == "rag-eval":
+        cases = load_cases(a.cases)
+        rag = RagService(backend=create_chat_backend(load_settings()), search_fn=search, connect_fn=connect,
+                         db=a.db, embedder=e)
+        def runner(question, mode):
+            if mode == "full":
+                return rag.ask(question)
+            started = __import__("time").perf_counter()
+            with connect(a.db, readonly=True) as evaluation_connection:
+                found = search(evaluation_connection, e, question, limit=24, profile="hybrid", explain=True)
+            decision = decide_answerability(found.get("results", found))
+            return {"answerable": decision.answerable, "decision": decision.public(),
+                    "timings": {"retrieval_ms": (__import__("time").perf_counter() - started) * 1000}}
+        result = evaluate(cases, runner, mode="full" if a.full else "gate-only")
+        result["answerability_config"] = __import__("dataclasses").asdict(
+            __import__("axp_client.rag.answerability", fromlist=["AnswerabilityConfig"]).AnswerabilityConfig())
+        result["model_manifest"] = model_status(load_settings()["chat_model_path"]).get("manifest")
+        result["backend_version"] = rag.health().get("backend_version")
+        result["axp_commit"] = os.getenv("GITHUB_SHA")
+        if a.sweep:
+            if a.full:
+                p.error("--sweep is gate-only")
+            swept = []
+            for case in cases:
+                with connect(a.db, readonly=True) as evaluation_connection:
+                    found = search(evaluation_connection, e, case["question"], limit=24,
+                                   profile="hybrid", explain=True)
+                    hits = found.get("results", found)
+                    ids = {int(hit["document_id"]) for hit in hits}
+                    modes = {}
+                    if ids:
+                        placeholders = ",".join("?" for _ in ids)
+                        modes = dict(evaluation_connection.execute(
+                            f"SELECT id,ingestion_mode FROM documents WHERE id IN ({placeholders})", tuple(ids)))
+                    hits = [hit for hit in hits if modes.get(int(hit["document_id"]), "content") == "content"]
+                swept.append({**case, "hits": hits})
+            result["threshold_sweep"] = threshold_sweep(swept)
+        if a.output:
+            __import__("pathlib").Path(a.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(format_summary(result))
+        return
     if a.cmd == "search":
         config = SearchConfig(a.lexical_candidates, a.vector_candidates, a.rerank_candidates)
         reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH")) if a.profile == "quality" else None
@@ -54,7 +123,7 @@ def main(argv=None):
         print(json.dumps(value, ensure_ascii=False))
         return
     if a.cmd == "ask":
-        service = RagService(backend=LlamaCppBackend(load_settings()["chat_model_path"]), search_fn=search,
+        service = RagService(backend=create_chat_backend(load_settings()), search_fn=search,
                              connect_fn=connect, db=a.db, embedder=e)
         try:
             value = service.ask(a.question, debug=a.debug)

@@ -1,47 +1,70 @@
-# Grounded local RAG
+# Local grounded answers
 
-AXP Answer is a backend-only, local document-question-answering pipeline:
+AXP's Ask runtime retrieves from the existing index, applies a deterministic answerability gate, and **does not call
+the model when evidence is weak**. Accepted evidence is placed in a bounded prompt, generated locally, and checked for
+known `[S#]` citations. Metadata-only documents cannot be factual evidence. Search ranking and defaults are unchanged.
 
-`question -> existing hybrid retrieval -> deterministic answerability gate -> full-chunk context -> local LLM -> citation validation -> answer/refusal`
+## Validated baseline model
 
-Search result relevance is not answerability. Search finds potentially useful material; the stricter, independently
-configured gate determines whether content evidence is sufficient. Metadata-only documents can be returned as related
-files but cannot support an answer. A rejected question never invokes the model.
+The reference is [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF), file
+`Qwen3-4B-Q4_K_M.gguf`: Qwen3, approximately 4B parameters, Q4_K_M, approximately 2.5 GB, multilingual (including
+French and English), under Apache-2.0. It is a validated baseline rather than the only potentially compatible GGUF.
+The model and its license are **not repackaged in the AXP ZIP**. Administrators must confirm that model use complies
+with organizational policy and the upstream license.
 
-Accepted seed chunks are expanded with their immediate neighbors from SQLite, deduplicated, merged when adjacent,
-diversified across documents, and constrained to a 24,000-character budget. Sources have server-issued `S#` identities.
-The server accepts an answer only when it contains one or more supplied citations and no unknown citation.
+Provision it explicitly and offline:
 
-## Refusal layers
+```console
+python -m axp_client chat-model import --file "D:\Downloads\Qwen3-4B-Q4_K_M.gguf"
+python -m axp_client chat-model status
+python -m axp_client chat-model remove --yes
+```
 
-1. The deterministic retrieval gate rejects absent or weak content evidence.
-2. The model is instructed to output `INSUFFICIENT_EVIDENCE` when the precise answer is absent or ambiguous.
-3. Server-side validation rejects uncited answers and invented citation IDs.
+Import validates the regular `.gguf` file and header, atomically copies it to the configured `chat_model_path`, and
+records size, SHA-256, original filename, and import time. It never uses HTTP. A missing model does not affect indexing
+or Search; Ask health reports `model_missing` and Ask returns a controlled unavailable response. No download occurs at
+startup or request time.
 
-The local LLM is never treated as a source of truth. Indexed evidence is the source of truth. Decision reasons remain
-machine-readable for later calibration and outcome classification.
+## CPU runtime and supply chain
 
-## Local model and security
+The portable runtime pins `llama-cpp-python==0.3.23` and installs a prebuilt basic CPU wheel from the project's official
+wheel index (`https://abetlen.github.io/llama-cpp-python/whl/cpu`). Release installation sets `PIP_ONLY_BINARY` for this
+package and fails rather than compiling. The bundled Python is WinPython CPython 3.11.8, Windows x86-64. CUDA, GPU
+drivers, compilers, CMake, pip, and system Python are not end-user prerequisites. The release acceptance step imports
+`Llama` using the bundled interpreter. Network restrictions prevented recording the exact wheel SHA-256 during this
+implementation; release artifact provenance should be captured by CI before publication.
 
-Set `chat_backend` to `llama_cpp` and provision a GGUF file at `chat_model_path` (by default
-`model-cache/chat/model.gguf`, resolved relative to the installation root). AXP does not download this file. The model
-is loaded lazily on the first answerable Ask and cached; health checks do not load it. Generation is CPU-only by default
-and limited to one request at a time.
+CPU operation uses `n_gpu_layers=0`, an 8192-token context, a 512-token answer reserve, and a safety reserve. Actual
+token counts come from the loaded model tokenizer only after the gate accepts. Qwen thinking is disabled through
+`chat_template_kwargs`, and any unexpected thinking wrapper is removed before citation validation. Native verbosity is
+disabled. Only one lazily loaded model and one generation at a time are allowed.
 
-RAG makes no cloud or outbound request and has no cloud fallback. `POST /api/ask` is loopback-only even if the search
-server binds to all interfaces. Questions, prompts, evidence, and answers are not written to normal logs. Retrieved
-document instructions are delimited, treated as untrusted data, and never followed.
+No Windows resource measurement was available for this change, so peak RSS, loaded idle RSS, utilization, and tokens/s
+are intentionally not estimated. Operators should measure them on representative corporate hardware.
 
-`llama-cpp-python` remains an optional provisioning dependency: this change does not add it to the portable runtime
-because a reliable pinned prebuilt Windows CPU wheel has not yet been validated. Consequently the normal portable ZIP
-dependency delta is **0 bytes**, and dynamic workstation compilation is not attempted. The separately provisioned
-GGUF is never included in the release ZIP. Once a wheel is validated, the portable acceptance check must include
-`from llama_cpp import Llama` and record exact before/after ZIP sizes and the pinned version.
+## Confidence and calibration
 
-## Interfaces
+Search relevance is a ranking signal, **not a probability that an answer exists**. The gate keeps vector similarity,
+lexical coverage, content identifier/phrase matches, supporting chunks, and document counts separate. A filename match
+alone is not factual support, and high lexical coverage with weak semantic support is refused.
 
-* `GET /api/ask/health` reports configuration, availability, and lazy load state without exposing the model path.
-* `POST /api/ask` accepts `{"question": "...", "debug": false}` (64 KiB body and 4,000-character question limits).
-* `python -m axp_client ask --db data/axpindex.db --question "..."` runs the same service without the web server.
+Private corpora can be evaluated without committing or copying their cases:
 
-There is no database schema change, reindex, retrieval-ranking change, embedding change, or chunker change.
+```console
+python -m axp_client rag-eval --db data/axpindex.db --cases my-rag-cases.json
+python -m axp_client rag-eval --db data/axpindex.db --cases my-rag-cases.json --full --output result.json
+```
+
+Gate-only is the default and never invokes the LLM. Full mode also measures generation, refusal, and citation outcomes.
+The JSON result is written only when requested and never contains evidence text. Case files support `expected_terms`
+as a rough hint—not semantic proof—and optional expected document identifiers for manual retrieval review. False
+accept and false refusal rates are reported independently. Initial thresholds remain provisional until tested against
+a larger representative corpus.
+
+## Security boundary
+
+Inference is local and has no cloud, tools, or web-search path. Evidence is explicitly untrusted and cannot override the
+system prompt. Model decline and invalid/unknown/missing citations become refusals. Ask is loopback-only; browser Origin
+must also be loopback on the serving port, cross-site Fetch Metadata is rejected, JSON content type and bounded positive
+Content-Length are required, and responses use `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+Debug output includes only counts, IDs, gate signals, and token diagnostics—not prompts or evidence.
