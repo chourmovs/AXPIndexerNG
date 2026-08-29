@@ -1,4 +1,5 @@
 import http.client
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -42,8 +43,8 @@ def add_document(db, path, document_id=42):
 
 
 @contextmanager
-def running_server(db, opener):
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(db, None, opener))
+def running_server(db, opener, rag_service=None):
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(db, None, opener, rag_service))
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     try:
@@ -61,6 +62,15 @@ def post(httpd, target):
     body = response.read()
     connection.close()
     return response.status, body
+
+
+def post_json(httpd, target, body, headers=None):
+    connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=2)
+    connection.request("POST", target, body=body, headers=headers or {"Content-Type": "application/json"})
+    response = connection.getresponse()
+    value = response.read()
+    connection.close()
+    return response.status, value
 
 
 def test_open_document_uses_database_path(tmp_path):
@@ -107,3 +117,41 @@ def test_shutdown_endpoint_accepts_loopback(tmp_path):
     with running_server(db, lambda _: None) as httpd:
         status, _ = post(httpd, "/api/shutdown")
     assert status == 200
+
+
+def test_ask_request_limits_and_health_do_not_generate(tmp_path):
+    class Rag:
+        calls = []
+
+        def health(self):
+            return {"available": True, "backend": "fake", "model_loaded": False}
+
+        def ask(self, question, debug=False):
+            self.calls.append((question, debug))
+            return {"status": "answered", "answerable": True, "answer": "ok [S1]"}
+
+    rag = Rag()
+    with running_server(tmp_path / "unused.db", lambda _: None, rag) as httpd:
+        connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=2)
+        connection.request("GET", "/api/ask/health")
+        health = connection.getresponse()
+        assert health.status == 200
+        health.read()
+        connection.close()
+        malformed, _ = post_json(httpd, "/api/ask", b"{")
+        empty, _ = post_json(httpd, "/api/ask", b'{"question":"  "}')
+        oversized, _ = post_json(httpd, "/api/ask", json.dumps({"question": "x" * 4001}))
+        answered, _ = post_json(httpd, "/api/ask", b'{"question":"local question"}')
+    assert (malformed, empty, oversized, answered) == (400, 400, 413, 200)
+    assert rag.calls == [("local question", False)]
+
+
+def test_ask_endpoint_rejects_remote_before_reading_body():
+    handler_type = server.make_handler("unused.db", None, rag_service=object())
+    handler = handler_type.__new__(handler_type)
+    handler.path = "/api/ask"
+    handler.client_address = ("192.168.1.20", 1234)
+    response = {}
+    handler.send_json = lambda value, status=200: response.update(value=value, status=status)
+    handler.do_POST()
+    assert response == {"value": {"error": "ask is only available locally"}, "status": 403}

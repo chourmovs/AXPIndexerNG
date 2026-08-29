@@ -12,6 +12,8 @@ from axp_core.runtime import configure_logging, load_settings
 
 from .reranker import Reranker
 from .search import search
+from .rag.llama_cpp_backend import LlamaCppBackend
+from .rag.service import ChatBusyError, ChatUnavailableError, GenerationFailedError, RagService
 
 WEB = Path(__file__).parent / "web"
 LOGGER = configure_logging("axp_client", "client.log")
@@ -29,7 +31,11 @@ def _is_loopback(address):
         return False
 
 
-def make_handler(db, embedder, open_file=open_with_default_application):
+MAX_ASK_BODY = 64 * 1024
+MAX_QUESTION_LENGTH = 4_000
+
+
+def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None):
     quality_reranker = None
 
     class Handler(BaseHTTPRequestHandler):
@@ -65,6 +71,12 @@ def make_handler(db, embedder, open_file=open_with_default_application):
                         if q
                         else []
                     )
+            if url.path == "/api/ask/health":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "ask is only available locally"}, 403)
+                if rag_service is None:
+                    return self.send_json({"available": False, "reason": "not_configured"})
+                return self.send_json(rag_service.health())
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -93,6 +105,39 @@ def make_handler(db, embedder, open_file=open_with_default_application):
 
         def do_POST(self):
             url = urlparse(self.path)
+            if url.path == "/api/ask":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "ask is only available locally"}, 403)
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    return self.send_json({"error": "invalid_request"}, 400)
+                if length > MAX_ASK_BODY:
+                    return self.send_json({"error": "request_too_large"}, 413)
+                try:
+                    body = json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return self.send_json({"error": "invalid_json"}, 400)
+                if not isinstance(body, dict) or not isinstance(body.get("question"), str):
+                    return self.send_json({"error": "invalid_question"}, 400)
+                question = body["question"].strip()
+                if not question:
+                    return self.send_json({"error": "invalid_question"}, 400)
+                if len(question) > MAX_QUESTION_LENGTH:
+                    return self.send_json({"error": "question_too_large"}, 413)
+                if not isinstance(body.get("debug", False), bool):
+                    return self.send_json({"error": "invalid_debug"}, 400)
+                if rag_service is None:
+                    return self.send_json({"error": "chat_model_unavailable"}, 503)
+                try:
+                    return self.send_json(rag_service.ask(question, debug=body.get("debug", False)))
+                except ChatUnavailableError:
+                    return self.send_json({"error": "chat_model_unavailable"}, 503)
+                except ChatBusyError:
+                    return self.send_json({"error": "chat_busy"}, 429)
+                except GenerationFailedError:
+                    return self.send_json({"status": "generation_unavailable", "answerable": False,
+                                           "error": "local_generation_failed"}, 503)
             if url.path == "/api/shutdown":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "shutdown is only available locally"}, 403)
@@ -135,7 +180,10 @@ def make_handler(db, embedder, open_file=open_with_default_application):
 
 
 def serve(db, embedder, host="127.0.0.1", port=8765):
-    server = ThreadingHTTPServer((host, port), make_handler(db, embedder))
+    settings = load_settings()
+    backend = LlamaCppBackend(settings["chat_model_path"])
+    rag_service = RagService(backend=backend, search_fn=search, connect_fn=connect, db=db, embedder=embedder)
+    server = ThreadingHTTPServer((host, port), make_handler(db, embedder, rag_service=rag_service))
     try:
         server.serve_forever()
     finally:

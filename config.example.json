@@ -1,6 +1,8 @@
 {
   "db_path": "data/axpindex.db",
   "model_cache": "model-cache",
+  "chat_backend": "llama_cpp",
+  "chat_model_path": "model-cache/chat/model.gguf",
   "embedding_profile": "balanced",
   "embedding_batch_size": 64,
   "download_missing_models": true,
