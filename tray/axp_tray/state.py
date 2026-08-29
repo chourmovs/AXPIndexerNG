@@ -13,10 +13,20 @@ def read_daemon_state(stale_after_s=HEARTBEAT_STALE_AFTER_S, now_ms=None):
     age_ms = current_ms - heartbeat if heartbeat else None
     value["heartbeat_age_ms"] = age_ms
     value["stale"] = age_ms is None or age_ms > stale_after_s * 1000
-    if value["stale"] and value.get("state") not in {"stopped", "stopping"}:
-        value["state"] = "error"
-        value["last_error"] = "daemon heartbeat stale"
     return value
+
+
+def heartbeat_display(state, delayed_after_s=5):
+    """Describe freshness without overwriting the daemon's authoritative state."""
+    age_ms = state.get("heartbeat_age_ms")
+    if age_ms is None:
+        return "Daemon state unavailable"
+    age_s = max(0.0, age_ms / 1000)
+    if state.get("stale"):
+        return f"Daemon state STALE · {age_s:.0f}s old"
+    if age_s >= delayed_after_s:
+        return f"Daemon state delayed · {age_s:.0f}s old"
+    return f"Daemon PID {state.get('pid', '—')} · state updated {age_s:.1f}s ago"
 
 
 def tooltip(state):

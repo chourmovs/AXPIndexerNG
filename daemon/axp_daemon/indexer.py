@@ -75,7 +75,7 @@ def _embed_group(items, embedder, result, control):
     inputs = [embedding_input(chunk, item.title, item.path.name) for item in items for chunk in item.chunks]
     if not inputs:
         return [(item, []) for item in items]
-    _control_call(control, "stage", "embedding")
+    _control_call(control, "batch", "embedding", len(items), len(inputs))
     started = time.perf_counter()
     try:
         vectors = list(embedder.embed_documents(inputs))
@@ -104,7 +104,8 @@ def _flush(con, source_id, pending, embedder, result, control):
     if not pending:
         return
     embedded = _embed_group(list(pending), embedder, result, control)
-    _control_call(control, "stage", "committing")
+    _control_call(control, "batch", "committing", len(pending),
+                  sum(len(item.chunks) for item in pending))
     db_started = time.perf_counter()
     for item, item_vectors in embedded:
         con.execute("SAVEPOINT document_write")

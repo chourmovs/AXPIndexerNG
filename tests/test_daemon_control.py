@@ -20,7 +20,7 @@ def test_atomic_state_write_and_stale_detection(tmp_path, monkeypatch):
     assert read_daemon_state()["state"] == "idle"
     atomic_write_json(paths["state"], {"state": "scanning", "heartbeat_ms": 1})
     stale = read_daemon_state(stale_after_s=1)
-    assert stale["state"] == "error" and stale["stale"]
+    assert stale["state"] == "scanning" and stale["stale"]
     assert not list(tmp_path.rglob("*.tmp"))
 
 
