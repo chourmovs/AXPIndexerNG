@@ -31,8 +31,7 @@ def current_windows_principal():
 
 
 def task_xml(principal, executable, launcher, working_directory, installation_id):
-    values = map(lambda value: escape(str(Path(value).absolute())),
-                 (executable, launcher, working_directory))
+    values = (escape(str(Path(value).absolute())) for value in (executable, launcher, working_directory))
     executable, launcher, working_directory = values
     principal, installation_id = escape(principal), escape(installation_id)
     return f'''<?xml version="1.0" encoding="UTF-16"?>

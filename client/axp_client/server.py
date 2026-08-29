@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from axp_core.database import connect
 from axp_core.background import access_path_for
+from axp_core.database import connect
 from axp_core.runtime import configure_logging, load_settings
 
 from .reranker import Reranker

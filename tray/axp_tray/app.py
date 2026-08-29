@@ -10,15 +10,22 @@ import time
 import webbrowser
 from pathlib import Path
 
+from axp_core.background import background_preflight
 from axp_core.database import connect
 from axp_core.locking import AlreadyLocked, FileLock, daemon_instance_running
-from axp_core.background import background_preflight
-from axp_core.runtime import atomic_write_json, configure_logging, load_settings, read_json, runtime_paths, save_settings
+from axp_core.runtime import (
+    atomic_write_json,
+    configure_logging,
+    load_settings,
+    read_json,
+    runtime_paths,
+    save_settings,
+)
 from axp_daemon.service import send_control
 
+from .background_task import TaskSchedulerBackend
 from .icons import make_icon
 from .process import ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
-from .background_task import TaskSchedulerBackend
 from .sources_window import SourcesWindow
 from .startup import is_enabled, repair_registration, set_enabled
 from .state import read_daemon_state, should_auto_restart, tooltip
@@ -149,7 +156,7 @@ class TrayApplication:
                 self.settings.update(daemon_runtime_mode="interactive", background_drive_mappings={})
                 save_settings(self.settings)
                 start_daemon(self.settings)
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 messagebox.showerror("Background indexing", str(exc))
             return
         with connect(self.settings["db_path"], readonly=True) as con:
@@ -177,7 +184,7 @@ class TrayApplication:
             save_settings(candidate)
             self.settings = candidate
             start_daemon(candidate)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             self.settings = previous
             save_settings(previous)
             messagebox.showerror("Background indexing could not be enabled", f"{exc}\n\nAXPIndexerNG did not modify system security policy.")
