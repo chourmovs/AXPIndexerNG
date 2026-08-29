@@ -7,49 +7,71 @@ class DecisionReason(StrEnum):
     STRONG_EVIDENCE = "strong_evidence"
     MULTIPLE_SUPPORT = "multiple_support"
     EXACT_SUPPORTED = "exact_supported"
+    TOPIC_WITHOUT_ANSWER = "topic_match_without_answer_support"
     WEAK_RETRIEVAL = "weak_retrieval"
 
 
 @dataclass(frozen=True)
 class AnswerabilityConfig:
-    strong_relevance: float = 0.60
-    support_relevance: float = 0.45
-    multi_support_best: float = 0.50
-    exact_supported: float = 0.45
-    meaningful_lexical_support: float = 0.25
+    strong_vector_similarity: float = 0.55
+    support_vector_similarity: float = 0.45
+    strong_lexical_coverage: float = 0.50
+    support_lexical_coverage: float = 0.25
+    minimum_supporting_chunks: int = 2
+    minimum_supporting_documents: int = 1
 
 
 @dataclass(frozen=True)
 class AnswerabilityDecision:
     answerable: bool
+    confidence: str
     reason: DecisionReason
-    best_relevance: float
-    supporting_chunks: int
-    content_documents: int
+    signals: dict
+
+    @property
+    def best_relevance(self):
+        return self.signals["best_vector_similarity"]
+
+    @property
+    def supporting_chunks(self):
+        return self.signals["support_chunks"]
+
+    @property
+    def content_documents(self):
+        return self.signals["documents"]
 
     def public(self):
-        return {"reason": self.reason.value, "best_relevance": self.best_relevance}
+        return {"answerable": self.answerable, "confidence": self.confidence,
+                "reason": self.reason.value, "signals": self.signals}
+
+
+def _vector(row):
+    # Retrieval explain output supplies vector_similarity; old fixtures may only have relevance_score.
+    return float(row.get("vector_similarity", row.get("relevance_score")) or 0)
 
 
 def decide_answerability(results, config=None):
     config = config or AnswerabilityConfig()
     if not results:
-        return AnswerabilityDecision(False, DecisionReason.NO_CONTENT_EVIDENCE, 0.0, 0, 0)
-    scores = [float(row.get("relevance_score") or 0) for row in results]
-    best = max(scores)
-    supporting = sum(score >= config.support_relevance for score in scores)
-    documents = len({row["document_id"] for row in results})
-    if best >= config.strong_relevance:
-        reason, accepted = DecisionReason.STRONG_EVIDENCE, True
-    elif best >= config.multi_support_best and supporting >= 2:
-        reason, accepted = DecisionReason.MULTIPLE_SUPPORT, True
-    elif any(
-        float(row.get("relevance_score") or 0) >= config.exact_supported
-        and float(row.get("lexical_coverage") or 0) >= config.meaningful_lexical_support
-        and any(row.get(key) for key in ("exact_identifier_match", "exact_filename_match", "exact_phrase_match"))
-        for row in results
-    ):
-        reason, accepted = DecisionReason.EXACT_SUPPORTED, True
-    else:
-        reason, accepted = DecisionReason.WEAK_RETRIEVAL, False
-    return AnswerabilityDecision(accepted, reason, best, supporting, documents)
+        signals = {"best_vector_similarity": 0.0, "best_lexical_coverage": 0.0, "strong_chunks": 0,
+                   "support_chunks": 0, "documents": 0, "exact_content_matches": 0}
+        return AnswerabilityDecision(False, "low", DecisionReason.NO_CONTENT_EVIDENCE, signals)
+    strong = [r for r in results if _vector(r) >= config.strong_vector_similarity
+              and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
+    support = [r for r in results if _vector(r) >= config.support_vector_similarity
+               and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
+    exact = [r for r in results if (r.get("exact_identifier_match") or r.get("exact_phrase_match"))
+             and _vector(r) >= config.support_vector_similarity]
+    signals = {"best_vector_similarity": max(map(_vector, results)),
+               "best_lexical_coverage": max(float(r.get("lexical_coverage") or 0) for r in results),
+               "strong_chunks": len(strong), "support_chunks": len(support),
+               "documents": len({r["document_id"] for r in results}), "exact_content_matches": len(exact)}
+    if exact:
+        return AnswerabilityDecision(True, "high", DecisionReason.EXACT_SUPPORTED, signals)
+    if len(support) >= config.minimum_supporting_chunks:
+        return AnswerabilityDecision(True, "medium", DecisionReason.MULTIPLE_SUPPORT, signals)
+    if strong:
+        return AnswerabilityDecision(True, "high", DecisionReason.STRONG_EVIDENCE, signals)
+    reason = (DecisionReason.TOPIC_WITHOUT_ANSWER if signals["best_lexical_coverage"] >= config.strong_lexical_coverage
+              else DecisionReason.WEAK_RETRIEVAL)
+    return AnswerabilityDecision(False, "low", reason, signals)

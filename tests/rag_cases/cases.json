@@ -1,8 +1,16 @@
 [
-  {"id":"a1","kind":"answerable"},{"id":"a2","kind":"answerable"},{"id":"a3","kind":"answerable"},
-  {"id":"a4","kind":"answerable"},{"id":"a5","kind":"answerable"},
-  {"id":"u1","kind":"unanswerable"},{"id":"u2","kind":"unanswerable"},{"id":"u3","kind":"unanswerable"},
-  {"id":"u4","kind":"unanswerable"},{"id":"u5","kind":"unanswerable"},
-  {"id":"m1","kind":"metadata_only"},{"id":"m2","kind":"metadata_only"},
-  {"id":"x1","kind":"ambiguous"},{"id":"x2","kind":"ambiguous"}
+  {"id":"a1","kind":"answerable","question":"Why was the synthetic mixing point changed?","expected_answerable":true,"expected_terms":["mixing time"]},
+  {"id":"a2","kind":"answerable","question":"What is the synthetic reactor identifier?","expected_answerable":true},
+  {"id":"a3","kind":"answerable","question":"Which limit is stated in the test procedure?","expected_answerable":true},
+  {"id":"a4","kind":"answerable","question":"When does the fictional inspection occur?","expected_answerable":true},
+  {"id":"a5","kind":"answerable","question":"How is the sample stored?","expected_answerable":true},
+  {"id":"u1","kind":"unanswerable","question":"Which supplier won the fictional compressor tender?","expected_answerable":false},
+  {"id":"u2","kind":"unanswerable","question":"What is the CEO's home address?","expected_answerable":false},
+  {"id":"u3","kind":"unanswerable","question":"What will next year's price be?","expected_answerable":false},
+  {"id":"u4","kind":"unanswerable","question":"Who privately approved the purchase?","expected_answerable":false},
+  {"id":"u5","kind":"unanswerable","question":"What happened on an absent identifier?","expected_answerable":false},
+  {"id":"m1","kind":"metadata_only","question":"What factual content is inside metadata-only file one?","expected_answerable":false},
+  {"id":"m2","kind":"metadata_only","question":"Summarize metadata-only file two.","expected_answerable":false},
+  {"id":"x1","kind":"ambiguous","question":"Which of the conflicting synthetic values is correct?","expected_answerable":false},
+  {"id":"x2","kind":"ambiguous","question":"What does the unspecified limit mean?","expected_answerable":false}
 ]

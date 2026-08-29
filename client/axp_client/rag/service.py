@@ -6,6 +6,7 @@ import uuid
 from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
+from .llama_cpp_backend import GenerationConfig
 from .prompts import SYSTEM_PROMPT, user_prompt
 
 LOGGER = logging.getLogger("axp_client")
@@ -64,7 +65,15 @@ class RagService:
                             len(candidates), decision.content_documents)
                 return base
             context_start = time.perf_counter()
-            context = build_context(con, content)
+            system_tokens = self.backend.count_tokens(SYSTEM_PROMPT)
+            question_tokens = self.backend.count_tokens(user_prompt(question, ""))
+            fixed_tokens = system_tokens + question_tokens
+            generation_config = getattr(self.backend, "config", GenerationConfig())
+            context = build_context(con, content, token_counter=self.backend.count_tokens,
+                                    context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
+                                    config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
+                                        answer_reserve_tokens=generation_config.max_answer_tokens,
+                                        safety_reserve_tokens=generation_config.safety_tokens))
         context_ms = (time.perf_counter() - context_start) * 1000
         if not context.blocks:
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
@@ -93,8 +102,16 @@ class RagService:
                 base["decision"] = {"reason": "invalid_citations", "best_relevance": decision.best_relevance}
         base["timings"] = {"retrieval_ms": retrieval_ms, "context_ms": context_ms, "generation_ms": generation_ms,
                            "total_ms": (time.perf_counter() - started) * 1000}
+        telemetry = getattr(self.backend, "last_telemetry", None)
+        if telemetry:
+            base["generation"] = telemetry
         if debug:
             base["debug"] = self._debug(candidates, content, decision, context)
+            base["debug"]["tokens"] = {"context_window_tokens": self.backend.context_window(),
+                "system_tokens": system_tokens, "question_tokens": question_tokens,
+                "evidence_tokens": context.diagnostics["evidence_tokens"],
+                "reserved_answer_tokens": generation_config.max_answer_tokens,
+                "total_prompt_tokens": fixed_tokens + context.diagnostics["evidence_tokens"]}
         LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s generation_ms=%.1f", request_id,
                     base["decision"]["reason"], len(candidates), decision.content_documents, generation_ms)
         return base
@@ -102,7 +119,7 @@ class RagService:
     @staticmethod
     def _debug(candidates, content, decision, context):
         return {"retrieval_candidates": len(candidates), "content_candidates": len(content),
-                "gate": {"supporting_chunks": decision.supporting_chunks, "content_documents": decision.content_documents},
+                "gate": decision.public(),
                 "selected_evidence_ids": [] if context is None else [x.id for x in context.blocks],
                 "selected_chunk_ids": [] if context is None else [x.chunk_ids for x in context.blocks],
                 "context_characters": 0 if context is None else len(context.prompt_text)}
