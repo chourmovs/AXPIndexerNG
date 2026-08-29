@@ -37,10 +37,42 @@ MAX_ASK_BODY = 64 * 1024
 MAX_QUESTION_LENGTH = 4_000
 
 
+class DocumentNotFoundError(Exception):
+    pass
+
+
+def resolve_document_access_path(db, document_id, *, directory=False):
+    """Resolve a document action from its database identity, never browser input."""
+    with connect(db, readonly=True) as con:
+        row = con.execute("SELECT path FROM documents WHERE id=?", (document_id,)).fetchone()
+    if row is None:
+        raise DocumentNotFoundError
+    logical = Path(row["path"])
+    fallback = Path(access_path_for(row["path"], load_settings().get("background_drive_mappings", {})))
+    candidates = (logical.parent, fallback.parent) if directory else (logical, fallback)
+    return next((path for path in candidates if path.exists()), None)
+
+
 def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None):
     quality_reranker = None
 
     class Handler(BaseHTTPRequestHandler):
+        def local_action_allowed(self):
+            if not _is_loopback(self.client_address[0]):
+                return False
+            if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+                return False
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True
+            parsed = urlparse(origin)
+            default_port = 443 if parsed.scheme == "https" else 80
+            try:
+                return (parsed.scheme in ("http", "https") and _is_loopback(parsed.hostname or "")
+                        and (parsed.port or default_port) == self.server.server_address[1])
+            except ValueError:
+                return False
+
         def send_json(self, value, status=200):
             data = json.dumps(value).encode()
             self.send_response(status)
@@ -96,39 +128,30 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         for x in con.execute("SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_no", (doc_id,))
                     ]
                     return self.send_json({"document": dict(doc), "chunks": chunks})
-            names = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+            names = {"/": "index.html", "/app.js": "app.js", "/api.js": "api.js", "/search.js": "search.js",
+                     "/ask.js": "ask.js", "/documents.js": "documents.js", "/ui.js": "ui.js",
+                     "/style.css": "style.css"}
             if url.path not in names:
                 return self.send_json({"error": "not found"}, 404)
             data = (WEB / names[url.path]).read_bytes()
             self.send_response(200)
             self.send_header(
                 "Content-Type",
-                {"index.html": "text/html", "app.js": "text/javascript", "style.css": "text/css"}[names[url.path]],
+                "text/css" if names[url.path].endswith(".css") else
+                "text/html" if names[url.path].endswith(".html") else "text/javascript",
             )
             self.end_headers()
             self.wfile.write(data)
 
         def do_POST(self):
             url = urlparse(self.path)
-            if url.path == "/api/ask":
+            if url.path in ("/api/ask", "/api/ask/stream"):
                 def send(value, status=200):
                     return self.send_json(value, status)
                 if not _is_loopback(self.client_address[0]):
                     return send({"error": "ask is only available locally"}, 403)
-                if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+                if not self.local_action_allowed():
                     return send({"error": "forbidden_origin"}, 403)
-                origin = self.headers.get("Origin")
-                if origin:
-                    parsed = urlparse(origin)
-                    server_port = self.server.server_address[1]
-                    default_port = 443 if parsed.scheme == "https" else 80
-                    try:
-                        origin_local = parsed.scheme in ("http", "https") and _is_loopback(parsed.hostname or "")
-                        origin_port = parsed.port or default_port
-                    except ValueError:
-                        origin_local, origin_port = False, None
-                    if not origin_local or origin_port != server_port:
-                        return send({"error": "forbidden_origin"}, 403)
                 if self.headers.get_content_type() != "application/json":
                     return send({"error": "unsupported_media_type"}, 415)
                 raw_length = self.headers.get("Content-Length")
@@ -157,6 +180,29 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     return send({"error": "invalid_debug"}, 400)
                 if rag_service is None:
                     return send({"error": "chat_model_unavailable"}, 503)
+                if url.path == "/api/ask/stream":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+
+                    def progress(event):
+                        self.wfile.write(json.dumps(event).encode() + b"\n")
+                        self.wfile.flush()
+
+                    try:
+                        response = rag_service.ask(question, debug=body.get("debug", False), progress=progress)
+                        progress({"event": "final", "response": response})
+                    except ChatUnavailableError:
+                        reason = rag_service.health().get("reason")
+                        progress({"event": "error", "error": reason if reason in
+                                  ("model_invalid", "model_load_failed") else "chat_model_unavailable"})
+                    except ChatBusyError:
+                        progress({"event": "error", "error": "chat_busy"})
+                    except GenerationFailedError:
+                        progress({"event": "error", "error": "local_generation_failed"})
+                    return
                 try:
                     return send(rag_service.ask(question, debug=body.get("debug", False)))
                 except ChatUnavailableError:
@@ -176,29 +222,31 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 threading.Thread(target=self.server.shutdown, name="axp-client-shutdown", daemon=True).start()
                 return
             parts = url.path.strip("/").split("/")
-            if len(parts) == 4 and parts[:2] == ["api", "document"] and parts[3] == "open":
+            if (len(parts) == 4 and parts[:2] == ["api", "document"]
+                    and parts[3] in ("open", "open-dir")):
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
                 try:
                     document_id = int(parts[2])
                 except ValueError:
                     return self.send_json({"error": "document not found"}, 404)
-                with connect(db, readonly=True) as con:
-                    row = con.execute("SELECT path FROM documents WHERE id=?", (document_id,)).fetchone()
-                if row is None:
+                try:
+                    path = resolve_document_access_path(db, document_id, directory=parts[3] == "open-dir")
+                except DocumentNotFoundError:
                     return self.send_json({"error": "document not found", "document_id": document_id}, 404)
-                path = Path(row["path"])
-                if not path.exists():
-                    path = access_path_for(row["path"], load_settings().get("background_drive_mappings", {}))
-                if not path.exists():
+                if path is None:
                     return self.send_json(
-                        {"error": "The indexed file no longer exists on disk.", "document_id": document_id}, 410
+                        {"error": "The indexed directory is no longer accessible." if parts[3] == "open-dir"
+                         else "The indexed file no longer exists on disk.", "document_id": document_id}, 410
                     )
                 try:
-                    LOGGER.info("Opening indexed document id=%s path=%s", document_id, path)
+                    LOGGER.info("Opening indexed document action=%s id=%s path=%s", parts[3], document_id, path)
                     open_file(path)
                 except (AttributeError, OSError):
                     LOGGER.exception("Could not open indexed document id=%s path=%s", document_id, path)
                     return self.send_json(
-                        {"error": "The file could not be opened.", "document_id": document_id}, 500
+                        {"error": "The directory could not be opened." if parts[3] == "open-dir"
+                         else "The file could not be opened.", "document_id": document_id}, 500
                     )
                 return self.send_json({"status": "opened", "document_id": document_id})
             return self.send_json({"error": "not found"}, 404)

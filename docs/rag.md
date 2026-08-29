@@ -9,6 +9,26 @@ requested factual answer. The legacy Search `exact_identifier_match` signal rema
 `exact_content_identifier_match` from stored chunk text without a schema change or reindex. Search ranking and
 defaults are unchanged.
 
+## Search and Ask AXP user experience
+
+The local client presents two independent workflows. **Search documents** remains the fast, deterministic document
+search, with highlighted terms, relevance diagnostics, snippets, and actions to open either the indexed file or its
+containing directory. **Ask AXP** accepts a natural-language question, reports actual retrieval, evidence-gate,
+context, local-generation, and citation-validation phases, and displays factual prose only after grounding validation.
+The model is never downloaded automatically, and an unavailable or invalid model does not disable Search.
+
+Successful answers show inline `[S#]` citation controls and a distinct **Sources** section made exclusively from
+server-returned evidence. A citation moves focus to its source card; each source can open its file or directory using
+its database document ID. On a refusal, weakly relevant or metadata-only matches may instead appear as **Related
+documents**. Related documents help discovery but are explicitly not evidence supporting an answer. Deterministic
+insufficient-evidence and model-declined outcomes are normal refusals; invalid citations suppress generated prose and
+produce an ungrounded-answer notice.
+
+Chat turns are kept only in the current page's JavaScript memory. They are not stored in browser storage, cookies, or
+the server database, and refreshing or selecting Clear removes them. This visible history is presentation only: every
+question is retrieved and grounded independently, without conversational memory or prior turns sent to the backend.
+Questions should therefore be complete and self-contained. Generation remains local and uses indexed sources only.
+
 ## Validated baseline model
 
 The reference is [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF), file
@@ -75,3 +95,5 @@ system prompt. Model decline and invalid/unknown/missing citations become refusa
 must also be loopback on the serving port, cross-site Fetch Metadata is rejected, JSON content type and bounded positive
 Content-Length are required, and responses use `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 Debug output includes only counts, IDs, gate signals, and token diagnostics—not prompts or evidence.
+File and directory actions have the same loopback and browser-origin boundary. They accept only a database document
+ID, resolve mapped-drive/UNC access server-side, and never return the resolved confidential path to the browser.

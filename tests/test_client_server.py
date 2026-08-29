@@ -98,6 +98,35 @@ def test_open_document_unknown_and_missing(tmp_path):
     assert not opened
 
 
+def test_open_directory_works_when_file_is_missing(tmp_path):
+    db = tmp_path / "index.db"
+    missing = tmp_path / "folder" / "missing.txt"
+    missing.parent.mkdir()
+    add_document(db, missing)
+    opened = []
+    with running_server(db, opened.append) as httpd:
+        file_status, _ = post(httpd, "/api/document/42/open")
+        directory_status, body = post(httpd, "/api/document/42/open-dir")
+    assert (file_status, directory_status) == (410, 200)
+    assert opened == [missing.parent]
+    assert json.loads(body) == {"status": "opened", "document_id": 42}
+
+
+def test_document_actions_reject_cross_site_origin(tmp_path):
+    db = tmp_path / "index.db"
+    document = tmp_path / "manual.txt"
+    document.touch()
+    add_document(db, document)
+    with running_server(db, lambda _: None) as httpd:
+        connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=2)
+        connection.request("POST", "/api/document/42/open-dir", headers={
+            "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+    assert response.status == 403
+
+
 def test_shutdown_address_security():
     assert server._is_loopback("127.0.0.1")
     assert server._is_loopback("::1")
