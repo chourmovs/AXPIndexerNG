@@ -6,8 +6,8 @@ import uuid
 from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
-from .prompts import SYSTEM_PROMPT, user_prompt
 from .llama_cpp_backend import GenerationConfig
+from .prompts import SYSTEM_PROMPT, user_prompt
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
