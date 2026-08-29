@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import logging
+import os
 import sqlite3
 import time
 import tkinter as tk
@@ -167,13 +167,13 @@ class SourcesWindow:
                 LOGGER.warning("Daemon state refresh delayed", exc_info=True)
             try:
                 self._render_live_state(self.live_state)
-            except Exception:  # noqa: BLE001 -- isolate activity rendering from monitoring
+            except Exception:
                 LOGGER.exception("Live dashboard activity render failed")
             try:
                 self._refresh_resources(self.live_state.get("pid"))
-            except Exception:  # noqa: BLE001 -- isolate monitoring from activity rendering
+            except Exception:
                 LOGGER.exception("Live dashboard resource render failed")
-        except Exception:  # noqa: BLE001 -- a Tk callback must never permanently die
+        except Exception:
             LOGGER.exception("Live dashboard refresh failed unexpectedly")
         finally:
             try:
@@ -219,7 +219,7 @@ class SourcesWindow:
         try:
             self._last_resource_snapshot = self.monitor.sample(pid)
             self._last_resource_success_monotonic = now
-        except Exception:  # noqa: BLE001 -- retain the last successful sample
+        except Exception:
             LOGGER.warning("Resource monitoring sample delayed", exc_info=True)
         try:
             self._last_sizes = self.database_sizes(self.db_path)

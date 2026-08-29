@@ -1,7 +1,6 @@
 import sqlite3
 
 import pytest
-
 from axp_core.database import capability_report, connect, open_catalog_reader
 
 
