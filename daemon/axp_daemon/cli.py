@@ -50,6 +50,7 @@ def main(argv=None):
     run.add_argument("--embedding-batch-size", type=int, default=64)
     run.add_argument("--scan-interval", type=int, default=300)
     run.add_argument("--model-download-retry", type=int, default=60)
+    run.add_argument("--launch-mode", choices=("interactive", "scheduled_task"), default="interactive")
     source = sub.add_parser("source")
     source_sub = source.add_subparsers(dest="source_cmd", required=True)
     for name in ("list", "add", "enable", "disable", "remove"):
@@ -76,7 +77,7 @@ def main(argv=None):
         value = run_daemon(
             args.db, args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"), args.embedding_profile,
             max(1, args.scan_interval), max(1, args.embedding_batch_size), args.allow_download,
-            max(1, args.model_download_retry),
+            max(1, args.model_download_retry), launch_mode=args.launch_mode,
         )
         print(json.dumps(value))
         return

@@ -7,7 +7,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from axp_core.database import connect
-from axp_core.runtime import configure_logging
+from axp_core.background import access_path_for
+from axp_core.runtime import configure_logging, load_settings
 
 from .reranker import Reranker
 from .search import search
@@ -110,6 +111,8 @@ def make_handler(db, embedder, open_file=open_with_default_application):
                 if row is None:
                     return self.send_json({"error": "document not found", "document_id": document_id}, 404)
                 path = Path(row["path"])
+                if not path.exists():
+                    path = access_path_for(row["path"], load_settings().get("background_drive_mappings", {}))
                 if not path.exists():
                     return self.send_json(
                         {"error": "The indexed file no longer exists on disk.", "document_id": document_id}, 410

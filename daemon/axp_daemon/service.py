@@ -31,11 +31,11 @@ def send_control(command, **values):
 
 
 class StatePublisher:
-    def __init__(self, interval_s=2, warning_interval_s=60):
+    def __init__(self, interval_s=2, warning_interval_s=60, launch_mode="interactive"):
         self.path = runtime_paths()["state"]
         self.started_ms = now_ms()
         self.value = {
-            "pid": os.getpid(), "state": "starting", "started_ms": self.started_ms,
+            "pid": os.getpid(), "state": "starting", "started_ms": self.started_ms, "launch_mode": launch_mode,
             "heartbeat_ms": now_ms(), "current_source_id": None, "current_source": None, "current_file": None,
             "current_stage": "idle", "source_scan_started_ms": None, "scan_cycle_started_ms": None,
             "files_discovered": 0, "files_processed": 0, "files_new": 0, "files_modified": 0,
@@ -265,14 +265,14 @@ def _provision_embedder(profile, model_cache, allow_download, retry_s, publisher
 
 
 def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300, embedding_batch_size=64,
-               allow_model_download=False, model_download_retry_s=60):
+               allow_model_download=False, model_download_retry_s=60, launch_mode="interactive"):
     paths = runtime_paths()
     try:
         lock = FileLock(daemon_lock_path(db, paths["runtime"])).acquire()
     except AlreadyLocked:
         return {"status": "already_running"}
     atomic_write_json(paths["desired"], {"state": "running", "updated_ms": now_ms()})
-    publisher = StatePublisher()
+    publisher = StatePublisher(launch_mode=launch_mode)
     control = DaemonControl(publisher)
     publisher.start()
     try:

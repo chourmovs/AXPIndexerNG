@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -48,6 +49,8 @@ DEFAULT_SETTINGS = {
     "web_port": 8765,
     "auto_start_daemon": True,
     "auto_restart_daemon": True,
+    "daemon_runtime_mode": "interactive",
+    "background_drive_mappings": {},
 }
 
 
@@ -95,6 +98,10 @@ def load_settings():
     paths = runtime_paths()
     current = read_json(paths["settings"], {}) or {}
     settings = {**DEFAULT_SETTINGS, **current}
+    if settings.get("daemon_runtime_mode") not in ("interactive", "scheduled_task"):
+        settings["daemon_runtime_mode"] = "interactive"
+    if not settings.get("installation_id"):
+        settings["installation_id"] = str(uuid.uuid4())
     if settings != current:
         atomic_write_json(paths["settings"], settings)
     root = installation_root()
