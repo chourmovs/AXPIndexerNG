@@ -6,7 +6,7 @@ from axp_client.rag.answerability import AnswerabilityConfig, decide_answerabili
 from axp_client.rag.evaluation import confusion, threshold_sweep
 from axp_client.rag.factory import ChatBackendConfigurationError, create_chat_backend
 from axp_client.rag.llama_cpp_backend import GenerationConfig, LlamaCppBackend
-from axp_client.rag.model import import_model, model_status
+from axp_client.rag.model import import_model, model_status, verify_model
 
 
 def candidate(vector, lexical, **values):
@@ -22,7 +22,8 @@ def test_gate_does_not_confuse_lexical_coverage_with_probability():
 
 def test_gate_vector_lexical_and_content_identifier_rules():
     assert decide_answerability([candidate(0.6, 0.3)]).answerable
-    assert decide_answerability([candidate(0.46, 0.3, exact_identifier_match=True)]).answerable
+    assert not decide_answerability([candidate(0.46, 0.3, exact_identifier_match=True)]).answerable
+    assert decide_answerability([candidate(0.46, 0.3, exact_content_identifier_match=True)]).answerable
     assert not decide_answerability([candidate(0.46, 0.3, exact_filename_match=True)]).answerable
 
 
@@ -41,6 +42,9 @@ def test_model_import_is_atomic_hashed_and_retains_source(tmp_path):
     assert source.exists() and destination.read_bytes() == source.read_bytes()
     assert manifest["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert model_status(destination)["manifest"] == manifest
+    destination.write_bytes(destination.read_bytes() + b"changed")
+    assert model_status(destination)["reason"] == "model_changed"
+    assert verify_model(destination)["sha256_match"] is False
     invalid = tmp_path / "invalid.gguf"
     invalid.write_bytes(b"NOPE" + b"\0" * 40)
     with pytest.raises(ValueError, match="model_invalid"):

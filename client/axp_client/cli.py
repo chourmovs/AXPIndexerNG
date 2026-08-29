@@ -7,10 +7,9 @@ from axp_core.hybrid import SearchConfig
 from axp_core.runtime import configure_logging, load_settings
 from axp_daemon.embeddings import embedder_for_index
 
-from .rag.answerability import decide_answerability
 from .rag.evaluation import evaluate, format_summary, load_cases, threshold_sweep
 from .rag.factory import create_chat_backend
-from .rag.model import import_model, model_status, remove_model
+from .rag.model import import_model, model_status, remove_model, verify_model
 from .rag.service import ChatUnavailableError, GenerationFailedError, RagService
 from .reranker import Reranker
 from .search import search
@@ -27,6 +26,7 @@ def main(argv=None):
     model_import = model_sub.add_parser("import")
     model_import.add_argument("--file", required=True)
     model_sub.add_parser("status")
+    model_sub.add_parser("verify")
     model_remove = model_sub.add_parser("remove")
     model_remove.add_argument("--yes", action="store_true")
     evaluation = s.add_parser("rag-eval")
@@ -64,6 +64,8 @@ def main(argv=None):
             print(json.dumps(import_model(a.file, path)))
         elif a.model_cmd == "status":
             print(json.dumps(model_status(path)))
+        elif a.model_cmd == "verify":
+            print(json.dumps(verify_model(path)))
         elif not a.yes:
             p.error("chat-model remove requires --yes")
         else:
@@ -79,15 +81,17 @@ def main(argv=None):
         cases = load_cases(a.cases)
         rag = RagService(backend=create_chat_backend(load_settings()), search_fn=search, connect_fn=connect,
                          db=a.db, embedder=e)
+        captured = {}
+
         def runner(question, mode):
+            if question not in captured:
+                captured[question] = rag.retrieve(question)
+            retrieval = captured[question]
             if mode == "full":
-                return rag.ask(question)
-            started = __import__("time").perf_counter()
-            with connect(a.db, readonly=True) as evaluation_connection:
-                found = search(evaluation_connection, e, question, limit=24, profile="hybrid", explain=True)
-            decision = decide_answerability(found.get("results", found))
+                return rag.ask(question, retrieval=retrieval)
+            _, decision = rag.evaluate_gate(question, retrieval=retrieval)
             return {"answerable": decision.answerable, "decision": decision.public(),
-                    "timings": {"retrieval_ms": (__import__("time").perf_counter() - started) * 1000}}
+                    "timings": retrieval.timings}
         result = evaluate(cases, runner, mode="full" if a.full else "gate-only")
         result["answerability_config"] = __import__("dataclasses").asdict(
             __import__("axp_client.rag.answerability", fromlist=["AnswerabilityConfig"]).AnswerabilityConfig())
@@ -97,20 +101,7 @@ def main(argv=None):
         if a.sweep:
             if a.full:
                 p.error("--sweep is gate-only")
-            swept = []
-            for case in cases:
-                with connect(a.db, readonly=True) as evaluation_connection:
-                    found = search(evaluation_connection, e, case["question"], limit=24,
-                                   profile="hybrid", explain=True)
-                    hits = found.get("results", found)
-                    ids = {int(hit["document_id"]) for hit in hits}
-                    modes = {}
-                    if ids:
-                        placeholders = ",".join("?" for _ in ids)
-                        modes = dict(evaluation_connection.execute(
-                            f"SELECT id,ingestion_mode FROM documents WHERE id IN ({placeholders})", tuple(ids)))
-                    hits = [hit for hit in hits if modes.get(int(hit["document_id"]), "content") == "content"]
-                swept.append({**case, "hits": hits})
+            swept = [{**case, "hits": captured[case["question"]].content_evidence} for case in cases]
             result["threshold_sweep"] = threshold_sweep(swept)
         if a.output:
             __import__("pathlib").Path(a.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

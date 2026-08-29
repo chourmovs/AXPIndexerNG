@@ -50,6 +50,7 @@ def evaluate(cases, runner, *, mode="gate-only"):
                          "expected_answerable": bool(case["expected_answerable"]),
                          "actual_answerable": bool(value.get("answerable")),
                          "reason": value.get("decision", {}).get("reason"),
+                         "signals": value.get("decision", {}).get("signals", {}),
                          "citation_valid": value.get("status") == "answered" if mode == "full" else None,
                          "expected_terms_present": all(term.casefold() in answer.casefold() for term in terms) if terms else None})
     metrics = confusion(outcomes)

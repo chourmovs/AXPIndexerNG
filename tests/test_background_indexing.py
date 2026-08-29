@@ -3,7 +3,7 @@ from pathlib import Path
 
 from axp_core.background import access_path_for, resolve_source_path
 from axp_core.runtime import load_settings
-from axp_tray.background_task import task_xml
+from axp_tray.background_task import TaskSchedulerBackend, task_xml
 
 
 def test_installation_id_is_stable(tmp_path, monkeypatch):
@@ -23,6 +23,15 @@ def test_task_xml_security_and_policy():
     folded = xml.casefold()
     assert "actual_password" not in folded
     assert "highestavailable" not in folded
+
+
+def test_packaged_background_launcher_path(tmp_path):
+    root = tmp_path / "stage" / "AXPIndexerNG"
+    root.mkdir(parents=True)
+    (root / "AXPIndexerDaemon.pyw").touch()
+    backend = TaskSchedulerBackend({"installation_id": "installation-id"}, root=root, principal=r"DOMAIN\User")
+    assert backend.launcher == (root / "AXPIndexerDaemon.pyw").resolve()
+    assert backend.launcher.exists()
 
 
 def test_mapped_drive_access_keeps_logical_identity():

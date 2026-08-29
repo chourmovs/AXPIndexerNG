@@ -60,7 +60,7 @@ def decide_answerability(results, config=None):
               and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
     support = [r for r in results if _vector(r) >= config.support_vector_similarity
                and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
-    exact = [r for r in results if (r.get("exact_identifier_match") or r.get("exact_phrase_match"))
+    exact = [r for r in results if (r.get("exact_content_identifier_match") or r.get("exact_content_phrase_match"))
              and _vector(r) >= config.support_vector_similarity]
     signals = {"best_vector_similarity": max(map(_vector, results)),
                "best_lexical_coverage": max(float(r.get("lexical_coverage") or 0) for r in results),

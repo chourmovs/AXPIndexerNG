@@ -8,6 +8,7 @@ from .citations import validate_citations
 from .context import build_context
 from .llama_cpp_backend import GenerationConfig
 from .prompts import SYSTEM_PROMPT, user_prompt
+from .retrieval import retrieve_rag_candidates
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
@@ -34,33 +35,32 @@ class RagService:
     def health(self):
         return self.backend.health()
 
-    def ask(self, question, *, debug=False):
+    def retrieve(self, question):
+        with self.connect_fn(self.db, readonly=True) as con:
+            return retrieve_rag_candidates(con, self.embedder, question, search_fn=self.search_fn,
+                                           limit=RETRIEVAL_LIMIT)
+
+    def evaluate_gate(self, question, *, retrieval=None, config=None):
+        retrieval = retrieval or self.retrieve(question)
+        return retrieval, decide_answerability(retrieval.content_evidence, config)
+
+    def ask(self, question, *, debug=False, retrieval=None):
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
         if not self.health().get("available"):
             raise ChatUnavailableError
-        retrieval_start = time.perf_counter()
         with self.connect_fn(self.db, readonly=True) as con:
-            result = self.search_fn(con, self.embedder, question, limit=RETRIEVAL_LIMIT, profile="hybrid", explain=True)
-            candidates = result.get("results", result)
-            document_ids = sorted({int(row["document_id"]) for row in candidates})
-            modes = {}
-            if document_ids:
-                placeholders = ",".join("?" for _ in document_ids)
-                modes = {row["id"]: dict(row) for row in con.execute(
-                    f"SELECT id,ingestion_mode,filename FROM documents WHERE id IN ({placeholders})", document_ids
-                )}
-            content = [row for row in candidates if modes.get(int(row["document_id"]), {}).get("ingestion_mode", "content") == "content"]
-            metadata = [row for row in candidates if modes.get(int(row["document_id"]), {}).get("ingestion_mode") == "metadata"]
-            related = list({int(row["document_id"]): {"document_id": int(row["document_id"]),
-                            "filename": modes[int(row["document_id"])]["filename"]} for row in metadata}.values())
-            retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
+            retrieval = retrieval or retrieve_rag_candidates(
+                con, self.embedder, question, search_fn=self.search_fn, limit=RETRIEVAL_LIMIT
+            )
+            candidates, content = retrieval.candidates, retrieval.content_evidence
+            related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
             decision = decide_answerability(content)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public()}
             if not decision.answerable:
                 base["timings"] = {"retrieval_ms": retrieval_ms, "total_ms": (time.perf_counter() - started) * 1000}
                 if debug:
-                    base["debug"] = self._debug(candidates, content, decision, None)
+                    base["debug"] = self._debug(retrieval, decision, None)
                 LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s", request_id, decision.reason.value,
                             len(candidates), decision.content_documents)
                 return base
@@ -106,7 +106,7 @@ class RagService:
         if telemetry:
             base["generation"] = telemetry
         if debug:
-            base["debug"] = self._debug(candidates, content, decision, context)
+            base["debug"] = self._debug(retrieval, decision, context)
             base["debug"]["tokens"] = {"context_window_tokens": self.backend.context_window(),
                 "system_tokens": system_tokens, "question_tokens": question_tokens,
                 "evidence_tokens": context.diagnostics["evidence_tokens"],
@@ -117,9 +117,8 @@ class RagService:
         return base
 
     @staticmethod
-    def _debug(candidates, content, decision, context):
-        return {"retrieval_candidates": len(candidates), "content_candidates": len(content),
-                "gate": decision.public(),
+    def _debug(retrieval, decision, context):
+        return {**retrieval.diagnostics, "gate": decision.public(),
                 "selected_evidence_ids": [] if context is None else [x.id for x in context.blocks],
                 "selected_chunk_ids": [] if context is None else [x.chunk_ids for x in context.blocks],
                 "context_characters": 0 if context is None else len(context.prompt_text)}
