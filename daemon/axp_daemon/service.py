@@ -42,6 +42,8 @@ class StatePublisher:
             "files_seen": 0, "files_content": 0, "files_metadata": 0, "files_ignored": 0,
             "files_failed": 0, "files_completed": 0, "files_unchanged": 0,
             "chunks_generated": 0, "chunks_embedded": 0,
+            "current_batch_documents": 0, "current_batch_chunks": 0,
+            "progress_baseline": 0, "progress_baseline_kind": "none",
             "documents_total": 0, "chunks_total": 0, "model_download_attempts": 0, "last_error": None,
         }
         self.lock = threading.Lock()
@@ -145,7 +147,6 @@ class DaemonControl:
     def source_started(self, source, started_ms):
         source_values = dict(source)
         baseline = source_values.get("last_seen_count", 0)
-        fallback = source_values.get("last_file_count", 0)
         counters = {
             key: 0 for key in (
                 "files_seen", "files_processed", "files_completed", "files_content", "files_metadata",
@@ -155,11 +156,17 @@ class DaemonControl:
         }
         self.publisher.update(state="scanning", current_source_id=source["id"], current_source=source["path"],
                               current_file=None, current_stage="discovering", source_scan_started_ms=started_ms,
-                              progress_baseline=baseline or fallback or 0,
+                              progress_baseline=baseline or 0,
+                              progress_baseline_kind="previous_complete_scan" if baseline else "none",
+                              current_batch_documents=0, current_batch_chunks=0,
                               last_error=None, **counters)
 
     def stage(self, stage):
         self.publisher.update(current_stage=stage)
+
+    def batch(self, stage, documents=0, chunks=0):
+        self.publisher.update(current_stage=stage, current_file=None,
+                              current_batch_documents=documents, current_batch_chunks=chunks)
 
     def current_file(self, source, path, result):
         self.publisher.update(
@@ -182,7 +189,7 @@ class DaemonControl:
 
     def batch_committed(self, con, result):
         self.progress(result)
-        self.publisher.update(**_catalog_totals(con))
+        self.publisher.update(current_batch_documents=0, current_batch_chunks=0, **_catalog_totals(con))
 
     def file_error(self, path, exc):
         LOGGER.warning("Indexing failed for %s: %s", path, exc)
@@ -337,6 +344,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                         publisher.update(state="error", last_error=str(exc))
                 publisher.update(state="idle" if not control.paused else "paused", current_source_id=None,
                                  current_source=None, current_file=None, current_stage="idle",
+                                 current_batch_documents=0, current_batch_chunks=0,
                                  source_scan_started_ms=None, **_catalog_totals(con))
                 cycle_end = time.monotonic()
             else:

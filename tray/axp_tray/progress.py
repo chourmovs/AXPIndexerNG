@@ -22,9 +22,11 @@ class ProgressEstimate:
 
 
 def progress_estimate(completed, previous_seen=0, existing_documents=0, scan_complete=False):
+    # existing_documents is retained for caller compatibility only. An indexed
+    # document count is not proof of a complete filesystem enumeration.
     if scan_complete:
-        return ProgressEstimate(100.0, previous_seen or existing_documents or None, complete=True)
-    baseline = int(previous_seen or existing_documents or 0)
+        return ProgressEstimate(100.0, previous_seen or None, complete=True)
+    baseline = int(previous_seen or 0)
     if baseline <= 0:
         return ProgressEstimate(None, None)
     if completed > baseline:
@@ -58,7 +60,7 @@ class RollingThroughput:
         return max(0, last[1] - first[1]) / elapsed, max(0, last[2] - first[2]) / elapsed
 
 
-def estimate_eta_seconds(completed, baseline, files_per_second, *, elapsed_s=0, minimum_elapsed_s=5):
+def estimate_eta_seconds(completed, baseline, files_per_second, *, elapsed_s=0, minimum_elapsed_s=15):
     if not baseline or completed > baseline or elapsed_s < minimum_elapsed_s or not files_per_second:
         return None
     return max(0.0, baseline - completed) / files_per_second

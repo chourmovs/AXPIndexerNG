@@ -19,7 +19,8 @@ def test_rolling_rates_eta_and_formatting():
     rates = RollingThroughput(window_s=30, minimum_span_s=2)
     assert rates.add(1, 0, 0, 0) == (None, None)
     assert rates.add(1, 10, 50, 300) == (5, 30)
-    assert estimate_eta_seconds(50, 100, 5, elapsed_s=10) == 10
+    assert estimate_eta_seconds(50, 100, 5, elapsed_s=10) is None
+    assert estimate_eta_seconds(50, 100, 5, elapsed_s=20) == 10
     assert estimate_eta_seconds(50, 100, 0, elapsed_s=10) is None
     assert rates.add(2, 11, 5, 5) == (None, None)
     assert format_duration(3670) == "1h 01m"
@@ -36,6 +37,19 @@ def test_source_start_resets_live_counters(monkeypatch, tmp_path):
     assert publisher.value["files_completed"] == 0
     assert publisher.value["chunks_embedded"] == 0
     assert publisher.value["source_scan_started_ms"] == 123
+    assert publisher.value["progress_baseline_kind"] == "none"
+
+
+def test_source_start_only_trusts_previous_complete_enumeration(monkeypatch, tmp_path):
+    monkeypatch.setattr("axp_daemon.service.runtime_paths", lambda: {"state": tmp_path / "state.json"})
+    publisher = StatePublisher()
+    control = DaemonControl(publisher)
+    control.source_started({"id": 2, "path": "B", "last_file_count": 25, "last_seen_count": 0}, 123)
+    assert publisher.value["progress_baseline"] == 0
+    assert publisher.value["progress_baseline_kind"] == "none"
+    control.source_started({"id": 2, "path": "B", "last_file_count": 25, "last_seen_count": 1000}, 456)
+    assert publisher.value["progress_baseline"] == 1000
+    assert publisher.value["progress_baseline_kind"] == "previous_complete_scan"
 
 
 def test_database_sizes_excludes_shm(tmp_path):
@@ -94,7 +108,7 @@ def test_coverage_and_last_success_presentation_states():
     base = {"last_success_ms": None, "last_seen_count": 0, "last_content_count": 0,
             "last_metadata_count": 0, "status": "idle"}
     assert coverage_display(base) == "Pending first full scan"
-    assert coverage_display(base, scanning=True) == "Scanning…"
+    assert coverage_display(base, scanning=True) == "First scan in progress"
     assert last_success_display(base) == "Not completed yet"
     assert last_success_display(base, scanning=True) == "In progress"
     complete = {**base, "last_success_ms": 1000, "last_seen_count": 10, "last_content_count": 7,

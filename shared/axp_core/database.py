@@ -11,6 +11,16 @@ class CapabilityError(RuntimeError):
     pass
 
 
+def open_catalog_reader(path: str | Path, *, busy_timeout_ms: int = 1000):
+    """Open a minimal, strictly read-only connection for dashboard queries."""
+    db_path = Path(path).resolve()
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    con.execute(f"PRAGMA busy_timeout={max(0, int(busy_timeout_ms))}")
+    con.execute("PRAGMA query_only=ON")
+    return con
+
+
 def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = False):
     db_path = Path(path).resolve()
     target = f"file:{db_path}?mode=ro" if readonly else str(db_path)
