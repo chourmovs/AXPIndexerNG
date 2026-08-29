@@ -74,7 +74,8 @@ jobs:
           Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse | ForEach-Object { [pscustomobject]@{Path=$_.FullName;Bytes=(Get-ChildItem $_ -File -Recurse | Measure-Object Length -Sum).Sum} } | Sort-Object Bytes -Descending | Select-Object -First 30
           Get-ChildItem stage -File -Recurse | Sort-Object Length -Descending | Select-Object -First 50 FullName,Length
           & stage/AXPIndexerNG/python/python.exe -m pip freeze
-          Compress-Archive stage/AXPIndexerNG dist.zip
+          # Store files without DEFLATE compression: the runtime is larger to download, but extracts much faster.
+          Compress-Archive stage/AXPIndexerNG dist.zip -CompressionLevel NoCompression
           $version=if($env:GITHUB_REF_TYPE -eq 'tag'){$env:GITHUB_REF_NAME.TrimStart('v')}else{'0.1.0-dev'}; $name="AXPIndexerNG-runtime-$version.zip"; Move-Item dist.zip $name
           (Get-FileHash $name).Hash.ToLower()+"  $name" | Set-Content "$name.sha256"; "ARTIFACT=$name" | Out-File $env:GITHUB_ENV -Append
           $zipBytes=(Get-Item $name).Length

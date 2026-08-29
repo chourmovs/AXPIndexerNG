@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 import tkinter as tk
 from datetime import UTC, datetime
@@ -158,7 +159,7 @@ class SourcesWindow:
                 + f"{sample.power or 'Power —'}\nDatabase {format_bytes(sizes.database)} · "
                 + f"WAL {format_bytes(sizes.wal)} · Total {format_bytes(sizes.total)}"
             )
-        except Exception:
+        except (OSError, ValueError, TypeError, sqlite3.Error, tk.TclError):
             self.resource_text.set("Resources unavailable")
         if self.window.winfo_exists(): self._live_job = self.window.after(1000, self._refresh_live)
 

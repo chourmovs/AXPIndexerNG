@@ -143,8 +143,9 @@ class DaemonControl:
             self.publisher.update(state="scanning")
 
     def source_started(self, source, started_ms):
-        baseline = source["last_seen_count"] if "last_seen_count" in source.keys() else 0
-        fallback = source["last_file_count"] if "last_file_count" in source.keys() else 0
+        source_values = dict(source)
+        baseline = source_values.get("last_seen_count", 0)
+        fallback = source_values.get("last_file_count", 0)
         counters = {
             key: 0 for key in (
                 "files_seen", "files_processed", "files_completed", "files_content", "files_metadata",

@@ -72,12 +72,12 @@ class ResourceMonitor:
             system_cpu = self.psutil.cpu_percent(None)
             memory = self.psutil.virtual_memory()
             system_ram_percent, available_ram = memory.percent, memory.available
-        except Exception:  # observability must never take down the tray
+        except (self.psutil.Error, OSError, NotImplementedError):
             system_cpu = system_ram_percent = available_ram = None
         try:
             battery = self.psutil.sensors_battery()
             power = None if battery is None else ("AC power" if battery.power_plugged else f"Battery {battery.percent:.0f}%")
-        except Exception:
+        except (self.psutil.Error, OSError, NotImplementedError):
             power = None
         return ResourceSnapshot(process_cpu, process_rss, read_rate, write_rate,
                                 system_cpu, system_ram_percent, available_ram, power)
