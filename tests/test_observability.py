@@ -4,8 +4,7 @@ from pathlib import Path
 import pytest
 
 from axp_daemon.service import DaemonControl, StatePublisher
-from axp_tray.progress import (RollingThroughput, estimate_eta_seconds, format_bytes, format_duration,
-                               progress_estimate)
+from axp_tray.progress import RollingThroughput, estimate_eta_seconds, format_bytes, format_duration, progress_estimate
 
 
 def test_progress_estimates_are_honest():

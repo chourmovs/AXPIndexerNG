@@ -9,8 +9,15 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from axp_core.database import connect
-from axp_core.sources import (SourceError, add_source, coverage_percentages, disable_source, enable_source,
-                              extension_breakdown, list_sources)
+from axp_core.sources import (
+    SourceError,
+    add_source,
+    coverage_percentages,
+    disable_source,
+    enable_source,
+    extension_breakdown,
+    list_sources,
+)
 from axp_daemon.service import send_control
 
 from .drives import list_drives
