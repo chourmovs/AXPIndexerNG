@@ -24,9 +24,11 @@ def tooltip(state):
     if state.get("stale"):
         return "AXPIndexerNG — ERROR — daemon heartbeat stale"
     if current == "scanning":
-        discovered, processed = state.get("files_discovered", 0), state.get("files_processed", 0)
-        progress = f" — {processed}/{discovered}" if discovered else ""
-        return (f"AXPIndexerNG — Indexing{progress}")[:127]
+        from .progress import progress_estimate
+        completed = state.get("files_completed", state.get("files_processed", 0))
+        estimate = progress_estimate(completed, state.get("progress_baseline", 0))
+        progress = f" {estimate.label}" if estimate.percent is not None else ""
+        return f"AXPIndexerNG — Scanning{progress} — {completed:,} files"[:127]
     if current == "paused":
         return "AXPIndexerNG — Paused"
     if current == "idle":

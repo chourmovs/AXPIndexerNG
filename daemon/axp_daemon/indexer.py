@@ -43,7 +43,7 @@ def _result():
     keys = (
         "files_discovered", "files_scanned", "files_seen", "files_content", "files_metadata", "files_ignored",
         "files_unchanged", "files_hashed", "files_extracted", "files_new",
-        "files_modified", "files_deleted", "files_failed", "chunks_generated", "chunks_embedded",
+        "files_modified", "files_deleted", "files_failed", "files_completed", "chunks_generated", "chunks_embedded",
     )
     value = {key: 0 for key in keys}
     value.update(new=0, modified=0, unchanged=0, deleted=0, failed=0, db_insert_ms=0.0, embedding_ms=0.0,
@@ -62,6 +62,7 @@ def _record_document_failure(item, exc, result, control):
     breakdown[item.ingestion_mode] -= 1
     breakdown["failed"] += 1
     result["files_failed"] += 1
+    result["files_completed"] += 1
     result["failed"] += 1
     _control_call(control, "file_error", item.path, exc)
     _control_call(control, "progress", result)
@@ -74,6 +75,7 @@ def _embed_group(items, embedder, result, control):
     inputs = [embedding_input(chunk, item.title, item.path.name) for item in items for chunk in item.chunks]
     if not inputs:
         return [(item, []) for item in items]
+    _control_call(control, "stage", "embedding")
     started = time.perf_counter()
     try:
         vectors = list(embedder.embed_documents(inputs))
@@ -102,6 +104,7 @@ def _flush(con, source_id, pending, embedder, result, control):
     if not pending:
         return
     embedded = _embed_group(list(pending), embedder, result, control)
+    _control_call(control, "stage", "committing")
     db_started = time.perf_counter()
     for item, item_vectors in embedded:
         con.execute("SAVEPOINT document_write")
@@ -146,6 +149,7 @@ def _flush(con, source_id, pending, embedder, result, control):
                 )
                 upsert(con, cur.lastrowid, vector)
             con.execute("RELEASE document_write")
+            result["files_completed"] += 1
         except Exception as exc:  # noqa: BLE001 -- isolate a failed document transaction
             con.execute("ROLLBACK TO document_write")
             con.execute("RELEASE document_write")
@@ -153,6 +157,7 @@ def _flush(con, source_id, pending, embedder, result, control):
     con.commit()
     result["db_insert_ms"] += (time.perf_counter() - db_started) * 1000
     _control_call(control, "progress", result)
+    _control_call(control, "batch_committed", con, result)
     pending.clear()
 
 
@@ -162,9 +167,11 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
     result = _result()
     started_ms = int(time.time() * 1000)
     mark_source_status(con, source_id, "scanning", last_scan_started_ms=started_ms)
+    _control_call(control, "source_started", source, started_ms)
     seen, pending, pending_chunks = set(), [], 0
     disabled_during_scan = False
     traversal = discover(source["path"], recursive=bool(source["recursive"]), include_ignored=True)
+    _control_call(control, "stage", "discovering")
     try:
         for path in traversal:
             if _control_call(control, "should_stop"):
@@ -181,7 +188,9 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
             breakdown["seen"] += 1
             if is_ignored_document(path.name):
                 result["files_ignored"] += 1
+                result["files_completed"] += 1
                 breakdown["ignored"] += 1
+                _control_call(control, "progress", result)
                 continue
             result["files_scanned"] += 1
             _control_call(control, "current_file", source, path, result)
@@ -191,6 +200,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
             result[f"files_{mode}"] += 1
             breakdown[mode] += 1
             try:
+                _control_call(control, "stage", "checking")
                 stat = path.stat()
                 mtime = stat.st_mtime_ns // 1_000_000
                 old = con.execute("SELECT * FROM documents WHERE path_key=?", (key,)).fetchone()
@@ -198,9 +208,12 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                         and old["ingestion_mode"] == mode):
                     result["files_unchanged"] += 1
                     result["unchanged"] += 1
+                    result["files_completed"] += 1
+                    _control_call(control, "progress", result)
                     continue
                 digest = ""
                 if mode == "content":
+                    _control_call(control, "stage", "hashing")
                     result["files_hashed"] += 1
                     digest = sha256(path)
                 if mode == "content" and old and old["sha256"] == digest and old["ingestion_mode"] == mode:
@@ -210,12 +223,17 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     )
                     result["files_unchanged"] += 1
                     result["unchanged"] += 1
+                    result["files_completed"] += 1
+                    _control_call(control, "progress", result)
                     continue
                 if mode == "content":
+                    _control_call(control, "stage", "extracting")
                     sections = extract(path)
                     result["files_extracted"] += 1
+                    _control_call(control, "stage", "chunking")
                     chunks = [chunk for text, page in sections for chunk in chunk_text(text, page)]
                 else:
+                    _control_call(control, "stage", "metadata")
                     relative = path.parent.name
                     text = (f"Filename: {path.name}\nExtension: {extension}\nFolder: {relative}\nPath: {path}\n"
                             f"Size: {stat.st_size} bytes")
@@ -232,6 +250,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                 breakdown[mode] -= 1
                 breakdown["failed"] += 1
                 result["files_failed"] += 1
+                result["files_completed"] += 1
                 result["failed"] += 1
                 _control_call(control, "file_error", path, exc)
                 _control_call(control, "progress", result)
@@ -252,6 +271,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
     stopped = bool(_control_call(control, "should_stop"))
     scan_complete = traversal.complete and not stopped and not disabled_during_scan
     if scan_complete:
+        _control_call(control, "stage", "reconciling")
         for row in con.execute("SELECT id,path_key FROM documents WHERE source_id=?", (source_id,)).fetchall():
             if row["path_key"] not in seen:
                 con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id=?)", (row["id"],))
