@@ -2,7 +2,12 @@
 
 AXP's Ask runtime retrieves from the existing index, applies a deterministic answerability gate, and **does not call
 the model when evidence is weak**. Accepted evidence is placed in a bounded prompt, generated locally, and checked for
-known `[S#]` citations. Metadata-only documents cannot be factual evidence. Search ranking and defaults are unchanged.
+known `[S#]` citations. RAG uses content-only evidence. Metadata-only documents and filename matches can identify
+related documents, but can never independently justify a factual answer. A technical identifier present only in the
+filename identifies a potentially relevant document, but is not treated as proof that the document contains the
+requested factual answer. The legacy Search `exact_identifier_match` signal remains unchanged; RAG computes
+`exact_content_identifier_match` from stored chunk text without a schema change or reindex. Search ranking and
+defaults are unchanged.
 
 ## Validated baseline model
 
@@ -17,11 +22,13 @@ Provision it explicitly and offline:
 ```console
 python -m axp_client chat-model import --file "D:\Downloads\Qwen3-4B-Q4_K_M.gguf"
 python -m axp_client chat-model status
+python -m axp_client chat-model verify
 python -m axp_client chat-model remove --yes
 ```
 
 Import validates the regular `.gguf` file and header, atomically copies it to the configured `chat_model_path`, and
-records size, SHA-256, original filename, and import time. It never uses HTTP. A missing model does not affect indexing
+records size, SHA-256, original filename, and import time. Status cheaply checks the header and manifest size; explicit
+`verify` locally hashes the complete file. Neither operation uses HTTP. A missing model does not affect indexing
 or Search; Ask health reports `model_missing` and Ask returns a controlled unavailable response. No download occurs at
 startup or request time.
 

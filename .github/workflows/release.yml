@@ -25,7 +25,7 @@ jobs:
           $env:PIP_ONLY_BINARY='llama-cpp-python'
           & stage/AXPIndexerNG/python/python.exe -m pip install -r requirements-runtime.txt
           if ($LASTEXITCODE -ne 0) { throw 'A prebuilt llama-cpp-python CPU wheel is required; source builds are forbidden' }
-          Copy-Item daemon,client,shared,tray,README.md,AXPIndexerTray.pyw,AXPIndexerTray.vbs,config.example.json stage/AXPIndexerNG -Recurse
+          Copy-Item daemon,client,shared,tray,README.md,AXPIndexerTray.pyw,AXPIndexerTray.vbs,AXPIndexerDaemon.pyw,config.example.json stage/AXPIndexerNG -Recurse
           New-Item -ItemType Directory stage/AXPIndexerNG/data,stage/AXPIndexerNG/data/logs,stage/AXPIndexerNG/data/runtime -Force | Out-Null
           @(
             '@echo off'
@@ -38,7 +38,7 @@ jobs:
             '"%~dp0python\python.exe" -m axp_client %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat -Encoding ascii
           $env:PYTHONPATH=(Resolve-Path stage/AXPIndexerNG/shared).Path+';'+(Resolve-Path stage/AXPIndexerNG/daemon).Path+';'+(Resolve-Path stage/AXPIndexerNG/client).Path+';'+(Resolve-Path stage/AXPIndexerNG/tray).Path
-          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL,openpyxl,importlib.metadata; from llama_cpp import Llama; print('llama-cpp-python',importlib.metadata.version('llama-cpp-python')); assert __import__('pathlib').Path(r'stage/AXPIndexerNG/python/pythonw.exe').exists()"
+          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL,openpyxl,importlib.metadata; from llama_cpp import Llama; from pathlib import Path; print('llama-cpp-python',importlib.metadata.version('llama-cpp-python')); root=Path(r'stage/AXPIndexerNG'); required=('AXPIndexerTray.pyw','AXPIndexerDaemon.pyw','python/python.exe','python/pythonw.exe'); assert all((root/path).is_file() for path in required); compile((root/'AXPIndexerDaemon.pyw').read_bytes(), str(root/'AXPIndexerDaemon.pyw'), 'exec')"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop imports or pythonw.exe check failed' }
           & stage/AXPIndexerNG/python/python.exe -m axp_tray self-test --db stage/tray-self-test.db
           if ($LASTEXITCODE -ne 0) { throw 'Packaged tray self-test failed' }
@@ -70,6 +70,9 @@ jobs:
           $before=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime before cleanup: $before bytes"
           Get-ChildItem stage -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
           Get-ChildItem stage/AXPIndexerNG/data -File -Recurse | Remove-Item -Force
+          if (Get-ChildItem stage/AXPIndexerNG -File -Recurse -Filter *.gguf) { throw 'GGUF models must not be packaged' }
+          $llamaPackage=Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse -Filter llama_cpp | Select-Object -First 1
+          if (!$llamaPackage -or !(Get-ChildItem $llamaPackage.FullName -File -Recurse | Where-Object Extension -In '.dll','.pyd')) { throw 'llama_cpp native runtime missing' }
           $after=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime after cleanup: $after bytes"
           if ($after -gt 350MB) { throw 'Runtime exceeds 350 MiB' } elseif ($after -gt 250MB) { Write-Warning 'Runtime exceeds target' }
           $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}

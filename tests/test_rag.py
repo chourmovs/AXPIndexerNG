@@ -52,7 +52,7 @@ def test_answerability_rules():
     assert decide_answerability([hit(0.39)]).reason == DecisionReason.WEAK_RETRIEVAL
     assert decide_answerability([hit(0.78)]).reason == DecisionReason.STRONG_EVIDENCE
     assert decide_answerability([hit(0.56), hit(0.51, chunk_no=1), hit(0.47, chunk_no=2)]).reason == DecisionReason.MULTIPLE_SUPPORT
-    exact = hit(0.46, exact_identifier_match=True, lexical_coverage=0.4)
+    exact = hit(0.46, exact_content_identifier_match=True, lexical_coverage=0.4)
     assert decide_answerability([exact]).reason == DecisionReason.EXACT_SUPPORTED
 
 

@@ -68,7 +68,28 @@ def model_status(model_path):
         manifest = json.loads(manifest_path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         pass
-    return {"configured": path.is_file(), "valid": valid, "reason": reason, "manifest": manifest}
+    manifest_match = bool(valid and manifest and path.stat().st_size == manifest.get("size_bytes"))
+    if valid and manifest and not manifest_match:
+        reason = "model_changed"
+    return {"configured": path.is_file(), "valid": valid, "reason": reason, "manifest": manifest,
+            "manifest_match": manifest_match}
+
+
+def verify_model(model_path):
+    """Explicit local verification; unlike health/status, this hashes the whole model."""
+    path = Path(model_path)
+    status = model_status(path)
+    actual_sha256 = None
+    if status["valid"]:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while data := stream.read(1024 * 1024):
+                digest.update(data)
+        actual_sha256 = digest.hexdigest()
+    expected = (status.get("manifest") or {}).get("sha256")
+    sha256_match = bool(actual_sha256 and expected and actual_sha256 == expected)
+    return {**status, "manifest_match": bool(status["manifest_match"] and sha256_match),
+            "sha256_match": sha256_match}
 
 
 def remove_model(model_path):
