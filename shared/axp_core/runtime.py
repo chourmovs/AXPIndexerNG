@@ -40,6 +40,8 @@ def runtime_paths():
 DEFAULT_SETTINGS = {
     "db_path": "data/axpindex.db",
     "model_cache": "model-cache",
+    "chat_backend": "llama_cpp",
+    "chat_model_path": "model-cache/chat/model.gguf",
     "embedding_profile": "balanced",
     "embedding_batch_size": 64,
     "download_missing_models": True,
@@ -105,7 +107,7 @@ def load_settings():
     if settings != current:
         atomic_write_json(paths["settings"], settings)
     root = installation_root()
-    for key in ("db_path", "model_cache"):
+    for key in ("db_path", "model_cache", "chat_model_path"):
         value = Path(settings[key])
         settings[key] = str(value if value.is_absolute() else (root / value).resolve())
     return settings
@@ -114,7 +116,7 @@ def load_settings():
 def save_settings(settings):
     serializable = dict(settings)
     root = installation_root()
-    for key in ("db_path", "model_cache"):
+    for key in ("db_path", "model_cache", "chat_model_path"):
         try:
             serializable[key] = str(Path(serializable[key]).resolve().relative_to(root))
         except ValueError:

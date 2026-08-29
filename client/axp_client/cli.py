@@ -4,9 +4,11 @@ import os
 
 from axp_core.database import capability_report, connect
 from axp_core.hybrid import SearchConfig
-from axp_core.runtime import configure_logging
+from axp_core.runtime import configure_logging, load_settings
 from axp_daemon.embeddings import embedder_for_index
 
+from .rag.llama_cpp_backend import LlamaCppBackend
+from .rag.service import ChatUnavailableError, GenerationFailedError, RagService
 from .reranker import Reranker
 from .search import search
 from .server import serve
@@ -17,7 +19,7 @@ LOGGER = configure_logging("axp_client", "client.log")
 def main(argv=None):
     p = argparse.ArgumentParser()
     s = p.add_subparsers(dest="cmd", required=True)
-    for cmd in ("health", "search", "serve"):
+    for cmd in ("health", "search", "serve", "ask"):
         q = s.add_parser(cmd)
         q.add_argument("--db", required=True)
         if cmd == "search":
@@ -36,6 +38,9 @@ def main(argv=None):
         if cmd == "serve":
             q.add_argument("--host", default="127.0.0.1")
             q.add_argument("--port", type=int, default=8765)
+        if cmd == "ask":
+            q.add_argument("--question", required=True)
+            q.add_argument("--debug", action="store_true")
     a = p.parse_args(argv)
     if a.cmd == "health":
         print(json.dumps(capability_report(connect(a.db))))
@@ -46,6 +51,17 @@ def main(argv=None):
         config = SearchConfig(a.lexical_candidates, a.vector_candidates, a.rerank_candidates)
         reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH")) if a.profile == "quality" else None
         value = search(con, e, a.query, a.limit, profile=a.profile, explain=a.explain, reranker=reranker, config=config)
+        print(json.dumps(value, ensure_ascii=False))
+        return
+    if a.cmd == "ask":
+        service = RagService(backend=LlamaCppBackend(load_settings()["chat_model_path"]), search_fn=search,
+                             connect_fn=connect, db=a.db, embedder=e)
+        try:
+            value = service.ask(a.question, debug=a.debug)
+        except ChatUnavailableError:
+            value = {"error": "chat_model_unavailable"}
+        except GenerationFailedError:
+            value = {"status": "generation_unavailable", "answerable": False, "error": "local_generation_failed"}
         print(json.dumps(value, ensure_ascii=False))
         return
     serve(a.db, e, a.host, a.port)

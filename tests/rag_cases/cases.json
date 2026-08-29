@@ -1,0 +1,8 @@
+[
+  {"id":"a1","kind":"answerable"},{"id":"a2","kind":"answerable"},{"id":"a3","kind":"answerable"},
+  {"id":"a4","kind":"answerable"},{"id":"a5","kind":"answerable"},
+  {"id":"u1","kind":"unanswerable"},{"id":"u2","kind":"unanswerable"},{"id":"u3","kind":"unanswerable"},
+  {"id":"u4","kind":"unanswerable"},{"id":"u5","kind":"unanswerable"},
+  {"id":"m1","kind":"metadata_only"},{"id":"m2","kind":"metadata_only"},
+  {"id":"x1","kind":"ambiguous"},{"id":"x2","kind":"ambiguous"}
+]
