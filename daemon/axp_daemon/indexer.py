@@ -5,7 +5,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from axp_core.background import resolve_source_path
 from axp_core.identifiers import extract_identifiers
+from axp_core.runtime import load_settings
 from axp_core.sources import (
     add_source,
     get_source,
@@ -23,7 +25,8 @@ from .scanner import SourceUnavailable, discover, is_ignored_document, is_suppor
 
 @dataclass
 class PreparedDocument:
-    path: Path
+    logical_path: Path
+    access_path: Path
     stat: object
     digest: str
     old: object
@@ -58,13 +61,13 @@ def _control_call(control, name, *args):
 
 def _record_document_failure(item, exc, result, control):
     result[f"files_{item.ingestion_mode}"] -= 1
-    breakdown = result["extension_breakdown"][item.path.suffix.casefold() or "[no extension]"]
+    breakdown = result["extension_breakdown"][item.logical_path.suffix.casefold() or "[no extension]"]
     breakdown[item.ingestion_mode] -= 1
     breakdown["failed"] += 1
     result["files_failed"] += 1
     result["files_completed"] += 1
     result["failed"] += 1
-    _control_call(control, "file_error", item.path, exc)
+    _control_call(control, "file_error", item.logical_path, exc)
     _control_call(control, "progress", result)
 
 
@@ -72,7 +75,7 @@ def _embed_group(items, embedder, result, control):
     """Embed a group, recursively isolating a bad document or an oversized backend batch."""
     if not items:
         return []
-    inputs = [embedding_input(chunk, item.title, item.path.name) for item in items for chunk in item.chunks]
+    inputs = [embedding_input(chunk, item.title, item.logical_path.name) for item in items for chunk in item.chunks]
     if not inputs:
         return [(item, []) for item in items]
     _control_call(control, "batch", "embedding", len(items), len(inputs))
@@ -118,8 +121,8 @@ def _flush(con, source_id, pending, embedder, result, control):
                 con.execute(
                     """UPDATE documents SET source_id=?,path=?,extension=?,size_bytes=?,modified_unix_ms=?,sha256=?,
                     indexed_unix_ms=?,title=?,filename=?,ingestion_mode=? WHERE id=?""",
-                    (source_id, str(item.path), item.path.suffix.lower(), item.stat.st_size,
-                     item.stat.st_mtime_ns // 1_000_000, item.digest, now, item.title, item.path.name,
+                    (source_id, str(item.logical_path), item.logical_path.suffix.lower(), item.stat.st_size,
+                     item.stat.st_mtime_ns // 1_000_000, item.digest, now, item.title, item.logical_path.name,
                      item.ingestion_mode, doc_id),
                 )
                 result["files_modified"] += 1
@@ -128,15 +131,15 @@ def _flush(con, source_id, pending, embedder, result, control):
                 cur = con.execute(
                     """INSERT INTO documents(source_id,path,path_key,extension,size_bytes,modified_unix_ms,sha256,
                     indexed_unix_ms,title,filename,ingestion_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                    (source_id, str(item.path), path_key(item.path), item.path.suffix.lower(), item.stat.st_size,
-                     item.stat.st_mtime_ns // 1_000_000, item.digest, now, item.title, item.path.name,
+                    (source_id, str(item.logical_path), path_key(item.logical_path), item.logical_path.suffix.lower(), item.stat.st_size,
+                     item.stat.st_mtime_ns // 1_000_000, item.digest, now, item.title, item.logical_path.name,
                      item.ingestion_mode),
                 )
                 doc_id = cur.lastrowid
                 result["files_new"] += 1
                 result["new"] += 1
             for no, (chunk, vector) in enumerate(zip(item.chunks, item_vectors)):
-                identifiers = extract_identifiers(chunk.text, item.path.name)
+                identifiers = extract_identifiers(chunk.text, item.logical_path.name)
                 normalized = " ".join(value for value, _ in identifiers)
                 cur = con.execute(
                     """INSERT INTO chunks(document_id,chunk_no,text,page_no,char_start,char_end,section_heading,identifiers)
@@ -146,7 +149,7 @@ def _flush(con, source_id, pending, embedder, result, control):
                 )
                 con.execute(
                     "INSERT OR REPLACE INTO chunks_fts(rowid,text,title,filename,heading,identifiers) VALUES(?,?,?,?,?,?)",
-                    (cur.lastrowid, chunk.text, item.title, item.path.name, chunk.section_heading, normalized),
+                    (cur.lastrowid, chunk.text, item.title, item.logical_path.name, chunk.section_heading, normalized),
                 )
                 upsert(con, cur.lastrowid, vector)
             con.execute("RELEASE document_write")
@@ -171,10 +174,12 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
     _control_call(control, "source_started", source, started_ms)
     seen, pending, pending_chunks = set(), [], 0
     disabled_during_scan = False
-    traversal = discover(source["path"], recursive=bool(source["recursive"]), include_ignored=True)
+    resolved = resolve_source_path(source["path"], load_settings().get("background_drive_mappings", {}))
+    traversal = discover(resolved.access_root, recursive=bool(source["recursive"]), include_ignored=True)
     _control_call(control, "stage", "discovering")
     try:
-        for path in traversal:
+        for access_path in traversal:
+            path = resolved.logical_for(access_path)
             if _control_call(control, "should_stop"):
                 break
             _control_call(control, "wait_if_paused")
@@ -202,7 +207,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
             breakdown[mode] += 1
             try:
                 _control_call(control, "stage", "checking")
-                stat = path.stat()
+                stat = access_path.stat()
                 mtime = stat.st_mtime_ns // 1_000_000
                 old = con.execute("SELECT * FROM documents WHERE path_key=?", (key,)).fetchone()
                 if (old and old["size_bytes"] == stat.st_size and old["modified_unix_ms"] == mtime
@@ -216,7 +221,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                 if mode == "content":
                     _control_call(control, "stage", "hashing")
                     result["files_hashed"] += 1
-                    digest = sha256(path)
+                    digest = sha256(access_path)
                 if mode == "content" and old and old["sha256"] == digest and old["ingestion_mode"] == mode:
                     con.execute(
                         "UPDATE documents SET source_id=?,path=?,size_bytes=?,modified_unix_ms=? WHERE id=?",
@@ -229,7 +234,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     continue
                 if mode == "content":
                     _control_call(control, "stage", "extracting")
-                    sections = extract(path)
+                    sections = extract(access_path)
                     result["files_extracted"] += 1
                     _control_call(control, "stage", "chunking")
                     chunks = [chunk for text, page in sections for chunk in chunk_text(text, page)]
@@ -241,7 +246,7 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     chunks = [Chunk(text, None, 0, len(text), "File metadata")]
                 result["chunks_generated"] += len(chunks)
                 title = path.stem.replace("_", " ").replace("-", " ").strip()
-                pending.append(PreparedDocument(path, stat, digest, old, title, chunks, mode))
+                pending.append(PreparedDocument(path, access_path, stat, digest, old, title, chunks, mode))
                 pending_chunks += len(chunks)
                 if pending_chunks >= embedding_batch_size:
                     _flush(con, source_id, pending, embedder, result, control)

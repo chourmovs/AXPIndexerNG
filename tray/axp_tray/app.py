@@ -10,11 +10,20 @@ import time
 import webbrowser
 from pathlib import Path
 
+from axp_core.background import background_preflight
 from axp_core.database import connect
 from axp_core.locking import AlreadyLocked, FileLock, daemon_instance_running
-from axp_core.runtime import atomic_write_json, configure_logging, load_settings, read_json, runtime_paths
+from axp_core.runtime import (
+    atomic_write_json,
+    configure_logging,
+    load_settings,
+    read_json,
+    runtime_paths,
+    save_settings,
+)
 from axp_daemon.service import send_control
 
+from .background_task import TaskSchedulerBackend
 from .icons import make_icon
 from .process import ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
 from .sources_window import SourcesWindow
@@ -74,8 +83,13 @@ class TrayApplication:
             p.MenuItem("Open logs", lambda *_: self._open(self.paths["logs"])),
             p.Menu.SEPARATOR,
             p.MenuItem("Start with Windows", self._toggle_startup, checked=lambda _: is_enabled()),
+            p.MenuItem("Keep indexing after sign-out", self._toggle_background,
+                       checked=lambda _: self.settings.get("daemon_runtime_mode") == "scheduled_task"),
+            p.MenuItem(lambda _: f"Daemon: {'Background' if self.state.get('launch_mode') == 'scheduled_task' else 'Interactive'}",
+                       None, enabled=False),
             p.Menu.SEPARATOR,
-            p.MenuItem("Exit AXPIndexerNG", self._exit),
+            p.MenuItem(lambda _: "Exit tray — indexing continues" if self.settings.get("daemon_runtime_mode") == "scheduled_task"
+                       else "Exit AXPIndexerNG", self._exit),
         )
 
     def _on_tk(self, callback):
@@ -125,6 +139,56 @@ class TrayApplication:
         except Exception:
             LOGGER.exception("Start-with-Windows update failed")
 
+    def _toggle_background(self, *_):
+        self._on_tk(self._toggle_background_dialog)
+
+    def _toggle_background_dialog(self):
+        from tkinter import messagebox
+
+        enabled = self.settings.get("daemon_runtime_mode") == "scheduled_task"
+        if enabled:
+            if not messagebox.askyesno("Background indexing", "Disable Windows background indexing?\n\n"
+                                       "The scheduled task will be removed. Indexing will return to interactive tray mode."):
+                return
+            try:
+                stop_daemon(intentional=True)
+                TaskSchedulerBackend(self.settings).delete()
+                self.settings.update(daemon_runtime_mode="interactive", background_drive_mappings={})
+                save_settings(self.settings)
+                start_daemon(self.settings)
+            except (OSError, RuntimeError, ValueError) as exc:
+                messagebox.showerror("Background indexing", str(exc))
+            return
+        with connect(self.settings["db_path"], readonly=True) as con:
+            paths = [row[0] for row in con.execute("SELECT path FROM sources WHERE enabled=1")]
+        check = background_preflight(paths)
+        if not check["compatible"]:
+            details = "\n".join(f"✗ {item['path']}: {item.get('error')}" for item in check["sources"]
+                                if not item["compatible"])
+            messagebox.showerror("Background indexing compatibility", details)
+            return
+        text = ("AXPIndexerNG will create a Windows Scheduled Task running under your current Windows account.\n\n"
+                "Windows will ask for your account password. AXPIndexerNG will NOT receive or store this password.\n\n"
+                "Mapped drives use UNC paths without storing network credentials. Continue?")
+        if not messagebox.askyesno("Background indexing", text):
+            return
+        previous = dict(self.settings)
+        try:
+            candidate = {**self.settings, "background_drive_mappings": check["mappings"]}
+            backend = TaskSchedulerBackend(candidate)
+            backend.register()
+            if backend.status().state != "ready":
+                raise RuntimeError("Registered task could not be verified")
+            stop_daemon(intentional=False)
+            candidate["daemon_runtime_mode"] = "scheduled_task"
+            save_settings(candidate)
+            self.settings = candidate
+            start_daemon(candidate)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.settings = previous
+            save_settings(previous)
+            messagebox.showerror("Background indexing could not be enabled", f"{exc}\n\nAXPIndexerNG did not modify system security policy.")
+
     def _open(self, path):
         try:
             os.startfile(str(path))
@@ -138,23 +202,26 @@ class TrayApplication:
         threading.Thread(target=self._shutdown_worker, name="axp-shutdown", daemon=True).start()
 
     def _shutdown_worker(self):
-        try:
-            LOGGER.info("Daemon shutdown requested from tray exit")
-            stop_daemon(intentional=True)
-        except Exception:
-            LOGGER.exception("Daemon shutdown request failed")
+        background = self.settings.get("daemon_runtime_mode") == "scheduled_task"
+        if not background:
+            try:
+                LOGGER.info("Daemon shutdown requested from tray exit")
+                stop_daemon(intentional=True)
+            except Exception:
+                LOGGER.exception("Daemon shutdown request failed")
         try:
             if stop_client(self.settings):
                 LOGGER.info("Web client shutdown requested from tray exit")
         except Exception:
             LOGGER.exception("Web client shutdown request failed")
 
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if read_daemon_state().get("state") == "stopped":
-                LOGGER.info("Daemon stopped")
-                break
-            time.sleep(0.1)
+        if not background:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if read_daemon_state().get("state") == "stopped":
+                    LOGGER.info("Daemon stopped")
+                    break
+                time.sleep(0.1)
         LOGGER.info("AXPIndexerNG tray exiting")
         try:
             self.icon.stop()
@@ -186,7 +253,7 @@ class TrayApplication:
             try:
                 process = start_daemon(self.settings)
                 self.last_restart = time.monotonic()
-                LOGGER.info("Auto-restart launched PID %s", process.pid)
+                LOGGER.info("Auto-restart requested%s", f" PID {process.pid}" if hasattr(process, "pid") else "")
             except Exception:
                 LOGGER.exception("Auto-restart failed")
         state_name = self.state.get("state", "stopped")
