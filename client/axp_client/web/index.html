@@ -1,1 +1,24 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AXPIndexerNG</title><link rel="stylesheet" href="/style.css"></head><body><main><h1>AXPIndexerNG</h1><form><input aria-label="Search" placeholder="Search indexed documents"><button>Search</button></form><section id="results"></section></main><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AXPIndexerNG</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header class="masthead"><h1>AXPIndexerNG</h1><p>Local enterprise document intelligence</p></header>
+  <nav class="modes" aria-label="Workflows">
+    <button id="search-tab" class="mode active" aria-controls="search-panel" aria-selected="true">Search documents</button>
+    <button id="ask-tab" class="mode" aria-controls="ask-panel" aria-selected="false">Ask AXP</button>
+  </nav>
+  <section id="search-panel"><h2>Search documents</h2>
+    <form id="search-form"><label class="sr-only" for="search-input">Search indexed documents</label>
+      <input id="search-input" placeholder="Search indexed documents"><button>Search</button></form>
+    <section id="results" aria-live="polite"></section>
+  </section>
+  <section id="ask-panel" hidden><div class="panel-heading"><div><h2>Ask AXP</h2><p class="muted">Local AI · indexed sources only</p></div>
+    <button id="clear-chat" class="secondary" type="button">Clear</button></div>
+    <div id="ask-health" class="health" aria-live="polite">Checking local AI…</div>
+    <div id="chat-history" class="chat-history"></div>
+    <form id="ask-form" class="ask-form"><label for="ask-input">Ask a question about your indexed documents</label>
+      <textarea id="ask-input" maxlength="4000" rows="3" placeholder="Why was the process changed?"></textarea>
+      <div class="composer-footer"><small>Ask complete questions for the most reliable results.</small><button id="ask-submit" disabled>Ask AXP</button></div>
+    </form><div id="ask-progress" class="progress" aria-live="polite"></div>
+  </section>
+</main><script type="module" src="/app.js"></script></body></html>

@@ -44,17 +44,24 @@ class RagService:
         retrieval = retrieval or self.retrieve(question)
         return retrieval, decide_answerability(retrieval.content_evidence, config)
 
-    def ask(self, question, *, debug=False, retrieval=None):
+    def ask(self, question, *, debug=False, retrieval=None, progress=None):
+        def emit(event, **details):
+            if progress is not None:
+                progress({"event": event, **details})
+
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
         if not self.health().get("available"):
             raise ChatUnavailableError
+        emit("retrieval_started")
         with self.connect_fn(self.db, readonly=True) as con:
             retrieval = retrieval or retrieve_rag_candidates(
                 con, self.embedder, question, search_fn=self.search_fn, limit=RETRIEVAL_LIMIT
             )
             candidates, content = retrieval.candidates, retrieval.content_evidence
             related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
+            emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
             decision = decide_answerability(content)
+            emit("gate_complete", answerable=decision.answerable)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public()}
             if not decision.answerable:
@@ -78,11 +85,14 @@ class RagService:
         if not context.blocks:
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
             return base
+        emit("context_ready", documents=len({block.document_id for block in context.blocks}),
+             sources=len(context.blocks))
         if not self._generation_lock.acquire(blocking=False):
             raise ChatBusyError
         generation_start = time.perf_counter()
         try:
             try:
+                emit("generation_started", model_was_loaded=bool(self.health().get("model_loaded")))
                 answer = self.backend.generate(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt(question, context.prompt_text))
             except Exception as exc:
                 LOGGER.error("Local generation failed request id=%s type=%s", request_id, type(exc).__name__)
@@ -90,6 +100,7 @@ class RagService:
         finally:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
+        emit("validation_started")
         if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
             base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
         else:
