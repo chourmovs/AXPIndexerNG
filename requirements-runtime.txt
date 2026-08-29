@@ -6,3 +6,5 @@ python-pptx
 openpyxl
 pystray
 Pillow
+
+psutil==7.0.0

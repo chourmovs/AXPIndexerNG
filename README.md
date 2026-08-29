@@ -82,3 +82,16 @@ thresholds and filtered candidate count.
 
 Install runtime dependencies with `pip install -r requirements-runtime.txt`; development checks additionally
 use `requirements-dev.txt`.
+
+### Live indexing dashboard
+
+The Sources window separates **exact completed-scan coverage** from **estimated live progress**. A value such as
+`~68%` is an estimate using the last successfully completed source size (or an existing-document baseline for a
+migrated source). A first-ever scan without a meaningful baseline stays indeterminate: AXPIndexerNG intentionally
+does not traverse a filesystem twice merely to manufacture a percentage. Completed coverage remains authoritative
+and is retained when a later scan is interrupted, offline, or fails.
+
+The dashboard reports the current source, file and processing stage; completed/outcome counters; rolling file and
+chunk rates; elapsed time and a conservative ETA. Resource fields are sampled by the tray at most once per second
+and show daemon CPU, RSS and I/O rates, system CPU/RAM, battery or AC state, and filesystem-stat sizes for the SQLite
+database and WAL. Resource-monitor failures are displayed as unavailable and never affect indexing.

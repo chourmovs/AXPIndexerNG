@@ -37,9 +37,11 @@ class StatePublisher:
         self.value = {
             "pid": os.getpid(), "state": "starting", "started_ms": self.started_ms,
             "heartbeat_ms": now_ms(), "current_source_id": None, "current_source": None, "current_file": None,
+            "current_stage": "idle", "source_scan_started_ms": None, "scan_cycle_started_ms": None,
             "files_discovered": 0, "files_processed": 0, "files_new": 0, "files_modified": 0,
             "files_seen": 0, "files_content": 0, "files_metadata": 0, "files_ignored": 0,
-            "files_failed": 0, "chunks_generated": 0, "chunks_embedded": 0,
+            "files_failed": 0, "files_completed": 0, "files_unchanged": 0,
+            "chunks_generated": 0, "chunks_embedded": 0,
             "documents_total": 0, "chunks_total": 0, "model_download_attempts": 0, "last_error": None,
         }
         self.lock = threading.Lock()
@@ -85,7 +87,7 @@ class StatePublisher:
         self._publish_safely()
 
     def close(self, state="stopped"):
-        self.update(state=state, current_file=None)
+        self.update(state=state, current_file=None, current_stage="idle")
         self.stop_event.set()
         self.thread.join(timeout=3)
 
@@ -113,7 +115,7 @@ class DaemonControl:
             self.publisher.update(state="stopping")
         elif command == "pause":
             self.paused = True
-            self.publisher.update(state="paused")
+            self.publisher.update(state="paused", current_stage="paused")
         elif command == "resume":
             self.paused = False
             self.scan_requested = True
@@ -140,11 +142,30 @@ class DaemonControl:
         if not self.stop:
             self.publisher.update(state="scanning")
 
+    def source_started(self, source, started_ms):
+        baseline = source["last_seen_count"] if "last_seen_count" in source.keys() else 0
+        fallback = source["last_file_count"] if "last_file_count" in source.keys() else 0
+        counters = {
+            key: 0 for key in (
+                "files_seen", "files_processed", "files_completed", "files_content", "files_metadata",
+                "files_ignored", "files_failed", "files_new", "files_modified", "files_unchanged",
+                "chunks_generated", "chunks_embedded",
+            )
+        }
+        self.publisher.update(state="scanning", current_source_id=source["id"], current_source=source["path"],
+                              current_file=None, current_stage="discovering", source_scan_started_ms=started_ms,
+                              progress_baseline=baseline or fallback or 0,
+                              last_error=None, **counters)
+
+    def stage(self, stage):
+        self.publisher.update(current_stage=stage)
+
     def current_file(self, source, path, result):
         self.publisher.update(
             state="scanning", current_source_id=source["id"], current_source=source["path"], current_file=str(path),
             files_discovered=result["files_discovered"], files_processed=result["files_scanned"],
             files_new=result["files_new"], files_modified=result["files_modified"], files_failed=result["files_failed"],
+            files_completed=result["files_completed"], files_unchanged=result["files_unchanged"],
             files_seen=result["files_seen"], files_content=result["files_content"],
             files_metadata=result["files_metadata"], files_ignored=result["files_ignored"],
             chunks_generated=result["chunks_generated"], chunks_embedded=result["chunks_embedded"],
@@ -152,10 +173,15 @@ class DaemonControl:
 
     def progress(self, result):
         self.publisher.update(files_new=result["files_new"], files_modified=result["files_modified"],
+                              files_completed=result["files_completed"], files_unchanged=result["files_unchanged"],
                               files_seen=result["files_seen"], files_content=result["files_content"],
                               files_metadata=result["files_metadata"], files_ignored=result["files_ignored"],
                               files_failed=result["files_failed"], chunks_generated=result["chunks_generated"],
                               chunks_embedded=result["chunks_embedded"])
+
+    def batch_committed(self, con, result):
+        self.progress(result)
+        self.publisher.update(**_catalog_totals(con))
 
     def file_error(self, path, exc):
         LOGGER.warning("Indexing failed for %s: %s", path, exc)
@@ -258,6 +284,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
             if first_cycle or control.scan_requested:
                 first_cycle = False
                 control.scan_requested = False
+                publisher.update(scan_cycle_started_ms=now_ms())
                 if control.remove_source_id is not None:
                     remove_id = control.remove_source_id
                     control.remove_source_id = None
@@ -308,7 +335,8 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                         LOGGER.error("Could not remove source %s: %s", remove_id, exc)
                         publisher.update(state="error", last_error=str(exc))
                 publisher.update(state="idle" if not control.paused else "paused", current_source_id=None,
-                                 current_source=None, current_file=None, **_catalog_totals(con))
+                                 current_source=None, current_file=None, current_stage="idle",
+                                 source_scan_started_ms=None, **_catalog_totals(con))
                 cycle_end = time.monotonic()
             else:
                 cycle_end = time.monotonic()
