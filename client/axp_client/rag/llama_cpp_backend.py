@@ -1,7 +1,6 @@
 import threading
 from pathlib import Path
 
-
 CONTEXT_SIZE = 8192
 MAX_ANSWER_TOKENS = 512
 TEMPERATURE = 0.1

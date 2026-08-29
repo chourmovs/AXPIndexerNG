@@ -10,10 +10,10 @@ from axp_core.background import access_path_for
 from axp_core.database import connect
 from axp_core.runtime import configure_logging, load_settings
 
-from .reranker import Reranker
-from .search import search
 from .rag.llama_cpp_backend import LlamaCppBackend
 from .rag.service import ChatBusyError, ChatUnavailableError, GenerationFailedError, RagService
+from .reranker import Reranker
+from .search import search
 
 WEB = Path(__file__).parent / "web"
 LOGGER = configure_logging("axp_client", "client.log")

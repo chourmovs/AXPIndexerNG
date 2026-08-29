@@ -24,7 +24,8 @@ def _format(block):
     return "\n".join(lines) + "\n\n" + block.text
 
 
-def build_context(con, hits, config=ContextConfig()):
+def build_context(con, hits, config=None):
+    config = config or ContextConfig()
     selected, counts, documents = [], {}, []
     for hit in hits:
         doc = int(hit["document_id"])

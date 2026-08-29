@@ -121,7 +121,8 @@ def test_shutdown_endpoint_accepts_loopback(tmp_path):
 
 def test_ask_request_limits_and_health_do_not_generate(tmp_path):
     class Rag:
-        calls = []
+        def __init__(self):
+            self.calls = []
 
         def health(self):
             return {"available": True, "backend": "fake", "model_loaded": False}

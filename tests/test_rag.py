@@ -3,7 +3,6 @@ import sqlite3
 import threading
 
 import pytest
-
 from axp_client.rag.answerability import DecisionReason, decide_answerability
 from axp_client.rag.backend import FakeChatBackend
 from axp_client.rag.citations import validate_citations

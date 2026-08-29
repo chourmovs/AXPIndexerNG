@@ -31,7 +31,8 @@ class AnswerabilityDecision:
         return {"reason": self.reason.value, "best_relevance": self.best_relevance}
 
 
-def decide_answerability(results, config=AnswerabilityConfig()):
+def decide_answerability(results, config=None):
+    config = config or AnswerabilityConfig()
     if not results:
         return AnswerabilityDecision(False, DecisionReason.NO_CONTENT_EVIDENCE, 0.0, 0, 0)
     scores = [float(row.get("relevance_score") or 0) for row in results]
