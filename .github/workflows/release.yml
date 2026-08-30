@@ -31,31 +31,33 @@ jobs:
           Copy-Item (Split-Path $env:PY) stage/AXPIndexerNG/python -Recurse
           $env:CMAKE_ARGS='-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DGGML_LLAMAFILE=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_SYCL=OFF'
           $env:FORCE_CMAKE='1'
-          & stage/AXPIndexerNG/python/python.exe -m pip install --no-binary llama-cpp-python -r requirements-runtime.txt
+          & stage/AXPIndexerNG/python/python.exe -B -m pip install --no-binary llama-cpp-python -r requirements-runtime.txt
           if ($LASTEXITCODE -ne 0) { throw 'Controlled portable llama-cpp-python source build failed' }
           Copy-Item daemon,client,shared,tray,scripts,README.md,AXPIndexerTray.pyw,AXPIndexerTray.vbs,AXPIndexerDaemon.pyw,config.example.json stage/AXPIndexerNG -Recurse
           New-Item -ItemType Directory stage/AXPIndexerNG/data,stage/AXPIndexerNG/data/logs,stage/AXPIndexerNG/data/runtime -Force | Out-Null
           @(
             '@echo off'
             'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client;%~dp0tray"'
-            '"%~dp0python\python.exe" -m axp_daemon %*'
+            'set "PYTHONDONTWRITEBYTECODE=1"'
+            '"%~dp0python\python.exe" -B -m axp_daemon %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat -Encoding ascii
           @(
             '@echo off'
             'set "PYTHONPATH=%~dp0shared;%~dp0daemon;%~dp0client;%~dp0tray"'
-            '"%~dp0python\python.exe" -m axp_client %*'
+            'set "PYTHONDONTWRITEBYTECODE=1"'
+            '"%~dp0python\python.exe" -B -m axp_client %*'
           ) | Set-Content stage/AXPIndexerNG/AXPIndexerClient.bat -Encoding ascii
           $env:PYTHONPATH=(Resolve-Path stage/AXPIndexerNG/shared).Path+';'+(Resolve-Path stage/AXPIndexerNG/daemon).Path+';'+(Resolve-Path stage/AXPIndexerNG/client).Path+';'+(Resolve-Path stage/AXPIndexerNG/tray).Path
-          & stage/AXPIndexerNG/python/python.exe -c "import tkinter,pystray,PIL,openpyxl,importlib.metadata,platform; import llama_cpp; from llama_cpp import Llama; from axp_client.rag.cpu import detect_cpu; from pathlib import Path; print('llama-cpp-python',importlib.metadata.version('llama-cpp-python')); print('system',platform.platform(),detect_cpu().public()); print('backend',llama_cpp.llama_print_system_info().decode(errors='replace')); assert detect_cpu().runtime_required_isa == 'x86-64 + AVX'; root=Path(r'stage/AXPIndexerNG'); required=('AXPIndexerTray.pyw','AXPIndexerDaemon.pyw','python/python.exe','python/pythonw.exe'); assert all((root/path).is_file() for path in required); compile((root/'AXPIndexerDaemon.pyw').read_bytes(), str(root/'AXPIndexerDaemon.pyw'), 'exec')"
+          & stage/AXPIndexerNG/python/python.exe -B -c "import tkinter,pystray,PIL,openpyxl,importlib.metadata,platform; import llama_cpp; from llama_cpp import Llama; from axp_client.rag.cpu import detect_cpu; from pathlib import Path; print('llama-cpp-python',importlib.metadata.version('llama-cpp-python')); print('system',platform.platform(),detect_cpu().public()); print('backend',llama_cpp.llama_print_system_info().decode(errors='replace')); assert detect_cpu().runtime_required_isa == 'x86-64 + AVX'; root=Path(r'stage/AXPIndexerNG'); required=('AXPIndexerTray.pyw','AXPIndexerDaemon.pyw','python/python.exe','python/pythonw.exe'); assert all((root/path).is_file() for path in required); compile((root/'AXPIndexerDaemon.pyw').read_bytes(), str(root/'AXPIndexerDaemon.pyw'), 'exec')"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop imports or pythonw.exe check failed' }
-          & stage/AXPIndexerNG/python/python.exe stage/AXPIndexerNG/scripts/verify_llama_runtime.py
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/verify_llama_runtime.py
           if ($LASTEXITCODE -ne 0) { throw 'Packaged llama.cpp ISA policy verification failed' }
-          & stage/AXPIndexerNG/python/python.exe -m axp_tray self-test --db stage/tray-self-test.db
+          & stage/AXPIndexerNG/python/python.exe -B -m axp_tray self-test --db stage/tray-self-test.db
           if ($LASTEXITCODE -ne 0) { throw 'Packaged tray self-test failed' }
           $sourceDb=(Join-Path (Resolve-Path stage).Path 'source-smoke.db')
-          & stage/AXPIndexerNG/python/python.exe -m axp_daemon source add --db $sourceDb --path 'D:\Process'
-          & stage/AXPIndexerNG/python/python.exe -m axp_daemon source add --db $sourceDb --path '\\SERVER\Documentation'
-          $sourceStatus=& stage/AXPIndexerNG/python/python.exe -m axp_daemon source list --db $sourceDb | ConvertFrom-Json
+          & stage/AXPIndexerNG/python/python.exe -B -m axp_daemon source add --db $sourceDb --path 'D:\Process'
+          & stage/AXPIndexerNG/python/python.exe -B -m axp_daemon source add --db $sourceDb --path '\\SERVER\Documentation'
+          $sourceStatus=& stage/AXPIndexerNG/python/python.exe -B -m axp_daemon source list --db $sourceDb | ConvertFrom-Json
           if ($sourceStatus.Count -ne 2) { throw 'Packaged multi-source CRUD smoke failed' }
           $launchers = Get-Content stage/AXPIndexerNG/AXPIndexerDaemon.bat,stage/AXPIndexerNG/AXPIndexerClient.bat -Raw
           if ($launchers.Contains('`r`n')) { throw 'BAT launcher contains literal newline escape text' }
@@ -77,9 +79,16 @@ jobs:
           $null = Invoke-Checked $daemon @('status','--db',$db)
           $null = Invoke-Checked $client @('health','--db',$db)
           $null = Invoke-Checked $client @('search','--db',$db,'--query','reactor','--profile','hybrid')
-          $before=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime before cleanup: $before bytes"
-          Get-ChildItem stage -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          # Inventory the actual staged tree before pruning; file and small-file counts are first-class metrics.
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py audit stage/AXPIndexerNG
+          if ($LASTEXITCODE -ne 0) { throw 'Portable runtime pre-prune audit failed' }
+          & stage/AXPIndexerNG/python/python.exe -B -m pip freeze
+          if ($LASTEXITCODE -ne 0) { throw 'Installed package audit failed' }
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py prune stage/AXPIndexerNG
+          if ($LASTEXITCODE -ne 0) { throw 'Portable runtime pruning or cache sanitation failed' }
           Get-ChildItem stage/AXPIndexerNG/data -File -Recurse | Remove-Item -Force
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py verify stage/AXPIndexerNG
+          if ($LASTEXITCODE -ne 0) { throw 'Final portable runtime cache verification failed' }
           if (Get-ChildItem stage/AXPIndexerNG -File -Recurse -Filter *.gguf) { throw 'GGUF models must not be packaged' }
           $llamaPackage=Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse -Filter llama_cpp | Select-Object -First 1
           if (!$llamaPackage -or !(Get-ChildItem $llamaPackage.FullName -File -Recurse | Where-Object Extension -In '.dll','.pyd')) { throw 'llama_cpp native runtime missing' }
@@ -90,10 +99,22 @@ jobs:
           Get-ChildItem stage -File -Recurse | Sort-Object Length -Descending | Select-Object -First 50 FullName,Length
           if ($after -gt 450MB) { throw 'Runtime exceeds 450 MiB' } elseif ($after -gt 400MB) { Write-Warning 'Runtime exceeds 400 MiB qualified baseline' }
           $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
-          & stage/AXPIndexerNG/python/python.exe -m pip freeze
-          # Store files without DEFLATE compression: the runtime is larger to download, but extracts much faster.
+          # Qualify the final post-prune runtime, rather than only the installation-time tree.
+          & stage/AXPIndexerNG/python/python.exe -B -c "import tkinter,pystray,PIL,openpyxl,sqlite3,fastembed,psutil,cpuinfo,llama_cpp,importlib.metadata; print('post-prune imports ok')"
+          if ($LASTEXITCODE -ne 0) { throw 'Post-prune packaged import smoke failed' }
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/verify_llama_runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Post-prune llama.cpp runtime verification failed' }
+          & stage/AXPIndexerNG/python/python.exe -B -m axp_tray self-test --db stage/post-prune-tray-self-test.db
+          if ($LASTEXITCODE -ne 0) { throw 'Post-prune tray self-test failed' }
+          $null = Invoke-Checked $daemon @('health','--db',$db)
+          $null = Invoke-Checked $client @('search','--db',$db,'--query','reactor','--profile','hybrid')
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py verify stage/AXPIndexerNG
+          if ($LASTEXITCODE -ne 0) { throw 'Post-prune smoke recreated forbidden cache artifacts' }
+          # Store files without DEFLATE compression: many small files extract faster without DEFLATE.
           Compress-Archive stage/AXPIndexerNG dist.zip -CompressionLevel NoCompression
           $version=if($env:GITHUB_REF_TYPE -eq 'tag'){$env:GITHUB_REF_NAME.TrimStart('v')}else{'0.1.0-dev'}; $name="AXPIndexerNG-runtime-$version.zip"; Move-Item dist.zip $name
+          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py verify-zip $name
+          if ($LASTEXITCODE -ne 0) { throw 'STORE ZIP metadata/cache verification failed' }
           (Get-FileHash $name).Hash.ToLower()+"  $name" | Set-Content "$name.sha256"; "ARTIFACT=$name" | Out-File $env:GITHUB_ENV -Append
           $zipBytes=(Get-Item $name).Length
           $alpha2Bytes=109473024

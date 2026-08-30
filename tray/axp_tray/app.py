@@ -25,7 +25,7 @@ from axp_daemon.service import send_control
 
 from .background_task import TaskSchedulerBackend
 from .icons import make_icon
-from .process import ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
+from .process import cleanup_owned_processes, ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
 from .sources_window import SourcesWindow
 from .startup import is_enabled, repair_registration, set_enabled
 from .state import read_daemon_state, should_auto_restart, tooltip
@@ -202,32 +202,35 @@ class TrayApplication:
         threading.Thread(target=self._shutdown_worker, name="axp-shutdown", daemon=True).start()
 
     def _shutdown_worker(self):
+        LOGGER.info("Shutdown requested")
         background = self.settings.get("daemon_runtime_mode") == "scheduled_task"
         if not background:
             try:
-                LOGGER.info("Daemon shutdown requested from tray exit")
+                LOGGER.info("Daemon graceful shutdown requested")
                 stop_daemon(intentional=True)
             except Exception:
                 LOGGER.exception("Daemon shutdown request failed")
         try:
             if stop_client(self.settings):
-                LOGGER.info("Web client shutdown requested from tray exit")
+                LOGGER.info("Client graceful shutdown requested")
         except Exception:
             LOGGER.exception("Web client shutdown request failed")
 
-        if not background:
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                if read_daemon_state().get("state") == "stopped":
-                    LOGGER.info("Daemon stopped")
-                    break
-                time.sleep(0.1)
+        roles = {"client"} if background else {"client", "daemon"}
+        try:
+            cleanup_owned_processes(roles)
+        except Exception:
+            LOGGER.exception("Owned process cleanup failed")
         LOGGER.info("AXPIndexerNG tray exiting")
         try:
             self.icon.stop()
         except Exception:
             LOGGER.exception("Could not stop tray icon")
-        self._on_tk(self.root.quit)
+        self._on_tk(self._close_tk)
+
+    def _close_tk(self):
+        self.root.quit()
+        self.root.destroy()
 
     def _poll(self):
         if self.shutting_down:
@@ -269,8 +272,10 @@ class TrayApplication:
         self.icon.run_detached()
         self._drain_ui_queue()
         self._poll()
-        self.root.mainloop()
-        self.lock.release()
+        try:
+            self.root.mainloop()
+        finally:
+            self.lock.release()
 
 
 def self_test(db=None):

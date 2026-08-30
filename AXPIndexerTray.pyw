@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 for folder in ("shared", "daemon", "client", "tray"):
     sys.path.insert(0, str(ROOT / folder))
 os.environ.setdefault("AXPINDEXER_DATA_DIR", str(ROOT / "data"))

@@ -39,7 +39,7 @@ def task_xml(principal, executable, launcher, working_directory, installation_id
 <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{principal}</UserId></LogonTrigger></Triggers>
 <Principals><Principal id="Author"><UserId>{principal}</UserId><LogonType>Password</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
-<Actions Context="Author"><Exec><Command>{executable}</Command><Arguments>&quot;{launcher}&quot; --scheduled-task</Arguments><WorkingDirectory>{working_directory}</WorkingDirectory></Exec></Actions></Task>'''
+<Actions Context="Author"><Exec><Command>{executable}</Command><Arguments>-B &quot;{launcher}&quot; --scheduled-task</Arguments><WorkingDirectory>{working_directory}</WorkingDirectory></Exec></Actions></Task>'''
 
 
 @dataclass
@@ -79,7 +79,7 @@ class TaskSchedulerBackend:
             root = ET.fromstring(xml)
             def find(path):
                 return root.findtext(path, namespaces={"t": NS}) or ""
-            expected = (str(self.executable), f'"{self.launcher}" --scheduled-task', str(self.root),
+            expected = (str(self.executable), f'-B "{self.launcher}" --scheduled-task', str(self.root),
                         self.principal, "Password", "LeastPrivilege")
             actual = (find(".//t:Command"), find(".//t:Arguments"), find(".//t:WorkingDirectory"),
                       find(".//t:Principal/t:UserId"), find(".//t:LogonType"), find(".//t:RunLevel"))

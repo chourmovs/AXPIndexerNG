@@ -20,6 +20,7 @@ def test_task_xml_security_and_policy():
                   "<Interval>PT1M</Interval>", "<StartWhenAvailable>true", "<DisallowStartIfOnBatteries>false",
                   "<StopIfGoingOnBatteries>false", "AXPIndexerDaemon.pyw", "<WorkingDirectory>"):
         assert value in xml
+    assert '<Arguments>-B &quot;' in xml
     folded = xml.casefold()
     assert "actual_password" not in folded
     assert "highestavailable" not in folded
