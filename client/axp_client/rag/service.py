@@ -63,6 +63,17 @@ class RagService:
             raise ChatBusyError
         self.backend.activate(settings, profile)
 
+    def run_when_idle(self, operation):
+        """Serialize runtime administration against load and generation."""
+        if not self._generation_lock.acquire(blocking=False):
+            raise ChatBusyError
+        try:
+            if self.operations.busy:
+                raise ChatBusyError
+            return operation()
+        finally:
+            self._generation_lock.release()
+
     def retry_model(self):
         self.backend.retry_load()
         return {"status": "reset", "model_state": self.health().get("model_state", "unloaded")}

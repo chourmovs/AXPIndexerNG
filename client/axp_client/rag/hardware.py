@@ -36,10 +36,14 @@ def windows_display_adapters():
 
 
 def detect_hardware(accelerator_executable=None):
+    if platform.system() != "Windows":
+        return HardwareCapabilities(platform.processor() or platform.machine() or "Unknown CPU",
+                                    accelerator_reason="unsupported_platform")
     adapters = windows_display_adapters()
     intel = next((name for name in adapters if "intel" in name.lower()
                   and "basic display" not in name.lower()), None)
-    available, reason = False, "accelerator_not_installed"
+    available = False
+    reason = "accelerator_not_installed" if intel else "no_intel_gpu"
     if accelerator_executable:
         try:
             probe = subprocess.run([str(accelerator_executable), "--list-devices"], capture_output=True,

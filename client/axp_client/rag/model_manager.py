@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from axp_core.runtime import atomic_write_json, load_settings, save_settings
 
 from .model_catalog import CATALOG_VERSION, MODELS, catalog_model
+from .runtime_manager import ALLOWED_DEVICES, InferenceDeviceError
 
 ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing"}
 APPROVED_HOSTS = ("huggingface.co", "hf.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co",
@@ -73,10 +74,15 @@ class ModelManager:
             result.append({**model.public(), "installed": self.model_path(model.id).is_file(),
                            "active": active == model.id, "partial_bytes": partial.stat().st_size if partial.exists() else 0,
                            "download": self._job.public() if self._job and self._job.model_id == model.id else None})
-        custom = settings.get("chat_model_path")
+        custom = settings.get("chat_model_path") if not active else None
+        health = self.runtime.health() if self.runtime else {}
         return {"catalog_version": CATALOG_VERSION, "active_model_id": active,
-                "models": result, "custom_model": {"name": "Custom local model", "installed": Path(custom).is_file(),
-                "active": not active} if custom else None}
+                "models": result, "custom_model": {"name": "Custom local model",
+                "filename": Path(custom).name, "installed": Path(custom).is_file(), "active": True} if custom else None,
+                "device": {key: health.get(key) for key in ("inference_device_requested",
+                    "inference_device_effective", "fallback_reason")},
+                "hardware": {key: health.get(key) for key in ("intel_gpu_detected", "intel_gpu_name",
+                    "accelerator_available", "accelerator_reason")}}
 
     def start_download(self, model_id, *, activate=False):
         model = catalog_model(model_id)
@@ -149,22 +155,60 @@ class ModelManager:
             if exc.code in ("integrity_mismatch", "invalid_gguf"): part.unlink(missing_ok=True)
         except ssl.SSLError:
             self._state(job, "failed", "tls_error")
-        except (urllib.error.URLError, OSError):
+        except urllib.error.URLError as exc:
+            self._state(job, "failed", "tls_error" if isinstance(exc.reason, ssl.SSLError) else "network_error")
+        except OSError:
             self._state(job, "failed", "network_error")
 
     def activate(self, model_id):
         model = catalog_model(model_id); path = self.model_path(model_id)
         if model is None: raise ModelManagerError("model_not_found")
         if not path.is_file() or not self.manifest_path(model_id).is_file(): raise ModelManagerError("model_not_installed")
-        if self.runtime and self.runtime.busy: raise ModelManagerError("chat_busy")
-        settings = load_settings(); previous = dict(settings)
-        settings.update(chat_active_model_id=model_id, chat_model_path=str(path))
+        def transaction():
+            settings = load_settings(); previous = dict(settings)
+            settings.update(chat_active_model_id=model_id, chat_model_path=str(path))
+            replacement = None
+            controller = getattr(self.runtime, "backend", self.runtime)
+            try:
+                if controller and callable(getattr(controller, "prepare_activation", None)):
+                    replacement = controller.prepare_activation(settings, model)
+                save_settings(settings)
+                if replacement is not None:
+                    controller.commit_activation(settings, replacement)
+                elif self.runtime:
+                    self.runtime.activate(settings, model)
+            except Exception:
+                if replacement is not None and callable(getattr(replacement, "close", None)):
+                    replacement.close()
+                save_settings(previous); raise
+            return self.catalog()
         try:
-            save_settings(settings)
-            if self.runtime: self.runtime.activate(settings, model)
-        except Exception:
-            save_settings(previous); raise
-        return self.catalog()
+            return self.runtime.run_when_idle(transaction) if callable(getattr(self.runtime, "run_when_idle", None)) else transaction()
+        except Exception as exc:
+            if type(exc).__name__ == "ChatBusyError": raise ModelManagerError("chat_busy") from exc
+            raise
+
+    def set_device(self, device):
+        if device not in ALLOWED_DEVICES:
+            raise ModelManagerError("invalid_inference_device")
+        def transaction():
+            settings = load_settings(); previous = dict(settings)
+            settings["chat_inference_device"] = device
+            controller = getattr(self.runtime, "backend", self.runtime)
+            try:
+                if controller: controller.set_device(device)
+                save_settings(settings)
+            except InferenceDeviceError as exc:
+                raise ModelManagerError(str(exc)) from exc
+            except Exception:
+                if controller: controller.set_device(previous.get("chat_inference_device", "auto"))
+                raise
+            return self.catalog()
+        try:
+            return self.runtime.run_when_idle(transaction) if callable(getattr(self.runtime, "run_when_idle", None)) else transaction()
+        except Exception as exc:
+            if type(exc).__name__ == "ChatBusyError": raise ModelManagerError("chat_busy") from exc
+            raise
 
     def remove(self, model_id):
         if load_settings().get("chat_active_model_id") == model_id: raise ModelManagerError("model_active")

@@ -88,7 +88,7 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            if urlparse(self.path).path.startswith("/api/ask"):
+            if urlparse(self.path).path.startswith(("/api/ask", "/api/models")):
                 self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
@@ -159,6 +159,22 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
         def do_POST(self):
             url = urlparse(self.path)
             parts = url.path.strip("/").split("/")
+            if url.path == "/api/models/device":
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                if model_manager is None:
+                    return self.send_json({"error": "not_configured"}, 503)
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(body, dict) or not isinstance(body.get("device"), str):
+                        return self.send_json({"error": "invalid_inference_device"}, 400)
+                    return self.send_json(model_manager.set_device(body["device"]))
+                except (ValueError, json.JSONDecodeError):
+                    return self.send_json({"error": "invalid_request"}, 400)
+                except ModelManagerError as exc:
+                    status = 409 if exc.code in ("chat_busy", "intel_gpu_unavailable") else 400
+                    return self.send_json({"error": exc.code, **exc.details}, status)
             if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
                     "download", "cancel", "activate", "remove"):
                 if not self.local_action_allowed():

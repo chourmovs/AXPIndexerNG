@@ -43,8 +43,9 @@ def add_document(db, path, document_id=42):
 
 
 @contextmanager
-def running_server(db, opener, rag_service=None):
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(db, None, opener, rag_service))
+def running_server(db, opener, rag_service=None, model_manager=None):
+    handler = server.make_handler(db, None, opener, rag_service, model_manager)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     try:
@@ -185,3 +186,15 @@ def test_ask_endpoint_rejects_remote_before_reading_body():
     handler.send_json = lambda value, status=200: response.update(value=value, status=status)
     handler.do_POST()
     assert response == {"value": {"error": "ask is only available locally"}, "status": 403}
+
+
+def test_inference_device_endpoint_validates_and_updates_manager(tmp_path):
+    class Models:
+        def __init__(self): self.devices = []
+        def set_device(self, device): self.devices.append(device); return {"device": device}
+    models = Models()
+    with running_server(tmp_path / "unused.db", lambda _: None, model_manager=models) as httpd:
+        valid, body = post_json(httpd, "/api/models/device", b'{"device":"cpu"}')
+        invalid, _ = post_json(httpd, "/api/models/device", b'{"device":3}')
+    assert valid == 200 and json.loads(body) == {"device": "cpu"}
+    assert invalid == 400 and models.devices == ["cpu"]

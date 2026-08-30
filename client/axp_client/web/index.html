@@ -18,8 +18,8 @@
     <button id="manage-ai" type="button" class="secondary compact">Manage local AI</button>
     <aside id="model-manager" class="model-manager" hidden><h3>Local AI models</h3><div id="model-list"></div>
       <fieldset><legend>Inference device</legend><label><input type="radio" name="device" value="auto" checked> Auto — recommended</label>
-      <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU</label></fieldset>
-      <button type="button" class="secondary">Benchmark this PC</button></aside>
+      <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU <span id="intel-device-status">— unavailable</span></label></fieldset>
+      <p id="model-manager-error" class="inline-error" aria-live="polite"></p></aside>
     <div id="chat-history" class="chat-history"></div>
     <form id="ask-form" class="ask-form"><label for="ask-input">Ask a question about your indexed documents</label>
       <textarea id="ask-input" maxlength="4000" rows="3" placeholder="Why was the process changed?"></textarea>
