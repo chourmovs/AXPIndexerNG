@@ -2,9 +2,15 @@
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+from urllib.parse import urlparse
 
-from axp_client.rag.model_catalog import MODELS
-from axp_client.rag.model_manager import TrustedRedirectHandler
+ROOT = Path(__file__).resolve().parents[1]
+for package_root in (ROOT / "client", ROOT / "shared"):
+    sys.path.insert(0, str(package_root))
+
+from axp_client.rag.model_catalog import MODELS  # noqa: E402
+from axp_client.rag.model_manager import TrustedRedirectHandler  # noqa: E402
 
 
 def main():
@@ -12,6 +18,9 @@ def main():
     failures = []
     for model in MODELS:
         try:
+            parsed = urlparse(model.url)
+            if parsed.scheme != "https" or f"/resolve/{model.revision}/" not in parsed.path:
+                raise ValueError("catalog URL is not immutable HTTPS")
             with opener.open(urllib.request.Request(model.url, method="HEAD"), timeout=30) as response:
                 linked_size = int(response.headers.get("X-Linked-Size") or response.headers["Content-Length"])
                 linked_hash = (response.headers.get("X-Linked-Etag") or response.headers.get("ETag", "")).strip('"')

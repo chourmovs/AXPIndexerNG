@@ -153,6 +153,8 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 "text/css" if names[url.path].endswith(".css") else
                 "text/html" if names[url.path].endswith(".html") else "text/javascript",
             )
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
 
