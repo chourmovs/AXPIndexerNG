@@ -27,6 +27,7 @@ def main(argv=None):
     model_import.add_argument("--file", required=True)
     model_sub.add_parser("status")
     model_sub.add_parser("verify")
+    model_sub.add_parser("test")
     model_remove = model_sub.add_parser("remove")
     model_remove.add_argument("--yes", action="store_true")
     evaluation = s.add_parser("rag-eval")
@@ -66,6 +67,20 @@ def main(argv=None):
             print(json.dumps(model_status(path)))
         elif a.model_cmd == "verify":
             print(json.dumps(verify_model(path)))
+        elif a.model_cmd == "test":
+            backend = create_chat_backend(load_settings())
+            started = __import__("time").perf_counter()
+            try:
+                backend.ensure_loaded()
+                load_ms = (__import__("time").perf_counter() - started) * 1000
+                tokenizer_ok = backend.count_tokens("AXP local model self test") > 0
+                answer = backend.generate(system_prompt="Answer briefly.", user_prompt="Reply with OK.")
+                print(json.dumps({"load_ok": True, "load_ms": load_ms, "tokenizer_ok": tokenizer_ok,
+                                  "generation_ok": bool(answer)}))
+            except Exception as exc:
+                LOGGER.exception("Chat model self-test failed type=%s", type(exc).__name__)
+                print(json.dumps({"load_ok": False, "failure_type": type(exc).__name__,
+                                  "failure_message": str(exc)[:240]}))
         elif not a.yes:
             p.error("chat-model remove requires --yes")
         else:

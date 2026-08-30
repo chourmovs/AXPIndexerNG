@@ -1,15 +1,18 @@
-import {askHealth, askStream} from './api.js';
+import {askHealth, askStream, retryAskModel} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
-const progressLabels = {retrieval_started: 'Searching indexed documents…', retrieval_complete: 'Checking whether the evidence is sufficient…',
-  gate_complete: 'Evidence check complete…', context_ready: 'Preparing evidence…', generation_started: 'Generating locally…',
-  validation_started: 'Validating citations…'};
+const progressLabels = {retrieval_started: 'Searching indexed documents…', retrieval_complete: 'Retrieved candidate passages…',
+  model_load_started: 'Loading local AI model…', model_load_heartbeat: 'Loading local AI model…', model_load_complete: 'Local AI model loaded.',
+  context_preparation_started: 'Preparing evidence…', context_ready: 'Evidence prepared.', generation_started: 'Generating answer locally…',
+  generation_heartbeat: 'Generating answer locally…', generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
   local_generation_failed: 'The local answer model could not complete this request.',
   chat_model_unavailable: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
   model_missing: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
-  model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local model could not be loaded.'};
+  model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local answer model could not be loaded.',
+  context_preparation_failed: 'AXP could not prepare the indexed evidence.', validation_failed: 'AXP could not validate the local answer.',
+  stream_incomplete: 'AXP lost the local processing stream unexpectedly.', stream_internal_error: 'AXP could not complete this request.'};
 
 function renderAnswerText(container, answer, turnId) {
   const matcher = /\[S(\d+)\]/g; let offset = 0;
@@ -44,23 +47,36 @@ function renderResponse(article, response, turn) {
 export function initAsk() {
   const form = document.querySelector('#ask-form'), input = document.querySelector('#ask-input'), submit = document.querySelector('#ask-submit');
   const history = document.querySelector('#chat-history'), progress = document.querySelector('#ask-progress'), health = document.querySelector('#ask-health');
-  let checked = false, busy = false, turn = 0;
+  let checked = false, busy = false, turn = 0, timer = null, phaseStarted = 0, lastBackend = 0;
+  const formatElapsed = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} elapsed`;
+  let liveLabel = '';
+  const updateProgress = () => { const elapsed = Math.floor((Date.now() - phaseStarted) / 1000), quiet = Math.floor((Date.now() - lastBackend) / 1000);
+    progress.replaceChildren(element('strong', '', liveLabel), element('small', '', formatElapsed(elapsed)),
+      element('small', quiet >= 10 ? 'stalled' : '', quiet >= 10 ? `No backend heartbeat for ${quiet} s — processing may be stalled.` : `Backend heartbeat: ${quiet < 1 ? '< 1' : quiet} s ago`)); };
   input.addEventListener('input', () => { submit.disabled = busy || !input.value.trim(); });
   input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!submit.disabled) form.requestSubmit(); } });
   document.querySelector('#clear-chat').addEventListener('click', () => { history.replaceChildren(); progress.textContent = ''; });
   form.addEventListener('submit', async event => { event.preventDefault(); const question = input.value.trim(); if (!question || busy) return;
     busy = true; submit.disabled = true; input.disabled = true; turn += 1; const current = turn;
     const user = element('article', 'turn user-turn'); user.append(element('h3', '', 'You'), element('p', '', question));
-    const axp = element('article', 'turn axp-turn'); axp.append(element('h3', '', 'AXP')); history.append(user, axp); input.value = '';
-    try { await askStream(question, message => { if (progressLabels[message.event]) {
-          progress.textContent = message.event === 'generation_started' && !message.model_was_loaded ? 'Loading local model and generating locally…' : progressLabels[message.event];
-        } else if (message.event === 'final') { progress.textContent = ''; renderResponse(axp, message.response, current); }
+    const axp = element('article', 'turn axp-turn'); axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
+    phaseStarted = lastBackend = Date.now(); liveLabel = 'Starting local processing…'; updateProgress(); timer = setInterval(updateProgress, 1000);
+    try { await askStream(question, message => { lastBackend = Date.now();
+        if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; updateProgress(); }
+        else if (message.event === 'gate_complete') { liveLabel = message.answerable ? 'Evidence is sufficient…' : 'Evidence is insufficient…'; updateProgress(); }
+        else if (message.event === 'final') { axp.querySelector('.working')?.remove(); renderResponse(axp, message.response, current); }
         else if (message.event === 'error') throw Object.assign(new Error(errors[message.error] || 'AXP could not complete this request.'), {code: message.error}); });
-    } catch (exception) { progress.textContent = ''; axp.append(element('p', 'inline-error', errors[exception.code] || exception.message || 'AXP could not complete this request.')); }
-    finally { busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
+    } catch (exception) { axp.querySelector('.working')?.remove(); axp.append(element('p', 'inline-error', errors[exception.code] || exception.message || 'AXP could not complete this request.')); }
+    finally { clearInterval(timer); progress.replaceChildren();
+      if (!axp.querySelector('.answer-text, .inline-error')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
+      busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
   });
   return {open: async () => { if (checked) return; checked = true; try { const state = await askHealth();
-      if (state.available) health.textContent = state.model_loaded ? `● Local AI ready${state.model_name ? ` · ${state.model_name}` : ''}` : '● Local AI ready · Model will load on first answer';
-      else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : state.reason === 'model_load_failed' ? '⚠ Local model could not be loaded' : '○ Local answer model not configured';
+      if (state.model_state === 'loaded') health.textContent = `● Local AI ready · Model loaded${state.model_name ? ` · ${state.model_name}` : ''}`;
+      else if (state.model_state === 'loading') health.textContent = '● Loading local model…';
+      else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode('⚠ Local model load failed ')); const retry = element('button', 'retry-model', 'Retry model');
+        retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model detected · Not loaded yet'; } catch (_) { retry.disabled = false; } }); health.append(retry); }
+      else if (state.available) health.textContent = `● Local model detected · Not loaded yet${state.model_name ? ` · ${state.model_name}` : ''}`;
+      else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : '○ Local answer model not configured';
     } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }};
 }

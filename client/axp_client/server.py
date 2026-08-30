@@ -11,7 +11,15 @@ from axp_core.database import connect
 from axp_core.runtime import configure_logging, load_settings
 
 from .rag.factory import create_chat_backend
-from .rag.service import ChatBusyError, ChatUnavailableError, GenerationFailedError, RagService
+from .rag.service import (
+    ChatBusyError,
+    ChatUnavailableError,
+    ContextPreparationFailedError,
+    GenerationFailedError,
+    ModelLoadFailedError,
+    RagService,
+    ValidationFailedError,
+)
 from .reranker import Reranker
 from .search import search
 
@@ -145,6 +153,12 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
 
         def do_POST(self):
             url = urlparse(self.path)
+            if url.path == "/api/ask/model/retry":
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                if rag_service is None:
+                    return self.send_json({"error": "chat_model_unavailable"}, 503)
+                return self.send_json(rag_service.retry_model())
             if url.path in ("/api/ask", "/api/ask/stream"):
                 def send(value, status=200):
                     return self.send_json(value, status)
@@ -187,9 +201,23 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.end_headers()
 
+                    terminal_sent = False
+                    disconnected = False
+
                     def progress(event):
-                        self.wfile.write(json.dumps(event).encode() + b"\n")
-                        self.wfile.flush()
+                        nonlocal terminal_sent, disconnected
+                        is_terminal = event.get("event") in ("final", "error")
+                        if is_terminal:
+                            if terminal_sent:
+                                return
+                            terminal_sent = True
+                        try:
+                            self.wfile.write(json.dumps(event).encode() + b"\n")
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            disconnected = True
+                            if not is_terminal:
+                                raise
 
                     try:
                         response = rag_service.ask(question, debug=body.get("debug", False), progress=progress)
@@ -202,6 +230,28 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         progress({"event": "error", "error": "chat_busy"})
                     except GenerationFailedError:
                         progress({"event": "error", "error": "local_generation_failed"})
+                    except ModelLoadFailedError:
+                        progress({"event": "error", "error": "model_load_failed"})
+                    except ContextPreparationFailedError:
+                        progress({"event": "error", "error": "context_preparation_failed"})
+                    except ValidationFailedError:
+                        progress({"event": "error", "error": "validation_failed"})
+                    except (BrokenPipeError, ConnectionResetError):
+                        disconnected = True
+                        LOGGER.info("Ask stream client disconnected")
+                    except Exception:
+                        LOGGER.exception("Unexpected Ask stream failure")
+                        if not terminal_sent:
+                            try:
+                                progress({"event": "error", "error": "stream_internal_error"})
+                            except (BrokenPipeError, ConnectionResetError):
+                                disconnected = True
+                    finally:
+                        if not terminal_sent and not disconnected:
+                            try:
+                                progress({"event": "error", "error": "stream_internal_error"})
+                            except (BrokenPipeError, ConnectionResetError):
+                                LOGGER.info("Ask stream client disconnected before terminal event")
                     return
                 try:
                     return send(rag_service.ask(question, debug=body.get("debug", False)))
@@ -214,6 +264,12 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 except GenerationFailedError:
                     return send({"status": "generation_unavailable", "answerable": False,
                                            "error": "local_generation_failed"}, 503)
+                except ModelLoadFailedError:
+                    return send({"error": "model_load_failed"}, 503)
+                except ContextPreparationFailedError:
+                    return send({"error": "context_preparation_failed"}, 503)
+                except ValidationFailedError:
+                    return send({"error": "validation_failed"}, 503)
             if url.path == "/api/shutdown":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "shutdown is only available locally"}, 403)
