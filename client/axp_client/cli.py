@@ -36,7 +36,7 @@ def main(argv=None):
     evaluation.add_argument("--full", action="store_true")
     evaluation.add_argument("--output")
     evaluation.add_argument("--sweep", action="store_true")
-    for cmd in ("health", "search", "serve", "ask"):
+    for cmd in ("health", "search", "serve", "ask", "rag-diagnose"):
         q = s.add_parser(cmd)
         q.add_argument("--db", required=True)
         if cmd == "search":
@@ -58,6 +58,8 @@ def main(argv=None):
         if cmd == "ask":
             q.add_argument("--question", required=True)
             q.add_argument("--debug", action="store_true")
+        if cmd == "rag-diagnose":
+            q.add_argument("--query", required=True)
     a = p.parse_args(argv)
     if a.cmd == "chat-model":
         path = load_settings()["chat_model_path"]
@@ -101,6 +103,19 @@ def main(argv=None):
         return
     con = connect(a.db, readonly=True)
     e = embedder_for_index(con, cache_dir=os.getenv("FASTEMBED_CACHE_PATH"), local_only=True)
+    if a.cmd == "rag-diagnose":
+        service = RagService(backend=create_chat_backend(load_settings()), search_fn=search,
+                             connect_fn=connect, db=a.db, embedder=e)
+        retrieval, decision = service.evaluate_gate(a.query)
+        scores = [{key: row.get(key) for key in
+                   ("document_id", "chunk_id", "lexical_score", "vector_similarity", "hybrid_score")}
+                  for row in retrieval.candidates]
+        print(json.dumps({"query": a.query,
+                          "top_lexical_score": max((row.get("lexical_score") or 0 for row in scores), default=0),
+                          "top_vector_similarities": sorted(
+                              (row.get("vector_similarity") or 0 for row in scores), reverse=True)[:10],
+                          "scores": scores, "answerability": decision.public()}, ensure_ascii=False, indent=2))
+        return
     if a.cmd == "rag-eval":
         cases = load_cases(a.cases)
         rag = RagService(backend=create_chat_backend(load_settings()), search_fn=search, connect_fn=connect,

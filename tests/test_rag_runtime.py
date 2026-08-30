@@ -27,6 +27,12 @@ def test_gate_vector_lexical_and_content_identifier_rules():
     assert not decide_answerability([candidate(0.46, 0.3, exact_filename_match=True)]).answerable
 
 
+def test_field_thresholds_remain_unchanged():
+    config = AnswerabilityConfig()
+    assert (config.strong_vector_similarity, config.support_vector_similarity,
+            config.strong_lexical_coverage, config.support_lexical_coverage) == (0.55, 0.45, 0.50, 0.25)
+
+
 def test_backend_factory_has_no_fallback(tmp_path):
     backend = create_chat_backend({"chat_backend": "llama_cpp", "chat_model_path": tmp_path / "x.gguf"})
     assert isinstance(backend, LlamaCppBackend)
@@ -51,17 +57,48 @@ def test_model_import_is_atomic_hashed_and_retains_source(tmp_path):
         import_model(invalid, destination)
 
 
-def test_non_thinking_generation_and_reasoning_removal(monkeypatch, tmp_path):
+@pytest.mark.parametrize("model_name", ["Qwen3-1.7B-Q4_K_M.gguf", "SmolLM3-3B-Q4_K_M.gguf"])
+def test_llama_cpp_023_non_thinking_contract_for_curated_models(tmp_path, model_name):
     calls = {}
     class Model:
-        def create_chat_completion(self, **kwargs):
-            calls.update(kwargs)
+        def create_chat_completion(self, messages, max_tokens, temperature, top_p, top_k):
+            calls.update(messages=messages, max_tokens=max_tokens, temperature=temperature,
+                         top_p=top_p, top_k=top_k)
             return {"choices": [{"message": {"content": "<think>secret</think>Final [S1]"}}], "usage": {}}
-    backend = LlamaCppBackend(tmp_path / "unused", GenerationConfig())
+    backend = LlamaCppBackend(tmp_path / model_name, GenerationConfig())
     backend._model = Model()
     assert backend.generate(system_prompt="system", user_prompt="user") == "Final [S1]"
-    assert calls["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "chat_template_kwargs" not in calls
+    assert calls["messages"][0]["content"] == "/no_think\nsystem"
     assert calls["temperature"] > 0
+
+
+def test_future_chat_signature_uses_template_kwargs_without_text_directive(tmp_path):
+    calls = []
+    class Model:
+        def create_chat_completion(self, messages, max_tokens, temperature, top_p, top_k,
+                                   chat_template_kwargs=None):
+            calls.append(locals())
+            return {"choices": [{"message": {"content": "Final"}}], "usage": {}}
+    backend = LlamaCppBackend(tmp_path / "unused")
+    backend._model = Model()
+    assert backend.generate(system_prompt="system", user_prompt="user") == "Final"
+    assert calls[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert calls[0]["messages"][0]["content"] == "system"
+
+
+def test_internal_generation_type_error_is_not_retried(tmp_path):
+    calls = 0
+    class Model:
+        def create_chat_completion(self, messages, max_tokens, temperature, top_p, top_k):
+            nonlocal calls
+            calls += 1
+            raise TypeError("failure inside generation")
+    backend = LlamaCppBackend(tmp_path / "unused")
+    backend._model = Model()
+    with pytest.raises(TypeError, match="inside generation"):
+        backend.generate(system_prompt="system", user_prompt="user")
+    assert calls == 1
 
 
 def test_evaluator_metrics_and_sweep_are_conservative_and_deterministic():

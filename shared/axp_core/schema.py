@@ -2,6 +2,10 @@ SCHEMA_VERSION = 4
 PREVIOUS_SCHEMA_VERSION = 3
 CHUNKER_VERSION = 2
 EMBEDDING_INPUT_VERSION = 2
+# AXP-owned revision for vector-affecting backend/pooling semantics. Revision 1
+# identifies the pinned fastembed 0.8.0 implementation; legacy alpha5 indexes
+# without this field remain provisionally compatible until historical parity is resolved.
+EMBEDDING_SEMANTIC_VERSION = 1
 DISTANCE_METRIC = "cosine"
 
 SOURCES_SCHEMA = """

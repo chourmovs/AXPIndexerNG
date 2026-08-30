@@ -65,6 +65,16 @@ def test_gate_refuses_without_generation(tmp_path, rows, reason):
     assert backend.calls == []
 
 
+def test_answerability_log_exposes_non_content_signals(tmp_path, caplog):
+    rag, _ = service(tmp_path, [hit(0.31, lexical_coverage=0.82)])
+    with caplog.at_level("INFO", logger="axp_client"):
+        rag.ask("diagnostic question")
+    for field in ("request id=", "reason=topic_match_without_answer_support", "best_vector=0.3100",
+                  "best_lexical=0.8200", "strong_chunks=0", "support_chunks=0", "exact_matches=0",
+                  "documents=1", "results=1"):
+        assert field in caplog.text
+
+
 def test_metadata_is_related_not_evidence(tmp_path):
     rag, backend = service(tmp_path, [hit(0.99, document_id=2)], documents=((2, "metadata"),))
     response = rag.ask("question")
