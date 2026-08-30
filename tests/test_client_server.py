@@ -7,6 +7,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 from axp_client import server
+from axp_client.rag.service import ChatUnavailableError, ModelLoadFailedError
 
 
 def sqlite_connect(path, readonly=False):
@@ -175,6 +176,22 @@ def test_ask_request_limits_and_health_do_not_generate(tmp_path):
         answered, _ = post_json(httpd, "/api/ask", b'{"question":"local question"}')
     assert (malformed, empty, oversized, answered) == (400, 400, 413, 200)
     assert rag.calls == [("local question", False)]
+
+
+@pytest.mark.parametrize("exception", (ChatUnavailableError(), ModelLoadFailedError()))
+def test_ask_propagates_cpu_incompatibility_to_api(tmp_path, exception):
+    class Rag:
+        def health(self):
+            return {"available": False, "reason": "backend_cpu_incompatible",
+                    "failure_type": "backend_cpu_incompatible", "retryable": False}
+
+        def ask(self, question, debug=False):
+            raise exception
+
+    with running_server(tmp_path / "unused.db", lambda _: None, Rag()) as httpd:
+        status, body = post_json(httpd, "/api/ask", b'{"question":"local question"}')
+    assert status == 503
+    assert json.loads(body) == {"error": "backend_cpu_incompatible"}
 
 
 def test_ask_endpoint_rejects_remote_before_reading_body():
