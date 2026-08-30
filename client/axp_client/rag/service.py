@@ -2,13 +2,12 @@ import logging
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
 from .llama_cpp_backend import GenerationConfig
+from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
 from .retrieval import retrieve_rag_candidates
 
@@ -45,31 +44,42 @@ class RagService:
         self.backend, self.search_fn, self.connect_fn = backend, search_fn, connect_fn
         self.db, self.embedder = db, embedder
         self._generation_lock = threading.Lock()
+        self.operations = NativeOperationSupervisor()
 
     def health(self):
-        return self.backend.health()
+        return {**self.backend.health(), "generation_busy": self.operations.busy or self._generation_lock.locked()}
+
+    def close(self):
+        self.operations.close()
+        if callable(getattr(self.backend, "close", None)):
+            self.backend.close()
+
+    @property
+    def busy(self):
+        return self.operations.busy or self._generation_lock.locked()
+
+    def activate(self, settings, profile=None):
+        if self.busy:
+            raise ChatBusyError
+        self.backend.activate(settings, profile)
+
+    def run_when_idle(self, operation):
+        """Serialize runtime administration against load and generation."""
+        if not self._generation_lock.acquire(blocking=False):
+            raise ChatBusyError
+        try:
+            if self.operations.busy:
+                raise ChatBusyError
+            return operation()
+        finally:
+            self._generation_lock.release()
 
     def retry_model(self):
         self.backend.retry_load()
         return {"status": "reset", "model_state": self.health().get("model_state", "unloaded")}
 
-    @staticmethod
-    def _run_blocking(operation, heartbeat, *, interval=1.0):
-        """Run native work off the streaming thread and report truthful liveness."""
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="axp-chat-native")
-        future = executor.submit(operation)
-        started = time.perf_counter()
-        try:
-            while True:
-                try:
-                    return future.result(timeout=interval)
-                except FutureTimeoutError:
-                    heartbeat(round(time.perf_counter() - started, 1))
-        finally:
-            # Native llama.cpp calls cannot be cancelled safely. On disconnect,
-            # leave the one submitted operation to finish without holding up the
-            # streaming request thread.
-            executor.shutdown(wait=False, cancel_futures=True)
+    def _run_blocking(self, operation, heartbeat, *, interval=1.0):
+        return self.operations.run(operation, heartbeat, interval=interval)
 
     def retrieve(self, question):
         with self.connect_fn(self.db, readonly=True) as con:
@@ -86,6 +96,9 @@ class RagService:
                 progress({"event": event, **details})
 
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
+        if self.operations.busy or not self._generation_lock.acquire(blocking=False):
+            raise ChatBusyError
+        self._generation_lock.release()
         if not self.health().get("available"):
             raise ChatUnavailableError
         emit("retrieval_started")

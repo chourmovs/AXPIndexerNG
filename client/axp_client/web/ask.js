@@ -1,4 +1,4 @@
-import {askHealth, askStream, retryAskModel} from './api.js';
+import {askHealth, askStream, retryAskModel, localModels, modelAction, setInferenceDevice} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
@@ -13,6 +13,13 @@ const errors = {chat_busy: 'AXP is already generating an answer. Please wait for
   model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local answer model could not be loaded.',
   context_preparation_failed: 'AXP could not prepare the indexed evidence.', validation_failed: 'AXP could not validate the local answer.',
   stream_incomplete: 'AXP lost the local processing stream unexpectedly.', stream_internal_error: 'AXP could not complete this request.'};
+const downloadErrors = {network_error: 'Download blocked or unavailable on this network. You can still import an approved local GGUF file.',
+  tls_error: 'The secure connection could not be verified. AXP did not weaken TLS validation.',
+  integrity_mismatch: 'The download did not match its expected cryptographic identity and was not installed.',
+  invalid_gguf: 'The downloaded file is not a valid GGUF model and was not installed.',
+  insufficient_disk: 'There is not enough free disk space for this model.',
+  download_cancelled: 'Download cancelled. The verified partial data can be resumed later.'};
+const activeDownloadStates = new Set(['queued', 'connecting', 'downloading', 'verifying', 'installing']);
 
 function renderAnswerText(container, answer, turnId) {
   const matcher = /\[S(\d+)\]/g; let offset = 0;
@@ -71,12 +78,51 @@ export function initAsk() {
       if (!axp.querySelector('.answer-text, .inline-error')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
   });
-  return {open: async () => { if (checked) return; checked = true; try { const state = await askHealth();
-      if (state.model_state === 'loaded') health.textContent = `● Local AI ready · Model loaded${state.model_name ? ` · ${state.model_name}` : ''}`;
+  const manager = document.querySelector('#model-manager'), list = document.querySelector('#model-list');
+  const managerError = document.querySelector('#model-manager-error'); let downloadTimer;
+  const action = async (model, name, body={}) => { managerError.textContent = ''; try { await modelAction(model.id, name, body); await renderManager(); await refreshHealth(); }
+    catch (exception) { managerError.textContent = downloadErrors[exception.code] || exception.message; } };
+  const makeButton = (label, handler, secondary=false) => { const button=element('button', `${secondary ? 'secondary ' : ''}compact`, label); button.type='button'; button.addEventListener('click', handler); return button; };
+  async function renderManager(){
+    clearTimeout(downloadTimer); const catalog = await localModels(); const cards=[]; let downloading=false;
+    for (const model of catalog.models) { const card=element('article','model-card');
+      card.append(element('strong','',`${model.name}${model.active ? ' · ACTIVE' : ''}`),
+        element('p','muted',`${model.profile === 'fast' ? 'Fast · Recommended for standard workstations' : 'Balanced'} · ${model.display_size} · ${model.license}`),
+        element('small','',`${model.repository} · ${model.quantization}`));
+      const job=model.download;
+      if (job && activeDownloadStates.has(job.state)) { downloading=true; const bar=element('progress'); bar.max=100; bar.value=job.percentage;
+        card.append(element('strong','download-state',downloadLabel(job.state)),bar,
+          element('small','',`${job.percentage.toFixed(1)}% · ${formatBytes(job.bytes_downloaded)} / ${formatBytes(job.bytes_total)} · ${formatRate(job.bytes_per_second)}${formatEta(job.eta_seconds)}`),
+          makeButton('Cancel',()=>action(model,'cancel'),true));
+      } else { if (job?.state === 'failed' || job?.state === 'cancelled') card.append(element('p','inline-error',downloadErrors[job.error] || `Download ${job.state}.`));
+        if (!model.installed) card.append(makeButton(model.partial_bytes ? 'Resume download' : 'Download & activate',()=>{ if (model.partial_bytes || confirmDownload(model)) action(model,'download',{activate:true}); }));
+        else if (!model.active) card.append(makeButton('Activate',()=>action(model,'activate')),makeButton('Remove',()=>{ if (confirm(`Remove ${model.name} from AXP?`)) action(model,'remove'); },true));
+        else card.append(element('small','active-status','Active model')); }
+      cards.push(card);
+    }
+    if (catalog.custom_model) { const custom=element('article','model-card'); custom.append(element('strong','',`Custom local model${catalog.custom_model.active ? ' · ACTIVE' : ''}`),
+      element('p','muted',catalog.custom_model.filename),element('small','',catalog.custom_model.installed ? 'Installed' : 'Configured file is missing')); cards.push(custom); }
+    list.replaceChildren(...cards); const requested=catalog.device.inference_device_requested || 'auto';
+    document.querySelectorAll('input[name="device"]').forEach(radio=>{ radio.checked=radio.value===requested; });
+    const intel=document.querySelector('input[name="device"][value="intel_gpu"]'); intel.disabled=!catalog.hardware.accelerator_available;
+    document.querySelector('#intel-device-status').textContent=catalog.hardware.accelerator_available ? '— available' : `— unavailable (${catalog.hardware.accelerator_reason || 'not installed'})`;
+    if (downloading && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
+  }
+  document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
+  document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }
+    catch(exception){ managerError.textContent=exception.code==='intel_gpu_unavailable' ? 'Intel GPU inference is unavailable; CPU remains active.' : exception.message; await renderManager(); } }));
+  function confirmDownload(model){ return confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`); }
+  function downloadLabel(state){ return {queued:'Queued…',connecting:'Connecting…',downloading:'Downloading…',verifying:'Verifying SHA-256…',installing:'Installing model…'}[state] || state; }
+  function formatBytes(value){ return value >= 1e9 ? `${(value/1e9).toFixed(2)} GB` : `${(value/1e6).toFixed(1)} MB`; }
+  function formatRate(value){ return value ? `${(value/1048576).toFixed(1)} MB/s` : 'Calculating speed'; }
+  function formatEta(value){ if(value==null)return ''; const seconds=Math.ceil(value); return ` · ~${Math.floor(seconds/60)}m ${String(seconds%60).padStart(2,'0')}s remaining`; }
+  async function refreshHealth(){ try { const state = await askHealth();
+      if (state.model_state === 'loaded') health.textContent = `● Local AI ready · ${state.active_model_name || state.model_name || 'Local model'} · ${state.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : 'CPU'}${state.fallback_reason ? ' · Intel GPU unavailable' : ''}`;
       else if (state.model_state === 'loading') health.textContent = '● Loading local model…';
       else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode('⚠ Local model load failed ')); const retry = element('button', 'retry-model', 'Retry model');
         retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model detected · Not loaded yet'; } catch (_) { retry.disabled = false; } }); health.append(retry); }
       else if (state.available) health.textContent = `● Local model detected · Not loaded yet${state.model_name ? ` · ${state.model_name}` : ''}`;
       else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : '○ Local answer model not configured';
-    } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }};
+    } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }
+  let healthTimer; return {open: async () => { checked = true; await refreshHealth(); clearInterval(healthTimer); healthTimer=setInterval(() => { if (!document.querySelector('#ask-panel').hidden) refreshHealth(); }, 7500); }};
 }
