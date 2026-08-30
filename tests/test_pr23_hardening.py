@@ -95,11 +95,25 @@ def test_avx_preflight_is_cpu_incompatible_and_non_retryable(tmp_path):
     assert health["retryable"] is False
 
 
+def test_template_syntax_failure_is_incompatible_not_corrupt_or_retryable(tmp_path):
+    TemplateSyntaxError = type("TemplateSyntaxError", (Exception,), {"__module__": "jinja2.exceptions"})
+    model = tmp_path / "verified.gguf"
+    model.write_bytes(b"GGUF")
+    failure = classify_load_failure(TemplateSyntaxError("unknown tag 'future'"), model)
+    assert failure == {
+        "failure_type": "model_template_incompatible",
+        "failure_code": None,
+        "failure_reason": "The selected model uses a chat template that is incompatible with this AXP runtime.",
+        "retryable": False,
+    }
+
+
 def test_frontend_selected_ready_and_retry_contract():
     source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text(encoding="utf-8")
     assert "model.model_loaded ? ' · ACTIVE · READY'" in source
     assert "model.model_state === 'loading' ? ' · SELECTED · LOADING'" in source
-    assert "model.model_state === 'failed' ? ' · SELECTED · LOAD FAILED'" in source
+    assert "model.model_state === 'failed' ?" in source
+    assert "INCOMPATIBLE CHAT TEMPLATE" in source
     assert "state.retryable === true" in source
     assert "backend_cpu_incompatible: 'This AXP build requires CPU instructions unavailable on this PC.'" in source
     assert "state.reason === 'backend_cpu_incompatible'" in source
@@ -115,7 +129,7 @@ def test_ci_wheel_index_and_release_source_build_are_distinct():
     requirements = (root / "requirements-runtime.txt").read_text(encoding="utf-8")
     release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "https://abetlen.github.io/llama-cpp-python/whl/cpu" in requirements
-    assert "llama-cpp-python==0.3.23" in requirements
+    assert "llama-cpp-python==0.3.24" in requirements
     assert "--no-binary llama-cpp-python" in release
     assert "-DGGML_NATIVE=OFF" in release
     assert "-DGGML_LLAMAFILE=OFF" in release

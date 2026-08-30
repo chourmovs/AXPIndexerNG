@@ -13,6 +13,7 @@ const errors = {chat_busy: 'AXP is already generating an answer. Please wait for
   backend_missing: 'The local AI runtime is not installed correctly.',
   model_missing: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
   model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local answer model could not be loaded.',
+  model_template_incompatible: 'The selected model uses a chat template that is incompatible with this AXP runtime.',
   context_preparation_failed: 'AXP could not prepare the indexed evidence.', validation_failed: 'AXP could not validate the local answer.',
   stream_incomplete: 'AXP lost the local processing stream unexpectedly.', stream_internal_error: 'AXP could not complete this request.'};
 const downloadErrors = {network_error: 'Download blocked or unavailable on this network. You can still import an approved local GGUF file.',
@@ -89,7 +90,8 @@ export function initAsk() {
     clearTimeout(downloadTimer); const catalog = await localModels(); const cards=[]; let downloading=false;
     for (const model of catalog.models) { const card=element('article','model-card');
       const stateLabel = !model.selected ? '' : model.model_loaded ? ' · ACTIVE · READY' :
-        model.model_state === 'loading' ? ' · SELECTED · LOADING' : model.model_state === 'failed' ? ' · SELECTED · LOAD FAILED' : ' · SELECTED';
+        model.model_state === 'loading' ? ' · SELECTED · LOADING' : model.model_state === 'failed' ?
+          ` · SELECTED · LOAD FAILED${model.failure_type === 'model_template_incompatible' ? ' — INCOMPATIBLE CHAT TEMPLATE' : ''}` : ' · SELECTED';
       card.append(element('strong','',`${model.name}${stateLabel}`),
         element('p','muted',`${model.profile === 'fast' ? 'Fast · Recommended for standard workstations' : 'Balanced'} · ${model.display_size} · ${model.license}`),
         element('small','',`${model.repository} · ${model.quantization}`));
@@ -101,7 +103,8 @@ export function initAsk() {
       } else { if (job?.state === 'failed' || job?.state === 'cancelled') card.append(element('p','inline-error',downloadErrors[job.error] || `Download ${job.state}.`));
         if (!model.installed) card.append(makeButton(model.partial_bytes ? 'Resume download' : 'Download & activate',()=>{ if (model.partial_bytes || confirmDownload(model)) action(model,'download',{activate:true}); }));
         else if (!model.active) card.append(makeButton('Activate',()=>action(model,'activate')),makeButton('Remove',()=>{ if (confirm(`Remove ${model.name} from AXP?`)) action(model,'remove'); },true));
-        else card.append(element('small','active-status',model.model_loaded ? 'Ready' : model.model_state === 'failed' ? 'Load failed' : 'Selected · Not ready')); }
+        else card.append(element('small','active-status',model.model_loaded ? 'Ready' : model.model_state === 'failed' ?
+          (model.failure_type === 'model_template_incompatible' ? 'Load failed — incompatible chat template' : 'Load failed') : 'Selected · Not ready')); }
       cards.push(card);
     }
     if (catalog.custom_model) { const custom=element('article','model-card'); custom.append(element('strong','',`Custom local model${catalog.custom_model.active ? ' · ACTIVE' : ''}`),

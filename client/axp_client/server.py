@@ -45,7 +45,7 @@ def _is_loopback(address):
 MAX_ASK_BODY = 64 * 1024
 MAX_QUESTION_LENGTH = 4_000
 CHAT_FAILURE_CODES = {"model_missing", "model_invalid", "backend_missing",
-                      "backend_cpu_incompatible", "model_load_failed"}
+                      "backend_cpu_incompatible", "model_load_failed", "model_template_incompatible"}
 
 
 def _chat_failure_code(rag_service, default="chat_model_unavailable"):

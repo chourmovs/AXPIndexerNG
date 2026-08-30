@@ -51,6 +51,10 @@ def classify_load_failure(exc, model_path=None):
     if isinstance(exc, (ModuleNotFoundError, ImportError)):
         return {"failure_type": "backend_missing", "failure_code": None,
                 "failure_reason": "The local AI backend is not installed.", "retryable": False}
+    if type(exc).__name__ == "TemplateSyntaxError" and type(exc).__module__.startswith("jinja2"):
+        return {"failure_type": "model_template_incompatible", "failure_code": None,
+                "failure_reason": "The selected model uses a chat template that is incompatible with this AXP runtime.",
+                "retryable": False}
     if model_path is not None and not Path(model_path).is_file():
         kind, retryable = "model_missing", False
     elif isinstance(exc, ValueError):
