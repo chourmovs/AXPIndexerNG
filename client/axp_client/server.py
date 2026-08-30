@@ -136,6 +136,11 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
                 return self.send_json(model_manager.catalog() if model_manager else {"models": []})
+            if url.path == "/api/models/benchmark":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                return self.send_json(model_manager.catalog().get("benchmark", {"state": "idle"}) if model_manager else
+                                      {"state": "idle"})
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -186,6 +191,25 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 except ModelManagerError as exc:
                     status = 409 if exc.code in ("chat_busy", "intel_gpu_unavailable") else 400
                     return self.send_json({"error": exc.code, **exc.details}, status)
+            if url.path in ("/api/models/accelerator/download", "/api/models/accelerator/remove"):
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                if model_manager is None:
+                    return self.send_json({"error": "not_configured"}, 503)
+                try:
+                    result = (model_manager.start_accelerator_download() if url.path.endswith("/download")
+                              else model_manager.remove_accelerator())
+                    return self.send_json(result, 202 if url.path.endswith("/download") else 200)
+                except ModelManagerError as exc:
+                    return self.send_json({"error": exc.code, **exc.details}, 409)
+            if url.path in ("/api/models/benchmark", "/api/models/benchmark/cancel"):
+                if not self.local_action_allowed(): return self.send_json({"error": "forbidden_origin"}, 403)
+                if model_manager is None: return self.send_json({"error": "not_configured"}, 503)
+                try:
+                    if url.path.endswith("/cancel"): return self.send_json(model_manager.cancel_benchmark(), 202)
+                    length = int(self.headers.get("Content-Length", "0")); body = json.loads(self.rfile.read(length) or b"{}")
+                    return self.send_json(model_manager.start_benchmark(body.get("profile", "quick")), 202)
+                except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
             if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
                     "download", "cancel", "activate", "remove"):
                 if not self.local_action_allowed():

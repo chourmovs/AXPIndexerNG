@@ -12,6 +12,11 @@ async function jsonRequest(url, options = {}) {
 }
 export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
+export const downloadIntelRuntime = () => jsonRequest('/api/models/accelerator/download', {method:'POST'});
+export const removeIntelRuntime = () => jsonRequest('/api/models/accelerator/remove', {method:'POST'});
+export const startIntelBenchmark = profile => jsonRequest('/api/models/benchmark', {method:'POST',
+  headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile})});
+export const cancelIntelBenchmark = () => jsonRequest('/api/models/benchmark/cancel', {method:'POST'});
 export const retryAskModel = () => jsonRequest('/api/ask/model/retry', {method: 'POST'});
 export const cancelAskGeneration = () => jsonRequest('/api/ask/cancel', {method: 'POST'});
 export const localModels = () => jsonRequest('/api/models', {cache: 'no-store'});

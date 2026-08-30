@@ -1,4 +1,5 @@
-import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice} from './api.js';
+import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice,
+  downloadIntelRuntime, removeIntelRuntime, startIntelBenchmark, cancelIntelBenchmark} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
@@ -130,11 +131,29 @@ export function initAsk() {
     document.querySelectorAll('input[name="device"]').forEach(radio=>{ radio.checked=radio.value===requested; });
     const intel=document.querySelector('input[name="device"][value="intel_gpu"]'); intel.disabled=!catalog.hardware.accelerator_available;
     document.querySelector('#intel-device-status').textContent=catalog.hardware.accelerator_available ? '— available' : `— unavailable (${catalog.hardware.accelerator_reason || 'not installed'})`;
+    const accelerator=catalog.hardware.accelerator || {}; const installed=accelerator.installed;
+    document.querySelector('#download-intel-runtime').hidden=installed || !catalog.hardware.intel_gpu_detected;
+    document.querySelector('#benchmark-intel').hidden=!catalog.hardware.accelerator_available;
+    const benchmarkActive=catalog.benchmark && !['idle','complete','failed','cancelled'].includes(catalog.benchmark.state);
+    document.querySelector('#benchmark-intel').disabled=benchmarkActive;
+    document.querySelector('#cancel-benchmark').hidden=!benchmarkActive;
+    document.querySelector('#remove-intel-runtime').hidden=!installed;
+    document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
+      installed ? `${catalog.hardware.intel_gpu_name} · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : 'runtime installed; native probe unavailable'}` :
+      `${catalog.hardware.intel_gpu_name} detected · SYCL runtime not installed · approximately 120 MB · Official llama.cpp Windows SYCL runtime · Experimental`;
     if (downloading && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
   }
   document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
   document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }
     catch(exception){ managerError.textContent=exception.code==='intel_gpu_unavailable' ? 'Intel GPU inference is unavailable; CPU remains active.' : exception.message; await renderManager(); } }));
+  document.querySelector('#download-intel-runtime').addEventListener('click',async()=>{ try { await downloadIntelRuntime(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#remove-intel-runtime').addEventListener('click',async()=>{ try { await removeIntelRuntime(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#benchmark-intel').addEventListener('click',async()=>{ try { await startIntelBenchmark('quick'); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#cancel-benchmark').addEventListener('click',async()=>{ try { await cancelIntelBenchmark(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
   function confirmDownload(model){ return confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`); }
   function downloadLabel(state){ return {queued:'Queued…',connecting:'Connecting…',downloading:'Downloading…',verifying:'Verifying SHA-256…',installing:'Installing model…'}[state] || state; }
   function formatBytes(value){ return value >= 1e9 ? `${(value/1e9).toFixed(2)} GB` : `${(value/1e6).toFixed(1)} MB`; }

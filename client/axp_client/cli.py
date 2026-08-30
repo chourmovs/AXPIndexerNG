@@ -9,6 +9,9 @@ from axp_daemon.embeddings import embedder_for_index
 
 from .rag.evaluation import evaluate, format_summary, load_cases, threshold_sweep
 from .rag.factory import create_chat_backend
+from .rag.benchmark import BenchmarkRunner
+from .rag.runtime_manager import InferenceRuntimeManager
+from .rag.model_catalog import catalog_model
 from .rag.model import import_model, model_status, remove_model, verify_model
 from .rag.service import ChatUnavailableError, GenerationFailedError, RagService
 from .reranker import Reranker
@@ -28,6 +31,8 @@ def main(argv=None):
     model_sub.add_parser("status")
     model_sub.add_parser("verify")
     model_sub.add_parser("test")
+    model_benchmark = model_sub.add_parser("benchmark")
+    model_benchmark.add_argument("--profile", choices=("quick", "rag"), default="quick")
     model_remove = model_sub.add_parser("remove")
     model_remove.add_argument("--yes", action="store_true")
     evaluation = s.add_parser("rag-eval")
@@ -97,6 +102,26 @@ def main(argv=None):
                 result.update({key: failed.get(key) for key in
                                ("failure_type", "failure_code", "failure_reason", "retryable")})
             print(json.dumps(result))
+        elif a.model_cmd == "benchmark":
+            settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))
+            if profile is None or not __import__("pathlib").Path(settings["chat_model_path"]).is_file():
+                p.error("chat-model benchmark requires an installed active catalog model")
+            runtime = InferenceRuntimeManager({**settings, "chat_inference_device": "cpu"})
+            if not runtime.hardware.intel_gpu_available:
+                p.error("chat-model benchmark requires a qualified Intel SYCL runtime")
+            def configured(max_tokens):
+                values = {key: getattr(profile, key) for key in profile.__dataclass_fields__}
+                values["max_answer_tokens"] = max_tokens
+                return type(profile)(**values)
+            runner = BenchmarkRunner(lambda limit: runtime._cpu_backend(settings, configured(limit)),
+                lambda limit: runtime._make_backend({**settings, "chat_inference_device": "intel_gpu"}, configured(limit)),
+                profile.name, {"cpu": runtime.hardware.cpu_name, "intel_gpu": runtime.hardware.intel_gpu_name,
+                               "intel_device_id": runtime.hardware.intel_gpu_device_id,
+                               "sycl_device": runtime.hardware.sycl_device_name})
+            runner.start(a.profile)
+            while runner.job.state not in ("complete", "failed", "cancelled"):
+                __import__("time").sleep(.2)
+            print(json.dumps(runner.job.public(), indent=2))
         elif not a.yes:
             p.error("chat-model remove requires --yes")
         else:

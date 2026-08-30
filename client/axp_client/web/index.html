@@ -17,8 +17,13 @@
     <div id="ask-health" class="health" aria-live="polite">Checking local AI…</div>
     <button id="manage-ai" type="button" class="secondary compact">Manage local AI</button>
     <aside id="model-manager" class="model-manager" hidden><h3>Local AI models</h3><div id="model-list"></div>
-      <fieldset><legend>Inference device</legend><label><input type="radio" name="device" value="auto" checked> Auto — recommended</label>
-      <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU <span id="intel-device-status">— unavailable</span></label></fieldset>
+      <fieldset><legend>Hardware acceleration</legend><label><input type="radio" name="device" value="auto" checked> Auto — CPU in this experimental release</label>
+      <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU (Experimental) <span id="intel-device-status">— unavailable</span></label></fieldset>
+      <section id="intel-runtime-actions"><p id="intel-runtime-description" class="muted"></p>
+        <button id="download-intel-runtime" type="button" class="compact">Download Intel GPU runtime</button>
+        <button id="benchmark-intel" type="button" class="compact" hidden>Benchmark CPU vs Intel GPU</button>
+        <button id="cancel-benchmark" type="button" class="secondary compact" hidden>Cancel benchmark</button>
+        <button id="remove-intel-runtime" type="button" class="secondary compact" hidden>Remove Intel GPU runtime</button></section>
       <p id="model-manager-error" class="inline-error" aria-live="polite"></p></aside>
     <div id="chat-history" class="chat-history"></div>
     <form id="ask-form" class="ask-form"><label for="ask-input">Ask a question about your indexed documents</label>

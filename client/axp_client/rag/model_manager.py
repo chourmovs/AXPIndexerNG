@@ -14,6 +14,10 @@ from urllib.parse import urlparse
 from axp_core.runtime import atomic_write_json, load_settings, save_settings
 
 from .model_catalog import CATALOG_VERSION, MODELS, catalog_model
+from .accelerator_catalog import INTEL_SYCL
+from .accelerator_manager import AcceleratorError, AcceleratorManager
+from .hardware import detect_hardware
+from .benchmark import BenchmarkRunner
 from .runtime_manager import ALLOWED_DEVICES, InferenceDeviceError
 
 ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing"}
@@ -60,6 +64,9 @@ class ModelManager:
         self.models_dir, self.downloads_dir = self.root / "models", self.root / "downloads"
         self.models_dir.mkdir(parents=True, exist_ok=True); self.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.runtime = runtime
+        self.accelerators = getattr(getattr(runtime, "backend", runtime), "accelerators", None) or AcceleratorManager(cache_root)
+        self._accelerator_job = None
+        self._benchmark = None
         self.opener = opener or urllib.request.build_opener(TrustedRedirectHandler())
         self._lock, self._job, self._cancel = threading.Lock(), None, threading.Event()
 
@@ -88,8 +95,81 @@ class ModelManager:
                 "filename": Path(custom).name, "installed": Path(custom).is_file(), "active": True} if custom else None,
                 "device": {key: health.get(key) for key in ("inference_device_requested",
                     "inference_device_effective", "fallback_reason")},
-                "hardware": {key: health.get(key) for key in ("intel_gpu_detected", "intel_gpu_name",
-                    "accelerator_available", "accelerator_reason")}}
+                "hardware": {**{key: health.get(key) for key in ("intel_gpu_detected", "intel_gpu_name",
+                    "intel_gpu_vendor_id", "intel_gpu_device_id", "accelerator_available", "accelerator_reason",
+                    "sycl_runtime_installed", "sycl_probe_ok", "sycl_device_name", "sycl_probe_error")},
+                    "accelerator": {**INTEL_SYCL.public(), "installed": bool(self.accelerators.manifest()),
+                                    "download": dict(self._accelerator_job) if self._accelerator_job else None}},
+                "benchmark": self._benchmark.job.public() if self._benchmark else {"state": "idle"}}
+
+    def start_benchmark(self, profile_name="quick"):
+        settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))
+        if profile is None or not Path(settings["chat_model_path"]).is_file():
+            raise ModelManagerError("benchmark_model_required")
+        controller = getattr(self.runtime, "backend", self.runtime)
+        if not controller or not controller.hardware.intel_gpu_available:
+            raise ModelManagerError("intel_gpu_unavailable")
+        def configured(max_tokens):
+            values = {key: getattr(profile, key) for key in profile.__dataclass_fields__}
+            values["max_answer_tokens"] = max_tokens
+            return type(profile)(**values)
+        runner = BenchmarkRunner(lambda limit: controller._cpu_backend(settings, configured(limit)),
+            lambda limit: controller._make_backend({**settings, "chat_inference_device": "intel_gpu"}, configured(limit)),
+            profile.name, {"cpu": controller.hardware.cpu_name, "intel_gpu": controller.hardware.intel_gpu_name,
+                           "intel_device_id": controller.hardware.intel_gpu_device_id,
+                           "sycl_device": controller.hardware.sycl_device_name})
+        def transaction():
+            controller.close(); self._benchmark = runner; return runner.start(profile_name)
+        try:
+            result = self.runtime.run_when_idle(transaction) if callable(getattr(self.runtime, "run_when_idle", None)) else transaction()
+        except Exception as exc:
+            if type(exc).__name__ == "ChatBusyError": raise ModelManagerError("chat_busy") from exc
+            if isinstance(exc, (ValueError, RuntimeError)): raise ModelManagerError(str(exc)) from exc
+            raise
+        def restore():
+            while runner.job.state not in ("complete", "failed", "cancelled"): time.sleep(.2)
+            try: controller.activate(settings, profile)
+            except Exception: pass
+        threading.Thread(target=restore, daemon=True, name="axp-benchmark-restore").start()
+        return result
+
+    def cancel_benchmark(self):
+        if not self._benchmark: raise ModelManagerError("benchmark_not_active")
+        try: return self._benchmark.cancel()
+        except RuntimeError as exc: raise ModelManagerError(str(exc)) from exc
+
+    def start_accelerator_download(self):
+        with self._lock:
+            if self._accelerator_job and self._accelerator_job["state"] in ACTIVE_DOWNLOAD_STATES:
+                raise ModelManagerError("accelerator_download_busy")
+            self._accelerator_job = {"state": "queued", "bytes_downloaded": 0,
+                                     "bytes_total": INTEL_SYCL.exact_size, "percentage": 0,
+                                     "error": None}
+        def work():
+            try:
+                self._accelerator_job["state"] = "downloading"
+                def progress(done, total):
+                    self._accelerator_job.update(bytes_downloaded=done, percentage=done * 100 / total)
+                self.accelerators.download_and_install(progress)
+                self._accelerator_job.update(state="ready", bytes_downloaded=INTEL_SYCL.exact_size, percentage=100)
+                controller = getattr(self.runtime, "backend", self.runtime)
+                if controller:
+                    controller.hardware = detect_hardware(self.accelerators.server_path())
+            except AcceleratorError as exc:
+                self._accelerator_job.update(state="failed", error=exc.code)
+            except Exception:
+                self._accelerator_job.update(state="failed", error="accelerator_download_failed")
+        threading.Thread(target=work, daemon=True, name="axp-accelerator-download").start()
+        return dict(self._accelerator_job)
+
+    def remove_accelerator(self):
+        controller = getattr(self.runtime, "backend", self.runtime)
+        if controller and (controller.health().get("inference_device_effective") == "intel_gpu" or
+                           controller.health().get("sidecar_pid")):
+            raise ModelManagerError("accelerator_in_use")
+        self.accelerators.remove()
+        if controller: controller.hardware = detect_hardware()
+        return self.catalog()
 
     def start_download(self, model_id, *, activate=False):
         model = catalog_model(model_id)
