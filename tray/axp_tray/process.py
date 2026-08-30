@@ -134,11 +134,12 @@ def cleanup_owned_processes(allowed_roles, graceful_timeout=5.0, terminate_timeo
     """Wait, then terminate and kill only identities authenticated to this install."""
     allowed_roles = frozenset(allowed_roles) & OWNED_ROLES
     LOGGER.info("Waiting for owned processes")
-    deadline = time.monotonic() + graceful_timeout
     remaining = verified_owned_processes(allowed_roles)
-    while remaining and time.monotonic() < deadline:
-        time.sleep(0.1)
-        remaining = verified_owned_processes(allowed_roles)
+    if remaining and graceful_timeout > 0:
+        deadline = time.monotonic() + graceful_timeout
+        while remaining and time.monotonic() < deadline:
+            time.sleep(0.1)
+            remaining = verified_owned_processes(allowed_roles)
     for process, identity in remaining:
         if is_owned_process(process, identity, allowed_roles):
             LOGGER.warning("Process role=%s pid=%s did not exit gracefully", identity["role"], identity["pid"])
@@ -218,9 +219,6 @@ def restart_daemon(settings, timeout=15):
             return start_daemon(settings)
         time.sleep(0.25)
     cleanup_owned_processes({"daemon"}, graceful_timeout=0)
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline and daemon_instance_running(settings["db_path"]):
-        time.sleep(0.1)
     if daemon_instance_running(settings["db_path"]):
         raise RuntimeError("Manual daemon restart failed: daemon instance lock is still held")
     return start_daemon(settings)
