@@ -14,6 +14,11 @@ VERIFIER_SPEC = importlib.util.spec_from_file_location("verify_chat_model_catalo
 VERIFIER = importlib.util.module_from_spec(VERIFIER_SPEC)
 VERIFIER_SPEC.loader.exec_module(VERIFIER)
 verify_entry = VERIFIER.verify_entry
+RUNTIME_VERIFIER_PATH = Path(__file__).parents[1] / "scripts/verify_llama_runtime.py"
+RUNTIME_VERIFIER_SPEC = importlib.util.spec_from_file_location("verify_llama_runtime", RUNTIME_VERIFIER_PATH)
+RUNTIME_VERIFIER = importlib.util.module_from_spec(RUNTIME_VERIFIER_SPEC)
+RUNTIME_VERIFIER_SPEC.loader.exec_module(RUNTIME_VERIFIER)
+verify_features = RUNTIME_VERIFIER.verify_features
 
 
 def test_curated_catalog_is_exact_and_immutable():
@@ -113,4 +118,22 @@ def test_ci_wheel_index_and_release_source_build_are_distinct():
     assert "llama-cpp-python==0.3.23" in requirements
     assert "--no-binary llama-cpp-python" in release
     assert "-DGGML_NATIVE=OFF" in release
+    assert "-DGGML_LLAMAFILE=OFF" in release
     assert "verify_llama_runtime.py" in release
+
+
+def test_runtime_feature_parser_accepts_absent_disabled_features():
+    reported = verify_features("CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | OPENMP = 1 | REPACK = 1 |")
+    assert reported["AVX"] is True
+    assert "AVX2" not in reported and "AVX512" not in reported and "LLAMAFILE" not in reported
+
+
+@pytest.mark.parametrize("report", (
+    "CPU : AVX = 1 | AVX2 = 1 |",
+    "CPU : AVX = 1 | AVX512 = 1 |",
+    "CPU : SSE3 = 1 | OPENMP = 1 |",
+    "CPU : AVX = 1 | LLAMAFILE = 1 |",
+))
+def test_runtime_feature_parser_rejects_incompatible_policy(report):
+    with pytest.raises(RuntimeError):
+        verify_features(report)

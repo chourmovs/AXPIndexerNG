@@ -38,8 +38,9 @@ may be transient, never for a deterministic CPU incompatibility.
 
 The Windows release builds pinned `llama-cpp-python==0.3.23` from source rather
 than consuming the opaque upstream CPU wheel. Its policy is x86-64 with AVX:
-`GGML_NATIVE=OFF`, `GGML_AVX=ON`, AVX2/BMI2/AVX512 off, and CUDA, Vulkan and
-SYCL off. This avoids build-runner-native tuning. FMA, F16C, BMI2 and AVX2 are
+`GGML_NATIVE=OFF`, `GGML_AVX=ON`, AVX2/BMI2/AVX512 off,
+`GGML_LLAMAFILE=OFF`, and CUDA, Vulkan and SYCL off. This avoids
+build-runner-native tuning. FMA, F16C, BMI2 and AVX2 are
 reported for diagnostics but are not required by this baseline. AXP uses
 `py-cpuinfo` CPUID/OSXSAVE-aware flags plus Windows' OS processor-feature API
 to preflight AVX before entering llama.cpp. Unsupported systems report

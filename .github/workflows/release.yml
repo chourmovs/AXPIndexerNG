@@ -29,7 +29,7 @@ jobs:
         run: |
           New-Item -ItemType Directory stage/AXPIndexerNG | Out-Null
           Copy-Item (Split-Path $env:PY) stage/AXPIndexerNG/python -Recurse
-          $env:CMAKE_ARGS='-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_SYCL=OFF'
+          $env:CMAKE_ARGS='-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DGGML_LLAMAFILE=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_SYCL=OFF'
           $env:FORCE_CMAKE='1'
           & stage/AXPIndexerNG/python/python.exe -m pip install --no-binary llama-cpp-python -r requirements-runtime.txt
           if ($LASTEXITCODE -ne 0) { throw 'Controlled portable llama-cpp-python source build failed' }

@@ -4,27 +4,35 @@ import json
 import platform
 import re
 
-import llama_cpp
-from axp_client.rag.cpu import detect_cpu
+FORBIDDEN_FEATURES = {"AVX2", "AVX_VNNI", "AVX512", "AVX512_VBMI", "AVX512_VNNI",
+                      "AVX512_BF16", "BMI2", "FMA", "F16C", "LLAMAFILE"}
+
+
+def verify_features(system_info):
+    """Validate llama.cpp's active-only CPU feature report."""
+    reported = {match.group(1): match.group(2) == "1" for match in re.finditer(
+        r"\b([A-Z][A-Z0-9_]*)\s*=\s*([01])\b", system_info
+    )}
+    if reported.get("AVX") is not True:
+        raise RuntimeError("packaged llama.cpp does not report required AVX support")
+    enabled_forbidden = sorted(feature for feature in FORBIDDEN_FEATURES if reported.get(feature, False))
+    if enabled_forbidden:
+        raise RuntimeError(f"packaged llama.cpp enables forbidden CPU features: {', '.join(enabled_forbidden)}")
+    return reported
 
 
 def main():
+    import llama_cpp
+    from axp_client.rag.cpu import detect_cpu
+
     raw = llama_cpp.llama_print_system_info()
     system_info = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
 
-    def feature(name):
-        match = re.search(rf"(?:^|\|)\s*{re.escape(name)}\s*=\s*([01])(?:\s*\||$)", system_info)
-        if match is None:
-            raise RuntimeError(f"llama.cpp did not report the compiled {name} feature")
-        return match.group(1) == "1"
-
-    actual = {name.lower(): feature(name) for name in ("AVX", "AVX2", "AVX512")}
-    if actual != {"avx": True, "avx2": False, "avx512": False}:
-        raise RuntimeError(f"unexpected packaged llama.cpp ISA policy: {actual}")
+    reported = verify_features(system_info)
     cpu = detect_cpu().public()
     print(json.dumps({"backend_version": importlib.metadata.version("llama-cpp-python"),
                       "platform": platform.platform(), "cpu": cpu,
-                      "compiled_features": actual, "system_info": system_info}, sort_keys=True))
+                      "reported_features": reported, "system_info": system_info}, sort_keys=True))
     return 0
 
 
