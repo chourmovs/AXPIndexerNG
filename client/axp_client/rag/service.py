@@ -6,7 +6,7 @@ import uuid
 from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
-from .llama_cpp_backend import GenerationConfig
+from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
 from .retrieval import retrieve_rag_candidates
@@ -48,6 +48,10 @@ class RagService:
 
     def health(self):
         return {**self.backend.health(), "generation_busy": self.operations.busy or self._generation_lock.locked()}
+
+    def cancel_generation(self):
+        cancel = getattr(self.backend, "request_cancel", None)
+        return bool(cancel and cancel())
 
     def close(self):
         self.operations.close()
@@ -158,8 +162,12 @@ class RagService:
                     context = build_context(con, content, token_counter=self.backend.count_tokens,
                                             context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
                                             config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
+                                                max_documents=generation_config.max_context_documents,
+                                                max_seeds_per_document=generation_config.max_seeds_per_document,
+                                                max_blocks=generation_config.max_context_blocks,
                                                 answer_reserve_tokens=generation_config.max_answer_tokens,
-                                                safety_reserve_tokens=generation_config.safety_tokens))
+                                                safety_reserve_tokens=generation_config.safety_tokens,
+                                                max_evidence_tokens=generation_config.max_evidence_tokens))
                 except Exception as exc:
                     LOGGER.exception("Context preparation failed request id=%s type=%s", request_id,
                                      type(exc).__name__)
@@ -172,16 +180,39 @@ class RagService:
             self._generation_lock.release()
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
             return base
-        emit("context_ready", documents=len({block.document_id for block in context.blocks}),
-             sources=len(context.blocks))
+        evidence_tokens = context.diagnostics["evidence_tokens"]
+        emit("context_ready", documents=context.diagnostics["selected_documents"],
+             blocks=context.diagnostics["selected_blocks"], evidence_tokens=evidence_tokens,
+             evidence_budget_tokens=context.diagnostics["evidence_budget_tokens"],
+             estimated_total_prompt_tokens=fixed_tokens + evidence_tokens,
+             context_window_tokens=self.backend.context_window(), max_answer_tokens=generation_config.max_answer_tokens)
         generation_start = time.perf_counter()
         try:
             try:
                 emit("generation_started")
+                last_sequence, last_waiting_second = -1, -1
+                def generation_poll(elapsed):
+                    nonlocal last_sequence, last_waiting_second
+                    snapshot_fn = getattr(self.backend, "generation_progress", None)
+                    snapshot = snapshot_fn() if snapshot_fn else {}
+                    sequence = snapshot.get("sequence", 0)
+                    if sequence > 0 and sequence != last_sequence:
+                        last_sequence = sequence
+                        emit("generation_progress", **{key: snapshot.get(key) for key in (
+                            "sequence", "generated_fragments", "generated_characters", "elapsed_s",
+                            "time_to_first_token_ms", "last_fragment_age_s")})
+                    elif sequence == 0 and int(elapsed) != last_waiting_second:
+                        last_waiting_second = int(elapsed)
+                        emit("generation_waiting_first_token", elapsed_s=elapsed)
                 answer = self._run_blocking(
                     lambda: self.backend.generate(system_prompt=SYSTEM_PROMPT,
                                                   user_prompt=user_prompt(question, context.prompt_text)),
-                    lambda elapsed: emit("generation_heartbeat", elapsed_s=elapsed))
+                    generation_poll, interval=.25)
+            except GenerationCancelled:
+                elapsed = (time.perf_counter() - generation_start) * 1000
+                LOGGER.info("RAG generation cancelled request_id=%s elapsed_ms=%.1f", request_id, elapsed)
+                emit("cancelled")
+                raise
             except Exception as exc:
                 LOGGER.exception("Local generation failed request id=%s type=%s", request_id, type(exc).__name__)
                 raise GenerationFailedError from exc
@@ -190,7 +221,9 @@ class RagService:
         generation_ms = (time.perf_counter() - generation_start) * 1000
         telemetry = getattr(self.backend, "last_telemetry", None) or {}
         emit("generation_complete", elapsed_s=round(generation_ms / 1000, 1),
-             **{key: telemetry[key] for key in ("prompt_tokens", "completion_tokens", "tokens_per_second")
+             **{key: telemetry[key] for key in ("time_to_first_token_ms", "generation_ms", "decode_ms",
+                 "completion_tokens", "decode_tokens_per_second", "overall_tokens_per_second",
+                 "generated_characters", "generated_fragments", "finish_reason")
                 if telemetry.get(key) is not None})
         emit("validation_started")
         try:
@@ -218,6 +251,13 @@ class RagService:
                 "evidence_tokens": context.diagnostics["evidence_tokens"],
                 "reserved_answer_tokens": generation_config.max_answer_tokens,
                 "total_prompt_tokens": fixed_tokens + context.diagnostics["evidence_tokens"]}
+        LOGGER.info("RAG generation request_id=%s model=%s evidence_tokens=%s prompt_tokens_estimated=%s "
+                    "ttft_ms=%s completion_tokens=%s decode_tps=%s generation_ms=%s n_threads=%s "
+                    "n_threads_batch=%s n_batch=%s", request_id, self.health().get("model_name"), evidence_tokens,
+                    fixed_tokens + evidence_tokens, telemetry.get("time_to_first_token_ms"),
+                    telemetry.get("completion_tokens"), telemetry.get("decode_tokens_per_second"),
+                    telemetry.get("generation_ms"), telemetry.get("n_threads"),
+                    telemetry.get("n_threads_batch"), telemetry.get("n_batch"))
         LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s generation_ms=%.1f", request_id,
                     base["decision"]["reason"], len(candidates), decision.content_documents, generation_ms)
         return base

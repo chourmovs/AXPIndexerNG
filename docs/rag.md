@@ -127,3 +127,13 @@ device selection, and enterprise privacy behavior are documented in
 [`local-models.md`](local-models.md). Model downloads are always explicit and
 RAG continues to use the same deterministic retrieval gate and citation
 validation regardless of model or effective device.
+# Local generation progress and cancellation
+
+Answer generation uses llama.cpp's streamed chat-completion iterator internally. AXP exposes only numeric
+progress (elapsed time, time to first token, fragments, and characters); streamed answer text is retained on
+the server and is not shown until citation validation succeeds.
+
+Cancellation is cooperative. A cancel request sets an event that is checked at each native stream yield and
+closes the iterator when possible. It does not kill a Python thread, unload the model, or mark the model as
+failed. During a long prompt prefill llama.cpp may not yield, so cancellation remains “requested” until the
+first native yield lets the worker exit.

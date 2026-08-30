@@ -12,6 +12,7 @@ class ContextConfig:
     character_budget: int | None = None  # legacy/testing fallback
     answer_reserve_tokens: int = 512
     safety_reserve_tokens: int = 512
+    max_evidence_tokens: int | None = None
 
 
 def _format(block):
@@ -84,9 +85,12 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
             ))
     accepted, rendered, used = [], [], 0
     token_budget = None
+    physical_budget = None
     if token_counter is not None and context_window is not None:
-        token_budget = max(0, context_window - config.answer_reserve_tokens - config.safety_reserve_tokens
-                           - fixed_prompt_tokens)
+        physical_budget = max(0, context_window - config.answer_reserve_tokens - config.safety_reserve_tokens
+                              - fixed_prompt_tokens)
+        token_budget = (physical_budget if config.max_evidence_tokens is None else
+                        min(physical_budget, config.max_evidence_tokens))
     for raw in blocks[: config.max_blocks]:
         block = EvidenceBlock(**{**raw.__dict__, "id": f"S{len(accepted) + 1}"})
         value = _format(block)
@@ -143,4 +147,6 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
         used += len(value) + separator
     prompt = "\n\n".join(rendered)
     evidence_tokens = token_counter(prompt) if token_counter else None
-    return ContextResult(prompt, accepted, {"evidence_tokens": evidence_tokens, "evidence_budget_tokens": token_budget})
+    return ContextResult(prompt, accepted, {"evidence_tokens": evidence_tokens, "evidence_budget_tokens": token_budget,
+        "physical_context_budget_tokens": physical_budget, "max_evidence_tokens": config.max_evidence_tokens,
+        "selected_documents": len({block.document_id for block in accepted}), "selected_blocks": len(accepted)})

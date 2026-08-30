@@ -13,6 +13,7 @@ async function jsonRequest(url, options = {}) {
 export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
 export const retryAskModel = () => jsonRequest('/api/ask/model/retry', {method: 'POST'});
+export const cancelAskGeneration = () => jsonRequest('/api/ask/cancel', {method: 'POST'});
 export const localModels = () => jsonRequest('/api/models', {cache: 'no-store'});
 export const modelAction = (id, action, body={}) => jsonRequest(`/api/models/${encodeURIComponent(id)}/${action}`,
   {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -31,7 +32,7 @@ export async function askStream(question, onEvent) {
   }
   if (!response.body) throw new ApiError('stream_unavailable', 'The answer stream is unavailable.');
   const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = '', terminalReceived = false;
-  const dispatch = message => { if (message.event === 'final' || message.event === 'error') terminalReceived = true; onEvent(message); };
+  const dispatch = message => { if (message.event === 'final' || message.event === 'error' || message.event === 'cancelled') terminalReceived = true; onEvent(message); };
   while (true) {
     const {value, done} = await reader.read(); pending += decoder.decode(value || new Uint8Array(), {stream: !done});
     const lines = pending.split('\n'); pending = lines.pop() || '';

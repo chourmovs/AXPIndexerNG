@@ -6,7 +6,13 @@ If the evidence is insufficient, ambiguous, or does not actually contain the req
 INSUFFICIENT_EVIDENCE
 Every factual answer must cite supplied evidence IDs such as [S1]. Never invent citation IDs.
 If sources disagree, explicitly say that the indexed documents disagree.
-Answer in the same language as the user's question. Prefer a concise synthesis over copying long passages."""
+Answer in the same language as the user's question. Prefer the shortest complete grounded answer appropriate to the
+question, without sacrificing citations, grounding, or material nuance. For a factual lookup or scalar question,
+answer directly in 1–3 sentences and cite the factual statement itself. Do not restate the question. Do not say
+"Based on the evidence provided" unless that framing is materially useful. When multiple sources support the same
+simple fact, synthesize it once; do not narrate that one source states it and another confirms it. If sources disagree,
+preserve and explain the disagreement rather than shortening away the nuance. Give appropriately detailed answers to
+genuinely analytical questions. Prefer concise synthesis over copying long passages."""
 
 
 def user_prompt(question, evidence):
