@@ -9,14 +9,14 @@ from pathlib import Path
 
 from .model import validate_gguf
 
-RECOMMENDED_MODEL = "Qwen3-4B-Q4_K_M"
+RECOMMENDED_MODEL = "Qwen3-1.7B-Q4_K_M"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    context_size: int = 8192
-    max_answer_tokens: int = 512
+    context_size: int = 6144
+    max_answer_tokens: int = 384
     safety_tokens: int = 512
     temperature: float = 0.2
     top_p: float = 0.8
@@ -27,7 +27,7 @@ class GenerationConfig:
 class LlamaCppBackend:
     """Single-instance, lazy, quiet, CPU-only GGUF backend."""
 
-    def __init__(self, model_path, config=None):
+    def __init__(self, model_path, config=None, chat_template_kwargs=None):
         self.model_path = Path(model_path)
         self.config = config or GenerationConfig()
         self._model = None
@@ -36,6 +36,7 @@ class LlamaCppBackend:
         self._model_state = "unloaded"
         self._failure = {}
         self.last_telemetry = {}
+        self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
 
     @property
     def loaded(self):
@@ -107,7 +108,7 @@ class LlamaCppBackend:
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             max_tokens=self.config.max_answer_tokens, temperature=self.config.temperature,
             top_p=self.config.top_p, top_k=self.config.top_k,
-            chat_template_kwargs={"enable_thinking": False},
+            chat_template_kwargs=self.chat_template_kwargs,
         )
         elapsed = (time.perf_counter() - started) * 1000
         usage = result.get("usage", {})
@@ -115,3 +116,10 @@ class LlamaCppBackend:
         self.last_telemetry = {"prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": completion,
                                "generation_ms": elapsed, "tokens_per_second": completion / (elapsed / 1000) if elapsed else None}
         return THINK_RE.sub("", result["choices"][0]["message"]["content"] or "").strip()
+
+    def close(self):
+        with self._load_lock:
+            model, self._model = self._model, None
+            if model is not None and callable(getattr(model, "close", None)):
+                model.close()
+            self._model_state = "unloaded"

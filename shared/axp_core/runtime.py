@@ -42,6 +42,8 @@ DEFAULT_SETTINGS = {
     "model_cache": "model-cache",
     "chat_backend": "llama_cpp",
     "chat_model_path": "model-cache/chat/model.gguf",
+    "chat_active_model_id": None,
+    "chat_inference_device": "auto",
     "embedding_profile": "balanced",
     "embedding_batch_size": 64,
     "download_missing_models": True,
@@ -102,6 +104,8 @@ def load_settings():
     settings = {**DEFAULT_SETTINGS, **current}
     if settings.get("daemon_runtime_mode") not in ("interactive", "scheduled_task"):
         settings["daemon_runtime_mode"] = "interactive"
+    if settings.get("chat_inference_device") not in ("auto", "cpu", "intel_gpu"):
+        settings["chat_inference_device"] = "auto"
     if not settings.get("installation_id"):
         settings["installation_id"] = str(uuid.uuid4())
     if settings != current:

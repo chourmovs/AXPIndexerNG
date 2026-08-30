@@ -1,4 +1,4 @@
-import {askHealth, askStream, retryAskModel} from './api.js';
+import {askHealth, askStream, retryAskModel, localModels, modelAction} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
@@ -71,12 +71,25 @@ export function initAsk() {
       if (!axp.querySelector('.answer-text, .inline-error')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
   });
-  return {open: async () => { if (checked) return; checked = true; try { const state = await askHealth();
+  const manager = document.querySelector('#model-manager'), list = document.querySelector('#model-list');
+  document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden = !manager.hidden; if (manager.hidden) return;
+    const catalog = await localModels(); list.replaceChildren(...catalog.models.map(model => {
+      const card = element('article', 'model-card'); const title = element('strong', '', `${model.name}${model.active ? ' · ACTIVE' : ''}`);
+      const details = element('p', 'muted', `${model.profile === 'fast' ? 'Fast · Recommended for standard workstations' : 'Balanced'} · ${model.display_size} · ${model.license}`);
+      const source = element('small', '', `${model.repository} · ${model.quantization}`); const button = element('button', 'compact', model.installed ? (model.active ? 'Active' : 'Activate') : 'Download & activate');
+      button.disabled = model.active; button.addEventListener('click', async () => { if (!model.installed && !confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`)) return;
+        await modelAction(model.id, model.installed ? 'activate' : 'download', {activate: true}); await refreshHealth(); });
+      if (model.download) { const progress = element('progress'); progress.max=100; progress.value=model.download.percentage; card.append(title, details, source, progress, element('small','',`${model.download.percentage.toFixed(1)}% · ${formatRate(model.download.bytes_per_second)} · ${formatEta(model.download.eta_seconds)}`),button); }
+      else card.append(title, details, source, button); return card; })); });
+  function formatRate(value){ return value ? `${(value/1048576).toFixed(1)} MB/s` : 'Connecting'; }
+  function formatEta(value){ return value == null ? '' : `about ${Math.ceil(value)} s remaining`; }
+  async function refreshHealth(){ try { const state = await askHealth();
       if (state.model_state === 'loaded') health.textContent = `● Local AI ready · Model loaded${state.model_name ? ` · ${state.model_name}` : ''}`;
       else if (state.model_state === 'loading') health.textContent = '● Loading local model…';
       else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode('⚠ Local model load failed ')); const retry = element('button', 'retry-model', 'Retry model');
         retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model detected · Not loaded yet'; } catch (_) { retry.disabled = false; } }); health.append(retry); }
       else if (state.available) health.textContent = `● Local model detected · Not loaded yet${state.model_name ? ` · ${state.model_name}` : ''}`;
       else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : '○ Local answer model not configured';
-    } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }};
+    } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }
+  let healthTimer; return {open: async () => { checked = true; await refreshHealth(); clearInterval(healthTimer); healthTimer=setInterval(() => { if (!document.querySelector('#ask-panel').hidden) refreshHealth(); }, 7500); }};
 }

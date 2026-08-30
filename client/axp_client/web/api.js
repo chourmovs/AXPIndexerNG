@@ -13,6 +13,9 @@ async function jsonRequest(url, options = {}) {
 export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
 export const retryAskModel = () => jsonRequest('/api/ask/model/retry', {method: 'POST'});
+export const localModels = () => jsonRequest('/api/models', {cache: 'no-store'});
+export const modelAction = (id, action, body={}) => jsonRequest(`/api/models/${encodeURIComponent(id)}/${action}`,
+  {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
 export const openDocument = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open`, {method: 'POST'});
 export const openDocumentDirectory = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open-dir`, {method: 'POST'});
 

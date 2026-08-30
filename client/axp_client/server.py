@@ -10,7 +10,8 @@ from axp_core.background import access_path_for
 from axp_core.database import connect
 from axp_core.runtime import configure_logging, load_settings
 
-from .rag.factory import create_chat_backend
+from .rag.model_manager import ModelManager, ModelManagerError
+from .rag.runtime_manager import InferenceRuntimeManager
 from .rag.service import (
     ChatBusyError,
     ChatUnavailableError,
@@ -61,7 +62,7 @@ def resolve_document_access_path(db, document_id, *, directory=False):
     return next((path for path in candidates if path.exists()), None)
 
 
-def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None):
+def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None, model_manager=None):
     quality_reranker = None
 
     class Handler(BaseHTTPRequestHandler):
@@ -122,6 +123,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if rag_service is None:
                     return self.send_json({"available": False, "reason": "not_configured"})
                 return self.send_json(rag_service.health())
+            if url.path == "/api/models":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                return self.send_json(model_manager.catalog() if model_manager else {"models": []})
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -153,6 +158,22 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
 
         def do_POST(self):
             url = urlparse(self.path)
+            parts = url.path.strip("/").split("/")
+            if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
+                    "download", "cancel", "activate", "remove"):
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                if model_manager is None:
+                    return self.send_json({"error": "not_configured"}, 503)
+                try:
+                    if parts[3] == "download":
+                        length = int(self.headers.get("Content-Length", "0")); body = json.loads(self.rfile.read(length) or b"{}")
+                        return self.send_json(model_manager.start_download(parts[2], activate=bool(body.get("activate"))), 202)
+                    result = getattr(model_manager, parts[3])(parts[2])
+                    return self.send_json(result)
+                except ModelManagerError as exc:
+                    status = 404 if exc.code == "model_not_found" else 409
+                    return self.send_json({"error": exc.code, **exc.details}, status)
             if url.path == "/api/ask/model/retry":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
@@ -315,11 +336,14 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
 
 def serve(db, embedder, host="127.0.0.1", port=8765):
     settings = load_settings()
-    backend = create_chat_backend(settings)
+    backend = InferenceRuntimeManager(settings)
     rag_service = RagService(backend=backend, search_fn=search, connect_fn=connect, db=db, embedder=embedder)
-    server = ThreadingHTTPServer((host, port), make_handler(db, embedder, rag_service=rag_service))
+    model_manager = ModelManager(settings["model_cache"], runtime=rag_service)
+    server = ThreadingHTTPServer((host, port), make_handler(db, embedder, rag_service=rag_service,
+                                                            model_manager=model_manager))
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        rag_service.close()
         LOGGER.info("Web client stopped")

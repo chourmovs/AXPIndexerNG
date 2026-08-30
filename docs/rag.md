@@ -120,3 +120,10 @@ generation without a database, index, embeddings, corpus content, or network acc
 Failure output includes the local exception type and a bounded diagnostic message; full
 tracebacks are written to the local client log. Runtime health never exposes the model's
 full filesystem path, prompts, questions, or evidence.
+# Local runtime and models
+
+The release-owned model manager, activation lifecycle, download guarantees,
+device selection, and enterprise privacy behavior are documented in
+[`local-models.md`](local-models.md). Model downloads are always explicit and
+RAG continues to use the same deterministic retrieval gate and citation
+validation regardless of model or effective device.
