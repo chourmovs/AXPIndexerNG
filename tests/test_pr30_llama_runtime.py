@@ -1,6 +1,6 @@
-import sys
 from importlib import util
 from pathlib import Path
+from sys import modules
 from types import ModuleType
 
 
@@ -40,8 +40,8 @@ def test_generation_tag_probe_compiles_and_checks_rendered_body(monkeypatch):
     package = ModuleType("llama_cpp")
     chat_format = ModuleType("llama_cpp.llama_chat_format")
     chat_format.Jinja2ChatFormatter = Formatter
-    monkeypatch.setitem(sys.modules, "llama_cpp", package)
-    monkeypatch.setitem(sys.modules, "llama_cpp.llama_chat_format", chat_format)
+    monkeypatch.setitem(modules, "llama_cpp", package)
+    monkeypatch.setitem(modules, "llama_cpp.llama_chat_format", chat_format)
 
     assert VERIFIER.verify_hf_generation_tag() is True
     assert calls["template"] == "{% generation %}assistant text{% endgeneration %}"
