@@ -31,6 +31,7 @@ def runtime_paths():
         "desired": root / "runtime" / "desired_state.json",
         "daemon_lock": root / "runtime" / "daemon.lock",
         "tray_lock": root / "runtime" / "tray.lock",
+        "processes": root / "runtime" / "processes.json",
     }
     for key in ("data", "runtime", "logs"):
         paths[key].mkdir(parents=True, exist_ok=True)

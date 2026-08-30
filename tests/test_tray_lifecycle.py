@@ -23,14 +23,33 @@ def test_tray_shutdown_requests_daemon_and_client(monkeypatch):
     application = app.TrayApplication.__new__(app.TrayApplication)
     application.settings = {"web_port": 8765}
     application.icon = SimpleNamespace(stop=lambda: calls.append("icon"))
-    application.root = SimpleNamespace(quit=lambda: calls.append("quit"))
+    application.root = SimpleNamespace(quit=lambda: calls.append("quit"), destroy=lambda: calls.append("destroy"))
     application._on_tk = lambda callback: callback()
     monkeypatch.setattr(app, "stop_daemon", lambda intentional: calls.append(("daemon", intentional)))
     monkeypatch.setattr(app, "stop_client", lambda settings: calls.append(("client", settings)) or True)
     monkeypatch.setattr(app, "read_daemon_state", lambda: {"state": "stopped"})
+    monkeypatch.setattr(app, "cleanup_owned_processes", lambda roles: calls.append(("cleanup", roles)))
 
     application._shutdown_worker()
 
     assert ("daemon", True) in calls
     assert ("client", application.settings) in calls
-    assert calls[-2:] == ["icon", "quit"]
+    assert ("cleanup", {"client", "daemon"}) in calls
+    assert calls[-3:] == ["icon", "quit", "destroy"]
+
+
+def test_scheduled_shutdown_preserves_daemon(monkeypatch):
+    calls = []
+    application = app.TrayApplication.__new__(app.TrayApplication)
+    application.settings = {"web_port": 8765, "daemon_runtime_mode": "scheduled_task"}
+    application.icon = SimpleNamespace(stop=lambda: None)
+    application.root = SimpleNamespace(quit=lambda: None, destroy=lambda: None)
+    application._on_tk = lambda callback: callback()
+    monkeypatch.setattr(app, "stop_daemon", lambda **kwargs: calls.append("daemon"))
+    monkeypatch.setattr(app, "stop_client", lambda settings: True)
+    monkeypatch.setattr(app, "cleanup_owned_processes", lambda roles: calls.append(roles))
+
+    application._shutdown_worker()
+
+    assert "daemon" not in calls
+    assert calls == [{"client"}]

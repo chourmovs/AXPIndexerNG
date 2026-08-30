@@ -8,7 +8,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 def startup_command():
     root = installation_root()
-    return f'"{root / "python" / "pythonw.exe"}" "{root / "AXPIndexerTray.pyw"}"'
+    return f'"{root / "python" / "pythonw.exe"}" -B "{root / "AXPIndexerTray.pyw"}"'
 
 
 def is_enabled():
