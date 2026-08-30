@@ -11,7 +11,7 @@ jobs:
       - run: python --version
       - run: python -m pip install -r requirements-runtime.txt
         env: { PIP_ONLY_BINARY: "llama-cpp-python" }
-      - name: Verify official CPU backend
+      - name: Verify CI CPU backend import
         run: python -c "import importlib.metadata, llama_cpp; from llama_cpp import Llama; print(importlib.metadata.version('llama-cpp-python'))"
       - run: python -m pip install -r requirements-dev.txt
       - run: ruff check .
