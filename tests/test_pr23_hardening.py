@@ -33,7 +33,7 @@ def test_windows_illegal_instruction_is_non_retryable(tmp_path):
 
 
 def test_frontend_selected_ready_and_retry_contract():
-    source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text()
+    source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text(encoding="utf-8")
     assert "model.model_loaded ? ' · ACTIVE · READY'" in source
     assert "model.model_state === 'loading' ? ' · SELECTED · LOADING'" in source
     assert "model.model_state === 'failed' ? ' · SELECTED · LOAD FAILED'" in source
@@ -41,14 +41,14 @@ def test_frontend_selected_ready_and_retry_contract():
 
 
 def test_static_assets_require_revalidation():
-    source = (Path(__file__).parents[1] / "client/axp_client/server.py").read_text()
+    source = (Path(__file__).parents[1] / "client/axp_client/server.py").read_text(encoding="utf-8")
     assert 'self.send_header("Cache-Control", "no-cache")' in source
 
 
 def test_ci_wheel_index_and_release_source_build_are_distinct():
     root = Path(__file__).parents[1]
-    requirements = (root / "requirements-runtime.txt").read_text()
-    release = (root / ".github/workflows/release.yml").read_text()
+    requirements = (root / "requirements-runtime.txt").read_text(encoding="utf-8")
+    release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "https://abetlen.github.io/llama-cpp-python/whl/cpu" in requirements
     assert "llama-cpp-python==0.3.23" in requirements
     assert "--no-binary llama-cpp-python" in release
