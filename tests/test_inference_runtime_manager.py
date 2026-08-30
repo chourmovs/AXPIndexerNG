@@ -1,5 +1,4 @@
 import pytest
-
 from axp_client.rag.hardware import HardwareCapabilities
 from axp_client.rag.runtime_manager import InferenceDeviceError, InferenceRuntimeManager
 

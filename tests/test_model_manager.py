@@ -4,7 +4,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-
 from axp_client.rag import model_manager as manager_module
 from axp_client.rag.model_catalog import MODELS, ModelProfile
 from axp_client.rag.model_manager import DownloadJob, ModelManager, ModelManagerError

@@ -1,5 +1,6 @@
 """Manually verify curated Hugging Face metadata without downloading GGUF files."""
 import sys
+import urllib.error
 import urllib.request
 
 from axp_client.rag.model_catalog import MODELS
@@ -19,7 +20,7 @@ def main():
             if linked_hash != model.sha256:
                 failures.append(f"{model.id}: remote SHA-256 identity does not match the catalog")
             print(f"{model.id}: revision resolves; {linked_size} bytes; SHA-256 {linked_hash}")
-        except Exception as exc:
+        except (KeyError, OSError, ValueError, urllib.error.URLError) as exc:
             failures.append(f"{model.id}: metadata verification failed ({type(exc).__name__})")
     if failures:
         print("\n".join(failures), file=sys.stderr)
