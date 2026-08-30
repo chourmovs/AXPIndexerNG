@@ -4,6 +4,8 @@ import json
 import platform
 import re
 
+from axp_client.rag.llama_cpp_backend import GenerationConfig, build_chat_invocation
+
 FORBIDDEN_FEATURES = {"AVX2", "AVX_VNNI", "AVX512", "AVX512_VBMI", "AVX512_VNNI",
                       "AVX512_BF16", "BMI2", "FMA", "F16C", "LLAMAFILE"}
 
@@ -30,9 +32,16 @@ def main():
 
     reported = verify_features(system_info)
     cpu = detect_cpu().public()
+    invocation, supports_template_kwargs, no_think_compatibility = build_chat_invocation(
+        llama_cpp.Llama.create_chat_completion, system_prompt="contract probe", user_prompt="contract probe",
+        config=GenerationConfig(), template_kwargs={"enable_thinking": False},
+    )
     print(json.dumps({"backend_version": importlib.metadata.version("llama-cpp-python"),
                       "platform": platform.platform(), "cpu": cpu,
-                      "reported_features": reported, "system_info": system_info}, sort_keys=True))
+                      "reported_features": reported, "system_info": system_info,
+                      "chat_template_kwargs_supported": supports_template_kwargs,
+                      "no_think_compatibility": no_think_compatibility,
+                      "chat_invocation_keys": sorted(invocation)}, sort_keys=True))
     return 0
 
 

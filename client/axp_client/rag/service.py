@@ -90,6 +90,18 @@ class RagService:
         retrieval = retrieval or self.retrieve(question)
         return retrieval, decide_answerability(retrieval.content_evidence, config)
 
+    @staticmethod
+    def _log_gate(request_id, decision, result_count):
+        signals = decision.signals
+        LOGGER.info(
+            "RAG request id=%s decision=%s reason=%s best_vector=%.4f best_lexical=%.4f "
+            "strong_chunks=%s support_chunks=%s exact_matches=%s documents=%s results=%s",
+            request_id, decision.reason.value, decision.reason.value,
+            signals["best_vector_similarity"], signals["best_lexical_coverage"],
+            signals["strong_chunks"], signals["support_chunks"], signals["exact_content_matches"],
+            signals["documents"], result_count,
+        )
+
     def ask(self, question, *, debug=False, retrieval=None, progress=None):
         def emit(event, **details):
             if progress is not None:
@@ -110,6 +122,7 @@ class RagService:
             related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
             decision = decide_answerability(content)
+            self._log_gate(request_id, decision, len(candidates))
             emit("gate_complete", answerable=decision.answerable)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public()}
@@ -117,8 +130,6 @@ class RagService:
                 base["timings"] = {"retrieval_ms": retrieval_ms, "total_ms": (time.perf_counter() - started) * 1000}
                 if debug:
                     base["debug"] = self._debug(retrieval, decision, None)
-                LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s", request_id, decision.reason.value,
-                            len(candidates), decision.content_documents)
                 return base
             if not self._generation_lock.acquire(blocking=False):
                 raise ChatBusyError

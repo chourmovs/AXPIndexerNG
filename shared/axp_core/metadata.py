@@ -1,7 +1,13 @@
 import json
 import logging
 
-from .schema import CHUNKER_VERSION, DISTANCE_METRIC, EMBEDDING_INPUT_VERSION, SCHEMA_VERSION
+from .schema import (
+    CHUNKER_VERSION,
+    DISTANCE_METRIC,
+    EMBEDDING_INPUT_VERSION,
+    EMBEDDING_SEMANTIC_VERSION,
+    SCHEMA_VERSION,
+)
 
 
 class IndexRebuildRequired(RuntimeError):
@@ -16,6 +22,7 @@ _SIGNATURE_FIELDS = {
     "distance_metric",
     "chunker_version",
     "embedding_input_version",
+    "embedding_semantic_version",
 }
 _SEMANTIC_FIELDS = _SIGNATURE_FIELDS - {"schema_version"}
 
@@ -25,9 +32,10 @@ def _canonical_signature(signature):
 
 
 def _is_well_formed_signature(signature):
+    fields = set(signature) if isinstance(signature, dict) else set()
     return (
         isinstance(signature, dict)
-        and set(signature) == _SIGNATURE_FIELDS
+        and fields in (_SIGNATURE_FIELDS, _SIGNATURE_FIELDS - {"embedding_semantic_version"})
         and type(signature["schema_version"]) is int
         and isinstance(signature["embedding_model_id"], str)
         and bool(signature["embedding_model_id"])
@@ -36,6 +44,8 @@ def _is_well_formed_signature(signature):
         and isinstance(signature["distance_metric"], str)
         and type(signature["chunker_version"]) is int
         and type(signature["embedding_input_version"]) is int
+        and ("embedding_semantic_version" not in signature
+             or type(signature["embedding_semantic_version"]) is int)
     )
 
 
@@ -81,7 +91,16 @@ def index_signature(model_id, dimension, distance_metric=DISTANCE_METRIC):
         "distance_metric": distance_metric,
         "chunker_version": CHUNKER_VERSION,
         "embedding_input_version": EMBEDDING_INPUT_VERSION,
+        "embedding_semantic_version": EMBEDDING_SEMANTIC_VERSION,
     }
+
+
+def _legacy_alpha5_signature(signature, wanted):
+    """Recognize the pre-fingerprint signature without claiming its pooling history."""
+    return (isinstance(signature, dict)
+            and set(signature) == _SIGNATURE_FIELDS - {"embedding_semantic_version"}
+            and all(signature.get(field) == wanted[field]
+                    for field in _SEMANTIC_FIELDS - {"embedding_semantic_version"}))
 
 
 def ensure_index_signature(con, model_id, dimension, distance_metric=DISTANCE_METRIC):
@@ -96,12 +115,17 @@ def ensure_index_signature(con, model_id, dimension, distance_metric=DISTANCE_ME
         except (TypeError, json.JSONDecodeError):
             stored = None
             schema_row = None
+        if _legacy_alpha5_signature(stored, wanted):
+            # Preserve existing alpha5 vectors while pooling history is investigated.
+            # Do not stamp an unproven semantic revision onto the database.
+            return stored
         compatible_upgrade = (
             schema_row is not None
             and schema_row[0] == SCHEMA_VERSION
             and _is_well_formed_signature(stored)
             and stored["schema_version"] == 3
-            and all(stored[field] == wanted[field] for field in _SEMANTIC_FIELDS)
+            and all(stored[field] == wanted[field]
+                    for field in _SEMANTIC_FIELDS if field in stored)
         )
         if not compatible_upgrade:
             raise IndexRebuildRequired("Index rebuild required: runtime index signature does not match the database")
@@ -117,9 +141,14 @@ def ensure_index_signature(con, model_id, dimension, distance_metric=DISTANCE_ME
 
 
 def validate_index_signature(con, model_id, dimension, distance_metric=DISTANCE_METRIC):
-    wanted = _canonical_signature(index_signature(model_id, dimension, distance_metric))
+    wanted_signature = index_signature(model_id, dimension, distance_metric)
+    wanted = _canonical_signature(wanted_signature)
     row = con.execute("SELECT value FROM metadata WHERE key='index_signature'").fetchone()
-    if not row or row[0] != wanted:
+    try:
+        stored = json.loads(row[0]) if row else None
+    except (TypeError, json.JSONDecodeError):
+        stored = None
+    if not row or (row[0] != wanted and not _legacy_alpha5_signature(stored, wanted_signature)):
         raise IndexRebuildRequired("Index rebuild required: runtime index signature does not match the database")
 
 

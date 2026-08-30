@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import inspect
 import re
 import threading
 import time
@@ -12,6 +13,25 @@ from .model import validate_gguf
 
 RECOMMENDED_MODEL = "Qwen3-1.7B-Q4_K_M"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+NO_THINK_DIRECTIVE = "/no_think\n"
+
+
+def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt, config, template_kwargs):
+    """Build an invocation compatible with the installed llama-cpp API before calling it."""
+    supports_template_kwargs = "chat_template_kwargs" in inspect.signature(create_chat_completion).parameters
+    non_thinking = bool(template_kwargs) and template_kwargs.get("enable_thinking") is False
+    system_content = NO_THINK_DIRECTIVE + system_prompt if non_thinking and not supports_template_kwargs else system_prompt
+    invocation = {
+        "messages": [{"role": "system", "content": system_content},
+                     {"role": "user", "content": user_prompt}],
+        "max_tokens": config.max_answer_tokens,
+        "temperature": config.temperature,
+        "top_p": config.top_p,
+        "top_k": config.top_k,
+    }
+    if supports_template_kwargs and template_kwargs:
+        invocation["chat_template_kwargs"] = template_kwargs
+    return invocation, supports_template_kwargs, non_thinking and not supports_template_kwargs
 
 
 class CpuIncompatibleError(OSError):
@@ -64,6 +84,8 @@ class LlamaCppBackend:
         self._model_state = "unloaded"
         self._failure = {}
         self.last_telemetry = {}
+        self._chat_template_kwargs_supported = None
+        self._no_think_compatibility = None
         self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
         self.cpu = detect_cpu()
 
@@ -89,7 +111,9 @@ class LlamaCppBackend:
                 "model_loaded": self.loaded, "model_state": self._model_state,
                 "model_load_ms": self._load_ms, "last_model_load_ms": self._load_ms,
                 "model_name": self.model_path.stem, **self.cpu.public(), **self._failure,
-                "context_size": self.config.context_size, "recommended_model": RECOMMENDED_MODEL}
+                "context_size": self.config.context_size, "recommended_model": RECOMMENDED_MODEL,
+                "chat_template_kwargs_supported": self._chat_template_kwargs_supported,
+                "no_think_compatibility": self._no_think_compatibility}
 
     @property
     def _load_failed(self):
@@ -142,12 +166,13 @@ class LlamaCppBackend:
     def generate(self, *, system_prompt, user_prompt):
         started = time.perf_counter()
         model = self.ensure_loaded()
-        result = model.create_chat_completion(
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            max_tokens=self.config.max_answer_tokens, temperature=self.config.temperature,
-            top_p=self.config.top_p, top_k=self.config.top_k,
-            chat_template_kwargs=self.chat_template_kwargs,
+        invocation, supported, compatibility = build_chat_invocation(
+            model.create_chat_completion, system_prompt=system_prompt, user_prompt=user_prompt,
+            config=self.config, template_kwargs=self.chat_template_kwargs,
         )
+        self._chat_template_kwargs_supported = supported
+        self._no_think_compatibility = compatibility
+        result = model.create_chat_completion(**invocation)
         elapsed = (time.perf_counter() - started) * 1000
         usage = result.get("usage", {})
         completion = int(usage.get("completion_tokens") or 0)
