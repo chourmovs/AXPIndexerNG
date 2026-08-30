@@ -3,6 +3,7 @@ import importlib.metadata
 import json
 import platform
 import re
+import inspect
 
 from axp_client.rag.llama_cpp_backend import GenerationConfig, build_chat_invocation
 
@@ -56,12 +57,16 @@ def main():
         llama_cpp.Llama.create_chat_completion, system_prompt="contract probe", user_prompt="contract probe",
         config=GenerationConfig(), template_kwargs={"enable_thinking": False},
     )
+    chat_stream_supported = "stream" in inspect.signature(llama_cpp.Llama.create_chat_completion).parameters
+    if not chat_stream_supported:
+        raise RuntimeError("packaged llama-cpp-python does not support streamed chat completion")
     print(json.dumps({"backend_version": backend_version,
                       "platform": platform.platform(), "cpu": cpu,
                       "reported_features": reported, "system_info": system_info,
                       "forbidden_features": {feature: reported.get(feature, False)
                                              for feature in sorted(FORBIDDEN_FEATURES)},
                       "hf_generation_tag_supported": hf_generation_tag_supported,
+                      "chat_stream_supported": chat_stream_supported,
                       "chat_template_kwargs_supported": supports_template_kwargs,
                       "no_think_compatibility": no_think_compatibility,
                       "chat_invocation_keys": sorted(invocation)}, sort_keys=True))

@@ -1,11 +1,11 @@
-import {askHealth, askStream, retryAskModel, localModels, modelAction, setInferenceDevice} from './api.js';
+import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
 const progressLabels = {retrieval_started: 'Searching indexed documents…', retrieval_complete: 'Retrieved candidate passages…',
   model_load_started: 'Loading local AI model…', model_load_heartbeat: 'Loading local AI model…', model_load_complete: 'Local AI model loaded.',
-  context_preparation_started: 'Preparing evidence…', context_ready: 'Evidence prepared.', generation_started: 'Generating answer locally…',
-  generation_heartbeat: 'Generating answer locally…', generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
+  context_preparation_started: 'Preparing evidence…', context_ready: 'Evidence prepared', generation_started: 'Evaluating prompt locally…',
+  generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
   local_generation_failed: 'The local answer model could not complete this request.',
   chat_model_unavailable: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
@@ -51,18 +51,28 @@ function renderResponse(article, response, turn) {
   const documents = response.status === 'answered' ? renderDocuments(turn, 'Sources', response.sources, true) :
     renderDocuments(turn, 'Related documents', response.related_documents, false);
   if (documents) article.append(documents);
-  if (response.timings) { const seconds = (response.timings.total_ms / 1000).toFixed(1); const count = response.sources?.length || 0;
-    article.append(element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · answered locally in ${seconds} s`)); }
+  if (response.timings) { const generation=response.generation || {}; const seconds = ((generation.generation_ms || response.timings.total_ms) / 1000).toFixed(1); const count = response.sources?.length || 0;
+    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · local CPU · ${seconds} s`);
+    if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
+      `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
+    article.append(meta); }
 }
 export function initAsk() {
   const form = document.querySelector('#ask-form'), input = document.querySelector('#ask-input'), submit = document.querySelector('#ask-submit');
   const history = document.querySelector('#chat-history'), progress = document.querySelector('#ask-progress'), health = document.querySelector('#ask-health');
-  let checked = false, busy = false, turn = 0, timer = null, phaseStarted = 0, lastBackend = 0;
+  let checked = false, busy = false, turn = 0, timer = null, phaseStarted = 0, progressMode = 'pipeline', progressData = {};
   const formatElapsed = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} elapsed`;
   let liveLabel = '';
-  const updateProgress = () => { const elapsed = Math.floor((Date.now() - phaseStarted) / 1000), quiet = Math.floor((Date.now() - lastBackend) / 1000);
-    progress.replaceChildren(element('strong', '', liveLabel), element('small', '', formatElapsed(elapsed)),
-      element('small', quiet >= 10 ? 'stalled' : '', quiet >= 10 ? `No backend heartbeat for ${quiet} s — processing may be stalled.` : `Backend heartbeat: ${quiet < 1 ? '< 1' : quiet} s ago`)); };
+  const updateProgress = () => { const elapsed = Math.floor(progressData.elapsed_s ?? ((Date.now() - phaseStarted) / 1000));
+    const rows=[element('strong', '', liveLabel), element('small', '', formatElapsed(elapsed))];
+    if(progressMode==='waiting'){ rows.push(element('small','','Waiting for first token'));
+      if(elapsed>=60) rows.push(element('small','stalled','Local CPU inference is very slow on this machine. You can cancel this generation.'));
+      else if(elapsed>=10) rows.push(element('small','stalled','Prompt evaluation is taking longer than usual.')); }
+    if(progressMode==='generating') rows.push(element('small','',`First token: ${(progressData.time_to_first_token_ms/1000).toFixed(1)} s`),
+      element('small','',`${progressData.generated_fragments} output fragments`));
+    if(progressMode==='context') rows.push(element('small','',`${Number(progressData.evidence_tokens).toLocaleString()} / ${Number(progressData.evidence_budget_tokens).toLocaleString()} evidence tokens`),
+      element('small','',`${progressData.documents} documents · ${progressData.blocks} evidence blocks`));
+    if(progressData.cancelButton) rows.push(progressData.cancelButton); progress.replaceChildren(...rows); };
   input.addEventListener('input', () => { submit.disabled = busy || !input.value.trim(); });
   input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!submit.disabled) form.requestSubmit(); } });
   document.querySelector('#clear-chat').addEventListener('click', () => { history.replaceChildren(); progress.textContent = ''; });
@@ -70,15 +80,22 @@ export function initAsk() {
     busy = true; submit.disabled = true; input.disabled = true; turn += 1; const current = turn;
     const user = element('article', 'turn user-turn'); user.append(element('h3', '', 'You'), element('p', '', question));
     const axp = element('article', 'turn axp-turn'); axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
-    phaseStarted = lastBackend = Date.now(); liveLabel = 'Starting local processing…'; updateProgress(); timer = setInterval(updateProgress, 1000);
-    try { await askStream(question, message => { lastBackend = Date.now();
-        if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; updateProgress(); }
+    phaseStarted = Date.now(); progressMode='pipeline'; progressData={}; liveLabel = 'Starting local processing…'; updateProgress(); timer = setInterval(updateProgress, 1000);
+    try { await askStream(question, message => {
+        if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; progressMode='pipeline'; progressData={}; updateProgress(); }
+        if(message.event==='context_ready'){ liveLabel='Evidence prepared'; progressMode='context'; progressData=message; updateProgress(); }
+        else if(message.event==='generation_started'){ const cancelButton=element('button','secondary compact','Cancel generation'); cancelButton.type='button';
+          cancelButton.addEventListener('click',async()=>{ cancelButton.disabled=true; cancelButton.textContent='Cancellation requested…'; try{await cancelAskGeneration();}catch(_){/* stream remains authoritative */} });
+          phaseStarted=Date.now(); liveLabel='Evaluating prompt locally…'; progressMode='waiting'; progressData={cancelButton}; updateProgress(); }
+        else if(message.event==='generation_waiting_first_token'){ progressMode='waiting'; progressData={...progressData,...message}; updateProgress(); }
+        else if(message.event==='generation_progress'){ liveLabel='Generating locally…'; progressMode='generating'; progressData={...progressData,...message}; updateProgress(); }
         else if (message.event === 'gate_complete') { liveLabel = message.answerable ? 'Evidence is sufficient…' : 'Evidence is insufficient…'; updateProgress(); }
         else if (message.event === 'final') { axp.querySelector('.working')?.remove(); renderResponse(axp, message.response, current); }
+        else if (message.event === 'cancelled') { axp.querySelector('.working')?.remove(); axp.append(element('p','generation-cancelled','Generation cancelled.')); }
         else if (message.event === 'error') throw Object.assign(new Error(errors[message.error] || 'AXP could not complete this request.'), {code: message.error}); });
     } catch (exception) { axp.querySelector('.working')?.remove(); axp.append(element('p', 'inline-error', errors[exception.code] || exception.message || 'AXP could not complete this request.')); }
     finally { clearInterval(timer); progress.replaceChildren();
-      if (!axp.querySelector('.answer-text, .inline-error')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
+      if (!axp.querySelector('.answer-text, .inline-error, .generation-cancelled')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
   });
   const manager = document.querySelector('#model-manager'), list = document.querySelector('#model-list');

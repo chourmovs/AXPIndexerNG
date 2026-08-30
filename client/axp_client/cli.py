@@ -84,8 +84,13 @@ def main(argv=None):
                 load_ms = (__import__("time").perf_counter() - started) * 1000
                 tokenizer_ok = backend.count_tokens("AXP local model self test") > 0
                 answer = backend.generate(system_prompt="Answer briefly.", user_prompt="Reply with OK.")
-                result.update(model_load_ok=True, load_ms=load_ms, tokenizer_ok=tokenizer_ok,
-                              generation_ok=bool(answer))
+                health, telemetry = backend.health(), backend.last_telemetry
+                result.update(model_load_ok=True, load_ms=load_ms, model_load_ms=load_ms,
+                              model_name=health.get("model_name"), tokenizer_ok=tokenizer_ok,
+                              generation_ok=bool(answer), **{key: telemetry.get(key) for key in (
+                                  "time_to_first_token_ms", "completion_tokens", "generation_ms",
+                                  "decode_tokens_per_second", "overall_tokens_per_second", "n_threads",
+                                  "n_threads_batch", "n_batch")})
             except Exception as exc:
                 LOGGER.exception("Chat model self-test failed type=%s", type(exc).__name__)
                 failed = backend.health()

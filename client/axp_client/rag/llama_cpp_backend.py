@@ -38,6 +38,10 @@ class CpuIncompatibleError(OSError):
     """The packaged backend's declared ISA is unavailable to this process."""
 
 
+class GenerationCancelled(Exception):
+    """Native streamed generation exited after a cooperative cancel request."""
+
+
 def classify_load_failure(exc, model_path=None):
     """Map native failures to stable, safe diagnostics (never a traceback/path)."""
     text = f"{exc!r} {exc}".lower()
@@ -69,6 +73,10 @@ def classify_load_failure(exc, model_path=None):
 class GenerationConfig:
     context_size: int = 6144
     max_answer_tokens: int = 384
+    max_evidence_tokens: int | None = None
+    max_context_documents: int = 6
+    max_context_blocks: int = 12
+    max_seeds_per_document: int = 3
     safety_tokens: int = 512
     temperature: float = 0.2
     top_p: float = 0.8
@@ -85,6 +93,7 @@ class LlamaCppBackend:
         self._model = None
         self._load_lock = threading.Lock()
         self._load_ms = None
+        self._cpu_settings = {"n_threads": None, "n_threads_batch": None, "n_batch": None}
         self._model_state = "unloaded"
         self._failure = {}
         self.last_telemetry = {}
@@ -92,6 +101,38 @@ class LlamaCppBackend:
         self._no_think_compatibility = None
         self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
         self.cpu = detect_cpu()
+        self._progress_lock = threading.Lock()
+        self._cancel_event = threading.Event()
+        self._progress = self._new_progress()
+
+    @staticmethod
+    def _new_progress():
+        return {"active": False, "phase": "idle", "sequence": 0, "started_monotonic": None,
+                "elapsed_s": None, "time_to_first_token_ms": None, "generated_fragments": 0,
+                "generated_characters": 0, "last_fragment_age_s": None, "finish_reason": None,
+                "cancel_requested": False}
+
+    def generation_progress(self):
+        with self._progress_lock:
+            value = dict(self._progress)
+            now = time.perf_counter()
+            if value["started_monotonic"] is not None:
+                value["elapsed_s"] = max(0.0, now - value["started_monotonic"])
+            last = value.pop("last_fragment_monotonic", None)
+            value["last_fragment_age_s"] = None if last is None else max(0.0, now - last)
+            return value
+
+    def generation_active(self):
+        with self._progress_lock:
+            return bool(self._progress["active"])
+
+    def request_cancel(self):
+        with self._progress_lock:
+            if not self._progress["active"]:
+                return False
+            self._cancel_event.set()
+            self._progress.update(phase="cancel_requested", cancel_requested=True)
+            return True
 
     @property
     def loaded(self):
@@ -117,7 +158,16 @@ class LlamaCppBackend:
                 "model_name": self.model_path.stem, **self.cpu.public(), **self._failure,
                 "context_size": self.config.context_size, "recommended_model": RECOMMENDED_MODEL,
                 "chat_template_kwargs_supported": self._chat_template_kwargs_supported,
-                "no_think_compatibility": self._no_think_compatibility}
+                "no_think_compatibility": self._no_think_compatibility, **self._cpu_settings,
+                **self._public_generation_health()}
+
+    def _public_generation_health(self):
+        progress = self.generation_progress()
+        return {"generation_phase": progress["phase"], "generation_elapsed_s": progress["elapsed_s"],
+                "time_to_first_token_ms": progress["time_to_first_token_ms"],
+                "generated_fragments": progress["generated_fragments"],
+                "generated_characters": progress["generated_characters"],
+                "last_fragment_age_s": progress["last_fragment_age_s"]}
 
     @property
     def _load_failed(self):
@@ -140,6 +190,8 @@ class LlamaCppBackend:
                         from llama_cpp import Llama
                         self._model = Llama(model_path=str(self.model_path), n_ctx=self.config.context_size,
                                             n_gpu_layers=self.config.n_gpu_layers, verbose=False)
+                        self._cpu_settings = {name: getattr(self._model, name, None)
+                                              for name in ("n_threads", "n_threads_batch", "n_batch")}
                     except Exception as exc:
                         self._model_state = "failed"
                         self._failure = classify_load_failure(exc, self.model_path)
@@ -168,7 +220,6 @@ class LlamaCppBackend:
         return self.config.context_size
 
     def generate(self, *, system_prompt, user_prompt):
-        started = time.perf_counter()
         model = self.ensure_loaded()
         invocation, supported, compatibility = build_chat_invocation(
             model.create_chat_completion, system_prompt=system_prompt, user_prompt=user_prompt,
@@ -176,13 +227,70 @@ class LlamaCppBackend:
         )
         self._chat_template_kwargs_supported = supported
         self._no_think_compatibility = compatibility
-        result = model.create_chat_completion(**invocation)
-        elapsed = (time.perf_counter() - started) * 1000
-        usage = result.get("usage", {})
-        completion = int(usage.get("completion_tokens") or 0)
-        self.last_telemetry = {"prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": completion,
-                               "generation_ms": elapsed, "tokens_per_second": completion / (elapsed / 1000) if elapsed else None}
-        return THINK_RE.sub("", result["choices"][0]["message"]["content"] or "").strip()
+        # The qualified 0.3.24 runtime always takes this branch. The signature
+        # guard only keeps lightweight legacy test doubles usable.
+        supports_stream = "stream" in inspect.signature(model.create_chat_completion).parameters
+        if supports_stream:
+            invocation["stream"] = True
+        self._cancel_event.clear()
+        started = time.perf_counter()
+        with self._progress_lock:
+            self._progress = self._new_progress()
+            self._progress.update(active=True, phase="waiting_first_token", started_monotonic=started)
+        stream = None
+        fragments, first_token, finish_reason = [], None, None
+        try:
+            stream = model.create_chat_completion(**invocation)
+            if not supports_stream:
+                content = (stream.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                stream = iter([{"choices": [{"delta": {"content": content}, "finish_reason":
+                                                     (stream.get("choices") or [{}])[0].get("finish_reason")}]}])
+            for chunk in stream:
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled
+                choice = (chunk.get("choices") or [{}])[0]
+                finish_reason = choice.get("finish_reason") or finish_reason
+                content = (choice.get("delta") or {}).get("content")
+                if content:
+                    now = time.perf_counter()
+                    if first_token is None:
+                        first_token = now
+                    fragments.append(content)
+                    with self._progress_lock:
+                        self._progress.update(phase="generating", sequence=self._progress["sequence"] + 1,
+                                              generated_fragments=self._progress["generated_fragments"] + 1,
+                                              generated_characters=self._progress["generated_characters"] + len(content),
+                                              time_to_first_token_ms=(first_token - started) * 1000,
+                                              last_fragment_monotonic=now)
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled
+            ended = time.perf_counter()
+            answer = THINK_RE.sub("", "".join(fragments)).strip()
+            tokenizer = getattr(model, "tokenize", None)
+            completion = (len(tokenizer(answer.encode("utf-8"), add_bos=False, special=True))
+                          if answer and callable(tokenizer) else (len(answer.split()) if answer else None))
+            generation_ms = (ended - started) * 1000
+            decode_ms = (ended - first_token) * 1000 if first_token is not None else None
+            self.last_telemetry = {
+                "time_to_first_token_ms": None if first_token is None else (first_token - started) * 1000,
+                "generation_ms": generation_ms, "decode_ms": decode_ms, "completion_tokens": completion,
+                "decode_tokens_per_second": completion / (decode_ms / 1000) if completion is not None and decode_ms else None,
+                "overall_tokens_per_second": completion / (generation_ms / 1000) if completion is not None and generation_ms else None,
+                "generated_characters": sum(map(len, fragments)), "generated_fragments": len(fragments),
+                "finish_reason": finish_reason, **self._cpu_settings}
+            with self._progress_lock:
+                self._progress.update(active=False, phase="completed", finish_reason=finish_reason)
+            return answer
+        except GenerationCancelled:
+            if stream is not None and callable(getattr(stream, "close", None)):
+                stream.close()
+            with self._progress_lock:
+                self._progress.update(active=False, phase="cancelled", finish_reason="cancelled")
+            raise
+        except Exception:
+            with self._progress_lock:
+                self._progress.update(active=False, phase="failed")
+            raise
 
     def close(self):
         with self._load_lock:

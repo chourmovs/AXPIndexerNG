@@ -12,6 +12,7 @@ from axp_core.runtime import configure_logging, load_settings
 
 from .rag.model_manager import ModelManager, ModelManagerError
 from .rag.runtime_manager import InferenceRuntimeManager
+from .rag.llama_cpp_backend import GenerationCancelled
 from .rag.service import (
     ChatBusyError,
     ChatUnavailableError,
@@ -206,6 +207,12 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if rag_service is None:
                     return self.send_json({"error": "chat_model_unavailable"}, 503)
                 return self.send_json(rag_service.retry_model())
+            if url.path == "/api/ask/cancel":
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                if rag_service is None or not rag_service.cancel_generation():
+                    return self.send_json({"error": "no_active_generation"}, 409)
+                return self.send_json({"status": "cancel_requested"}, 202)
             if url.path in ("/api/ask", "/api/ask/stream"):
                 def send(value, status=200):
                     return self.send_json(value, status)
@@ -253,7 +260,7 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
 
                     def progress(event):
                         nonlocal terminal_sent, disconnected
-                        is_terminal = event.get("event") in ("final", "error")
+                        is_terminal = event.get("event") in ("final", "error", "cancelled")
                         if is_terminal:
                             if terminal_sent:
                                 return
@@ -273,6 +280,9 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         progress({"event": "error", "error": _chat_failure_code(rag_service)})
                     except ChatBusyError:
                         progress({"event": "error", "error": "chat_busy"})
+                    except GenerationCancelled:
+                        # RagService emitted the terminal cancellation after the native iterator exited.
+                        pass
                     except GenerationFailedError:
                         progress({"event": "error", "error": "local_generation_failed"})
                     except ModelLoadFailedError:

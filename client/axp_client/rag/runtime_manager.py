@@ -26,6 +26,10 @@ class InferenceRuntimeManager:
     def _cpu_backend(settings, profile):
         config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
             max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
+            max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
+            max_context_documents=getattr(profile, "max_context_documents", 6),
+            max_context_blocks=getattr(profile, "max_context_blocks", 12),
+            max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
             temperature=getattr(profile, "temperature", .2))
         return LlamaCppBackend(settings["chat_model_path"], config,
             getattr(profile, "chat_template_kwargs", None))
