@@ -7,6 +7,7 @@ from axp_client.rag.answerability import DecisionReason, decide_answerability
 from axp_client.rag.backend import FakeChatBackend
 from axp_client.rag.citations import validate_citations
 from axp_client.rag.context import ContextConfig, build_context
+from axp_client.rag.prompts import SYSTEM_PROMPT
 from axp_client.rag.service import ChatBusyError, GenerationFailedError, RagService
 
 
@@ -89,6 +90,19 @@ def test_grounded_generation_and_prompt_boundary(tmp_path):
     assert response["status"] == "answered" and response["sources"][0]["id"] == "S1"
     assert backend.calls and "--- BEGIN EVIDENCE ---" in backend.calls[0]["user_prompt"]
     assert "evidence 1/1" not in backend.calls[0]["system_prompt"]
+
+
+def test_system_prompt_requires_question_appropriate_concision_without_weakening_grounding():
+    assert "shortest complete grounded answer appropriate to the" in SYSTEM_PROMPT
+    assert "factual lookup or scalar question" in SYSTEM_PROMPT
+    assert "answer directly in 1–3 sentences" in SYSTEM_PROMPT
+    assert "Do not restate the question" in SYSTEM_PROMPT
+    assert '"Based on the evidence provided" unless that framing is materially useful' in SYSTEM_PROMPT
+    assert "cite the factual statement itself" in SYSTEM_PROMPT
+    assert "multiple sources support the same" in SYSTEM_PROMPT
+    assert "preserve and explain the disagreement" in SYSTEM_PROMPT
+    assert "genuinely analytical questions" in SYSTEM_PROMPT
+    assert "without sacrificing citations, grounding, or material nuance" in SYSTEM_PROMPT
 
 
 def test_progress_reports_real_pipeline_order_and_only_final_contains_answer(tmp_path):
