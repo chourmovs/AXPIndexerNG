@@ -2,7 +2,6 @@ import threading
 import time
 
 import pytest
-
 from axp_client.rag.operations import NativeOperationSupervisor
 
 

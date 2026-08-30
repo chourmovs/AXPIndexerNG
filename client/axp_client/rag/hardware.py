@@ -43,7 +43,8 @@ def detect_hardware(accelerator_executable=None):
     if accelerator_executable:
         try:
             probe = subprocess.run([str(accelerator_executable), "--list-devices"], capture_output=True,
-                                   text=True, timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                   text=True, timeout=15, check=False,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             available = probe.returncode == 0 and "intel" in (probe.stdout + probe.stderr).lower()
             reason = None if available else "intel_driver_or_runtime_unavailable"
         except (OSError, subprocess.TimeoutExpired):

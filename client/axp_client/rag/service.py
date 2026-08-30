@@ -7,9 +7,9 @@ from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
 from .llama_cpp_backend import GenerationConfig
+from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
 from .retrieval import retrieve_rag_candidates
-from .operations import NativeOperationSupervisor
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24

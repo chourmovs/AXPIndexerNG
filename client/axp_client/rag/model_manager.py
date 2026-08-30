@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from axp_core.runtime import atomic_write_json, load_settings, save_settings
+
 from .model_catalog import CATALOG_VERSION, MODELS, catalog_model
 
 ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing"}
