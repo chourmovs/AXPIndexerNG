@@ -10,7 +10,6 @@ import urllib.request
 from pathlib import Path
 
 import psutil
-
 from axp_core.locking import daemon_instance_running
 from axp_core.runtime import atomic_write_json, installation_root, read_json, runtime_paths
 from axp_daemon.service import send_control
@@ -90,10 +89,10 @@ def is_owned_process(process, identity, allowed_roles=OWNED_ROLES):
             return False
         expected_executables = {root / "python" / "pythonw.exe", root / "python" / "python.exe"}
         recorded = Path(identity["executable"])
-        if not any(_same_path(recorded, item) for item in expected_executables):
-            # Development runs use the current interpreter, but only when it was recorded exactly.
-            if not (_same_path(recorded, sys.executable) and _same_path(process.exe(), recorded)):
-                return False
+        bundled_executable = any(_same_path(recorded, item) for item in expected_executables)
+        development_executable = _same_path(recorded, sys.executable) and _same_path(process.exe(), recorded)
+        if not bundled_executable and not development_executable:
+            return False
         if not _same_path(process.exe(), recorded):
             return False
         command = [str(item) for item in process.cmdline()]

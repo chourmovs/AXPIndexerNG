@@ -3,7 +3,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import psutil
-
 from axp_tray import process
 
 
