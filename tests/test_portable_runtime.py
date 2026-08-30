@@ -33,6 +33,24 @@ def test_zip_verifier_requires_store_and_rejects_cache(tmp_path):
         verify_zip(archive)
 
 
+@pytest.mark.parametrize(
+    "artifact",
+    (
+        "AXPIndexerNG/package/__pycache__/",
+        "AXPIndexerNG/package/module.pyc",
+        "AXPIndexerNG/package/module.pyo",
+    ),
+)
+def test_zip_verifier_rejects_every_bytecode_artifact(tmp_path, artifact):
+    archive = tmp_path / "runtime.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as output:
+        output.writestr("AXPIndexerNG/AXPIndexerTray.pyw", "")
+        output.writestr("AXPIndexerNG/python/pythonw.exe", "")
+        output.writestr(artifact, b"")
+    with pytest.raises(RuntimeError, match="forbidden cache"):
+        verify_zip(archive)
+
+
 def test_release_policy_guards(tmp_path):
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
