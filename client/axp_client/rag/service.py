@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 from .answerability import decide_answerability
 from .citations import validate_citations
@@ -54,25 +55,20 @@ class RagService:
     @staticmethod
     def _run_blocking(operation, heartbeat, *, interval=1.0):
         """Run native work off the streaming thread and report truthful liveness."""
-        result = []
-        failure = []
-
-        def run():
-            try:
-                result.append(operation())
-            except Exception as exc:  # transported back to the request thread
-                failure.append(exc)
-
-        worker = threading.Thread(target=run, daemon=True)
-        worker.start()
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="axp-chat-native")
+        future = executor.submit(operation)
         started = time.perf_counter()
-        while worker.is_alive():
-            worker.join(interval)
-            if worker.is_alive():
-                heartbeat(round(time.perf_counter() - started, 1))
-        if failure:
-            raise failure[0]
-        return result[0] if result else None
+        try:
+            while True:
+                try:
+                    return future.result(timeout=interval)
+                except FutureTimeoutError:
+                    heartbeat(round(time.perf_counter() - started, 1))
+        finally:
+            # Native llama.cpp calls cannot be cancelled safely. On disconnect,
+            # leave the one submitted operation to finish without holding up the
+            # streaming request thread.
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def retrieve(self, question):
         with self.connect_fn(self.db, readonly=True) as con:
