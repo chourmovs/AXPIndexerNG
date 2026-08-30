@@ -120,6 +120,8 @@ def test_ci_wheel_index_and_release_source_build_are_distinct():
     assert "-DGGML_NATIVE=OFF" in release
     assert "-DGGML_LLAMAFILE=OFF" in release
     assert "verify_llama_runtime.py" in release
+    assert "$after -gt 450MB" in release
+    assert "$after -gt 350MB" not in release
 
 
 def test_runtime_feature_parser_accepts_absent_disabled_features():

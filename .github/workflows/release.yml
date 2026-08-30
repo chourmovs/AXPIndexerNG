@@ -84,10 +84,12 @@ jobs:
           $llamaPackage=Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse -Filter llama_cpp | Select-Object -First 1
           if (!$llamaPackage -or !(Get-ChildItem $llamaPackage.FullName -File -Recurse | Where-Object Extension -In '.dll','.pyd')) { throw 'llama_cpp native runtime missing' }
           $after=(Get-ChildItem stage/AXPIndexerNG -Recurse -File | Measure-Object Length -Sum).Sum; "Runtime after cleanup: $after bytes"
-          if ($after -gt 350MB) { throw 'Runtime exceeds 350 MiB' } elseif ($after -gt 250MB) { Write-Warning 'Runtime exceeds target' }
-          $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
+          # The controlled source-built llama.cpp runtime is larger than the former opaque wheel.
+          # Keep a bounded gate based on the qualified 412,203,841-byte Windows build.
           Get-ChildItem stage/AXPIndexerNG/python -Directory -Recurse | ForEach-Object { [pscustomobject]@{Path=$_.FullName;Bytes=(Get-ChildItem $_ -File -Recurse | Measure-Object Length -Sum).Sum} } | Sort-Object Bytes -Descending | Select-Object -First 30
           Get-ChildItem stage -File -Recurse | Sort-Object Length -Descending | Select-Object -First 50 FullName,Length
+          if ($after -gt 450MB) { throw 'Runtime exceeds 450 MiB' } elseif ($after -gt 400MB) { Write-Warning 'Runtime exceeds 400 MiB qualified baseline' }
+          $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
           & stage/AXPIndexerNG/python/python.exe -m pip freeze
           # Store files without DEFLATE compression: the runtime is larger to download, but extracts much faster.
           Compress-Archive stage/AXPIndexerNG dist.zip -CompressionLevel NoCompression
