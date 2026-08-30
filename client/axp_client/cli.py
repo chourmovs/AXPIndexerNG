@@ -70,17 +70,26 @@ def main(argv=None):
         elif a.model_cmd == "test":
             backend = create_chat_backend(load_settings())
             started = __import__("time").perf_counter()
+            result = {key: backend.health().get(key) for key in (
+                "backend", "backend_version", "cpu_name", "cpu_arch", "avx_available", "avx2_available",
+                "fma_available", "f16c_available", "bmi2_available", "runtime_required_isa",
+                "runtime_cpu_compatible")}
+            result.update(model_path=str(path), model_valid=backend.health().get("model_valid"),
+                          model_load_ok=False, load_ms=None, tokenizer_ok=False, generation_ok=False,
+                          failure_type=None, failure_code=None, failure_reason=None, retryable=None)
             try:
                 backend.ensure_loaded()
                 load_ms = (__import__("time").perf_counter() - started) * 1000
                 tokenizer_ok = backend.count_tokens("AXP local model self test") > 0
                 answer = backend.generate(system_prompt="Answer briefly.", user_prompt="Reply with OK.")
-                print(json.dumps({"load_ok": True, "load_ms": load_ms, "tokenizer_ok": tokenizer_ok,
-                                  "generation_ok": bool(answer)}))
+                result.update(model_load_ok=True, load_ms=load_ms, tokenizer_ok=tokenizer_ok,
+                              generation_ok=bool(answer))
             except Exception as exc:
                 LOGGER.exception("Chat model self-test failed type=%s", type(exc).__name__)
-                print(json.dumps({"load_ok": False, "failure_type": type(exc).__name__,
-                                  "failure_message": str(exc)[:240]}))
+                failed = backend.health()
+                result.update({key: failed.get(key) for key in
+                               ("failure_type", "failure_code", "failure_reason", "retryable")})
+            print(json.dumps(result))
         elif not a.yes:
             p.error("chat-model remove requires --yes")
         else:
