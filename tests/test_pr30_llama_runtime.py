@@ -1,16 +1,15 @@
+import importlib.util
 import sys
-
-
-IMPORTLIB_UTIL = __import__("importlib.util", fromlist=["util"])
-PATH = __import__("pathlib").Path
-VERIFIER_PATH = PATH(__file__).parents[1] / "scripts/verify_llama_runtime.py"
-SPEC = IMPORTLIB_UTIL.spec_from_file_location("pr30_verify_llama_runtime", VERIFIER_PATH)
-VERIFIER = IMPORTLIB_UTIL.module_from_spec(SPEC)
+from pathlib import Path
+from types import ModuleType
+VERIFIER_PATH = Path(__file__).parents[1] / "scripts/verify_llama_runtime.py"
+SPEC = importlib.util.spec_from_file_location("pr30_verify_llama_runtime", VERIFIER_PATH)
+VERIFIER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VERIFIER)
 
 
 def test_runtime_pin_is_exactly_0324():
-    requirements = (PATH(__file__).parents[1] / "requirements-runtime.txt").read_text(encoding="utf-8")
+    requirements = (Path(__file__).parents[1] / "requirements-runtime.txt").read_text(encoding="utf-8")
     assert "llama-cpp-python==0.3.24" in requirements
     assert "llama-cpp-python==0.3.23" not in requirements
     assert VERIFIER.EXPECTED_BACKEND_VERSION == "0.3.24"
@@ -36,8 +35,8 @@ def test_generation_tag_probe_compiles_and_checks_rendered_body(monkeypatch):
             calls["messages"] = messages
             return type("Rendered", (), {"prompt": "assistant text"})()
 
-    package = type(sys)("llama_cpp")
-    chat_format = type(sys)("llama_cpp.llama_chat_format")
+    package = ModuleType("llama_cpp")
+    chat_format = ModuleType("llama_cpp.llama_chat_format")
     chat_format.Jinja2ChatFormatter = Formatter
     monkeypatch.setitem(sys.modules, "llama_cpp", package)
     monkeypatch.setitem(sys.modules, "llama_cpp.llama_chat_format", chat_format)
