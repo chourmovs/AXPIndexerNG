@@ -11,9 +11,15 @@ from axp_core.database import connect
 from axp_core.runtime import configure_logging, load_settings
 
 from .rag.factory import create_chat_backend
-from .rag.service import (ChatBusyError, ChatUnavailableError, ContextPreparationFailedError,
-                          GenerationFailedError, ModelLoadFailedError, RagService,
-                          ValidationFailedError)
+from .rag.service import (
+    ChatBusyError,
+    ChatUnavailableError,
+    ContextPreparationFailedError,
+    GenerationFailedError,
+    ModelLoadFailedError,
+    RagService,
+    ValidationFailedError,
+)
 from .reranker import Reranker
 from .search import search
 

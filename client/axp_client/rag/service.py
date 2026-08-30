@@ -60,7 +60,7 @@ class RagService:
         def run():
             try:
                 result.append(operation())
-            except BaseException as exc:  # transported back to the request thread
+            except Exception as exc:  # transported back to the request thread
                 failure.append(exc)
 
         worker = threading.Thread(target=run, daemon=True)
