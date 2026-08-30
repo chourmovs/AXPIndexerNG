@@ -8,7 +8,10 @@ pystray
 Pillow
 
 psutil==7.0.0
+py-cpuinfo==9.0.0
 
-# Official upstream basic CPU wheels. Release builds use --only-binary to prohibit local compilation.
+# Normal CI/development uses the upstream CPU wheel so dependency installation
+# stays lightweight. Tagged releases override this with --no-binary and compile
+# the same pin using the AXP-owned conservative CMake policy.
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 llama-cpp-python==0.3.23

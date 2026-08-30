@@ -44,6 +44,14 @@ def _is_loopback(address):
 
 MAX_ASK_BODY = 64 * 1024
 MAX_QUESTION_LENGTH = 4_000
+CHAT_FAILURE_CODES = {"model_missing", "model_invalid", "backend_missing",
+                      "backend_cpu_incompatible", "model_load_failed"}
+
+
+def _chat_failure_code(rag_service, default="chat_model_unavailable"):
+    health = rag_service.health()
+    code = health.get("failure_type") or health.get("reason")
+    return code if code in CHAT_FAILURE_CODES else default
 
 
 class DocumentNotFoundError(Exception):
@@ -153,6 +161,8 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 "text/css" if names[url.path].endswith(".css") else
                 "text/html" if names[url.path].endswith(".html") else "text/javascript",
             )
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
 
@@ -260,15 +270,13 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         response = rag_service.ask(question, debug=body.get("debug", False), progress=progress)
                         progress({"event": "final", "response": response})
                     except ChatUnavailableError:
-                        reason = rag_service.health().get("reason")
-                        progress({"event": "error", "error": reason if reason in
-                                  ("model_invalid", "model_load_failed") else "chat_model_unavailable"})
+                        progress({"event": "error", "error": _chat_failure_code(rag_service)})
                     except ChatBusyError:
                         progress({"event": "error", "error": "chat_busy"})
                     except GenerationFailedError:
                         progress({"event": "error", "error": "local_generation_failed"})
                     except ModelLoadFailedError:
-                        progress({"event": "error", "error": "model_load_failed"})
+                        progress({"event": "error", "error": _chat_failure_code(rag_service, "model_load_failed")})
                     except ContextPreparationFailedError:
                         progress({"event": "error", "error": "context_preparation_failed"})
                     except ValidationFailedError:
@@ -293,16 +301,14 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 try:
                     return send(rag_service.ask(question, debug=body.get("debug", False)))
                 except ChatUnavailableError:
-                    reason = rag_service.health().get("reason")
-                    return send({"error": reason if reason in ("model_invalid", "model_load_failed")
-                                 else "chat_model_unavailable"}, 503)
+                    return send({"error": _chat_failure_code(rag_service)}, 503)
                 except ChatBusyError:
                     return send({"error": "chat_busy"}, 429)
                 except GenerationFailedError:
                     return send({"status": "generation_unavailable", "answerable": False,
                                            "error": "local_generation_failed"}, 503)
                 except ModelLoadFailedError:
-                    return send({"error": "model_load_failed"}, 503)
+                    return send({"error": _chat_failure_code(rag_service, "model_load_failed")}, 503)
                 except ContextPreparationFailedError:
                     return send({"error": "context_preparation_failed"}, 503)
                 except ValidationFailedError:

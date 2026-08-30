@@ -68,14 +68,19 @@ class ModelManager:
 
     def catalog(self):
         settings = load_settings(); active = settings.get("chat_active_model_id")
+        health = self.runtime.health() if self.runtime else {}
         result = []
         for model in MODELS:
             partial = self.downloads_dir / f"{model.id}.gguf.part"
+            selected = active == model.id
             result.append({**model.public(), "installed": self.model_path(model.id).is_file(),
-                           "active": active == model.id, "partial_bytes": partial.stat().st_size if partial.exists() else 0,
+                           "active": selected, "selected": selected,
+                           "model_loaded": bool(selected and health.get("model_loaded")),
+                           "model_state": health.get("model_state") if selected else "installed",
+                           "retryable": health.get("retryable") if selected else None,
+                           "partial_bytes": partial.stat().st_size if partial.exists() else 0,
                            "download": self._job.public() if self._job and self._job.model_id == model.id else None})
         custom = settings.get("chat_model_path") if not active else None
-        health = self.runtime.health() if self.runtime else {}
         return {"catalog_version": CATALOG_VERSION, "active_model_id": active,
                 "models": result, "custom_model": {"name": "Custom local model",
                 "filename": Path(custom).name, "installed": Path(custom).is_file(), "active": True} if custom else None,

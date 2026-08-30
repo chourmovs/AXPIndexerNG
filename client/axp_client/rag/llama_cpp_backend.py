@@ -7,10 +7,38 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .cpu import detect_cpu
 from .model import validate_gguf
 
 RECOMMENDED_MODEL = "Qwen3-1.7B-Q4_K_M"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+class CpuIncompatibleError(OSError):
+    """The packaged backend's declared ISA is unavailable to this process."""
+
+
+def classify_load_failure(exc, model_path=None):
+    """Map native failures to stable, safe diagnostics (never a traceback/path)."""
+    text = f"{exc!r} {exc}".lower()
+    winerror = getattr(exc, "winerror", None)
+    if isinstance(exc, CpuIncompatibleError):
+        return {"failure_type": "backend_cpu_incompatible", "failure_code": "avx_unavailable",
+                "failure_reason": "Local AI runtime is not compatible with this CPU.", "retryable": False}
+    if winerror == -1073741795 or "-1073741795" in text or "0xc000001d" in text or "illegal instruction" in text:
+        return {"failure_type": "backend_cpu_incompatible", "failure_code": "0xc000001d",
+                "failure_reason": "Local AI runtime is not compatible with this CPU.", "retryable": False}
+    if isinstance(exc, (ModuleNotFoundError, ImportError)):
+        return {"failure_type": "backend_missing", "failure_code": None,
+                "failure_reason": "The local AI backend is not installed.", "retryable": False}
+    if model_path is not None and not Path(model_path).is_file():
+        kind, retryable = "model_missing", False
+    elif isinstance(exc, ValueError):
+        kind, retryable = "model_invalid", False
+    else:
+        kind, retryable = "model_load_failed", True
+    return {"failure_type": kind, "failure_code": None,
+            "failure_reason": "The local answer model could not be loaded.", "retryable": retryable}
 
 
 @dataclass(frozen=True)
@@ -37,6 +65,7 @@ class LlamaCppBackend:
         self._failure = {}
         self.last_telemetry = {}
         self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
+        self.cpu = detect_cpu()
 
     @property
     def loaded(self):
@@ -49,12 +78,17 @@ class LlamaCppBackend:
         except importlib.metadata.PackageNotFoundError:
             version = None
         if self._model_state == "failed":
-            reason = "model_load_failed"
-        return {"available": bool(valid and version and not self._load_failed), "reason": reason or (None if version else "backend_missing"),
+            reason = self._failure.get("failure_type", "model_load_failed")
+        elif not self.cpu.runtime_cpu_compatible:
+            reason = "backend_cpu_incompatible"
+        elif not valid:
+            reason = "model_missing" if reason == "model_missing" else "model_invalid"
+        return {"available": bool(valid and version and self.cpu.runtime_cpu_compatible and not self._load_failed), "reason": reason or (None if version else "backend_missing"),
                 "backend": "llama_cpp", "backend_version": version, "model_configured": self.model_path.is_file(),
-                "model_valid": valid, "model_loaded": self.loaded, "model_state": self._model_state,
+                "model_valid": valid, "model_installed": valid, "model_selected": True,
+                "model_loaded": self.loaded, "model_state": self._model_state,
                 "model_load_ms": self._load_ms, "last_model_load_ms": self._load_ms,
-                "model_name": self.model_path.stem, **self._failure,
+                "model_name": self.model_path.stem, **self.cpu.public(), **self._failure,
                 "context_size": self.config.context_size, "recommended_model": RECOMMENDED_MODEL}
 
     @property
@@ -70,6 +104,8 @@ class LlamaCppBackend:
                     started = time.perf_counter()
                     self._model_state = "loading"
                     try:
+                        if not self.cpu.runtime_cpu_compatible:
+                            raise CpuIncompatibleError("CPU does not provide the AVX state required by this AXP runtime")
                         valid, reason = validate_gguf(self.model_path)
                         if not valid:
                             raise ValueError(reason)
@@ -78,9 +114,11 @@ class LlamaCppBackend:
                                             n_gpu_layers=self.config.n_gpu_layers, verbose=False)
                     except Exception as exc:
                         self._model_state = "failed"
-                        self._failure = {"failure_type": type(exc).__name__,
-                                         "failure_message": "Failed to load GGUF model",
+                        self._failure = classify_load_failure(exc, self.model_path)
+                        self._failure.update(
+                                        {"failure_message": "Failed to load GGUF model",
                                          "failed_at_ms": int(time.time() * 1000)}
+                        )
                         raise
                     self._load_ms = (time.perf_counter() - started) * 1000
                     self._model_state = "loaded"
