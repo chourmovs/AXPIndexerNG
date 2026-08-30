@@ -43,7 +43,7 @@ MODELS = (
                  "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
                  1_280_000_000, "1.28 GB", chat_template_kwargs={"enable_thinking": False}),
     ModelProfile("smollm3-3b-q4km", "SmolLM3 3B", "balanced", "ggml-org/SmolLM3-3B-GGUF",
-                 "8a3f806f5f5d76b4a4385b736f4f8ce3f5eecb91", "SmolLM3-Q4_K_M.gguf",
+                 "4965cb60b150737b68a0408c36aeefb65078f894", "SmolLM3-Q4_K_M.gguf",
                  "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e",
                  1_915_305_312, "1.92 GB", chat_template_kwargs={"enable_thinking": False}),
 )
