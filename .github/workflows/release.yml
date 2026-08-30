@@ -6,6 +6,9 @@ permissions: { contents: write }
 jobs:
   portable:
     runs-on: windows-latest
+    env:
+      # This must cover every packaged interpreter and any Python descendants.
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Verify immutable chat model catalog
@@ -100,16 +103,30 @@ jobs:
           if ($after -gt 450MB) { throw 'Runtime exceeds 450 MiB' } elseif ($after -gt 400MB) { Write-Warning 'Runtime exceeds 400 MiB qualified baseline' }
           $forbidden='lancedb','pyarrow','pandas','onnxruntime_directml'; foreach($x in $forbidden){if(Get-ChildItem stage -Recurse -ErrorAction SilentlyContinue | Where-Object Name -Like "$x*"){throw "Forbidden package: $x"}}
           # Qualify the final post-prune runtime, rather than only the installation-time tree.
+          function Assert-NoBytecode([string]$stageName) {
+            & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py verify stage/AXPIndexerNG
+            if ($LASTEXITCODE -ne 0) { throw "Bytecode invariant failed after: $stageName" }
+            Write-Host "Bytecode invariant OK: $stageName"
+          }
+          # Prove both the packaged parent contract and inheritance by a child which is deliberately
+          # launched without -B. Libraries which spawn sys.executable must receive the job invariant.
+          $parentProbe = "import os,subprocess,sys; assert sys.dont_write_bytecode is True; assert os.environ.get('PYTHONDONTWRITEBYTECODE') == '1'; print('bytecode_disabled=true'); subprocess.run([sys.executable, '-c', sys.argv[1]], check=True)"
+          $childProbe = "import os,sys; assert sys.dont_write_bytecode is True; assert os.environ.get('PYTHONDONTWRITEBYTECODE') == '1'; print('child_bytecode_disabled=true')"
+          & stage/AXPIndexerNG/python/python.exe -B -c $parentProbe $childProbe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Python bytecode contract or child inheritance probe failed' }
           & stage/AXPIndexerNG/python/python.exe -B -c "import tkinter,pystray,PIL,openpyxl,sqlite3,fastembed,psutil,cpuinfo,llama_cpp,importlib.metadata; print('post-prune imports ok')"
           if ($LASTEXITCODE -ne 0) { throw 'Post-prune packaged import smoke failed' }
+          Assert-NoBytecode 'post-prune imports'
           & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/verify_llama_runtime.py
           if ($LASTEXITCODE -ne 0) { throw 'Post-prune llama.cpp runtime verification failed' }
+          Assert-NoBytecode 'llama runtime verifier'
           & stage/AXPIndexerNG/python/python.exe -B -m axp_tray self-test --db stage/post-prune-tray-self-test.db
           if ($LASTEXITCODE -ne 0) { throw 'Post-prune tray self-test failed' }
+          Assert-NoBytecode 'tray self-test'
           $null = Invoke-Checked $daemon @('health','--db',$db)
+          Assert-NoBytecode 'daemon health smoke'
           $null = Invoke-Checked $client @('search','--db',$db,'--query','reactor','--profile','hybrid')
-          & stage/AXPIndexerNG/python/python.exe -B stage/AXPIndexerNG/scripts/prune_portable_runtime.py verify stage/AXPIndexerNG
-          if ($LASTEXITCODE -ne 0) { throw 'Post-prune smoke recreated forbidden cache artifacts' }
+          Assert-NoBytecode 'client search smoke'
           # Store files without DEFLATE compression: many small files extract faster without DEFLATE.
           Compress-Archive stage/AXPIndexerNG dist.zip -CompressionLevel NoCompression
           $version=if($env:GITHUB_REF_TYPE -eq 'tag'){$env:GITHUB_REF_NAME.TrimStart('v')}else{'0.1.0-dev'}; $name="AXPIndexerNG-runtime-$version.zip"; Move-Item dist.zip $name
