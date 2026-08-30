@@ -1,12 +1,12 @@
-import importlib.util
 import sys
+from importlib import util
 from pathlib import Path
 from types import ModuleType
 
 
 VERIFIER_PATH = Path(__file__).parents[1] / "scripts/verify_llama_runtime.py"
-SPEC = importlib.util.spec_from_file_location("pr30_verify_llama_runtime", VERIFIER_PATH)
-VERIFIER = importlib.util.module_from_spec(SPEC)
+SPEC = util.spec_from_file_location("pr30_verify_llama_runtime", VERIFIER_PATH)
+VERIFIER = util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VERIFIER)
 
 
