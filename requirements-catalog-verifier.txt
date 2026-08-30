@@ -1,0 +1,2 @@
+# Lightweight, explicit release-gate dependency. Do not rely on runner state.
+huggingface-hub==0.34.4

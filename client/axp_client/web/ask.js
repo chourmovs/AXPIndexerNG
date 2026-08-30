@@ -9,13 +9,15 @@ const progressLabels = {retrieval_started: 'Searching indexed documents…', ret
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
   local_generation_failed: 'The local answer model could not complete this request.',
   chat_model_unavailable: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
+  backend_cpu_incompatible: 'This AXP build requires CPU instructions unavailable on this PC.',
+  backend_missing: 'The local AI runtime is not installed correctly.',
   model_missing: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
   model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local answer model could not be loaded.',
   context_preparation_failed: 'AXP could not prepare the indexed evidence.', validation_failed: 'AXP could not validate the local answer.',
   stream_incomplete: 'AXP lost the local processing stream unexpectedly.', stream_internal_error: 'AXP could not complete this request.'};
 const downloadErrors = {network_error: 'Download blocked or unavailable on this network. You can still import an approved local GGUF file.',
   tls_error: 'The secure connection could not be verified. AXP did not weaken TLS validation.',
-  integrity_mismatch: 'The download did not match its expected cryptographic identity and was not installed.',
+  integrity_mismatch: 'Download verification failed. The file did not match the release catalog and was not installed.',
   invalid_gguf: 'The downloaded file is not a valid GGUF model and was not installed.',
   insufficient_disk: 'There is not enough free disk space for this model.',
   download_cancelled: 'Download cancelled. The verified partial data can be resumed later.'};
@@ -86,7 +88,9 @@ export function initAsk() {
   async function renderManager(){
     clearTimeout(downloadTimer); const catalog = await localModels(); const cards=[]; let downloading=false;
     for (const model of catalog.models) { const card=element('article','model-card');
-      card.append(element('strong','',`${model.name}${model.active ? ' · ACTIVE' : ''}`),
+      const stateLabel = !model.selected ? '' : model.model_loaded ? ' · ACTIVE · READY' :
+        model.model_state === 'loading' ? ' · SELECTED · LOADING' : model.model_state === 'failed' ? ' · SELECTED · LOAD FAILED' : ' · SELECTED';
+      card.append(element('strong','',`${model.name}${stateLabel}`),
         element('p','muted',`${model.profile === 'fast' ? 'Fast · Recommended for standard workstations' : 'Balanced'} · ${model.display_size} · ${model.license}`),
         element('small','',`${model.repository} · ${model.quantization}`));
       const job=model.download;
@@ -97,7 +101,7 @@ export function initAsk() {
       } else { if (job?.state === 'failed' || job?.state === 'cancelled') card.append(element('p','inline-error',downloadErrors[job.error] || `Download ${job.state}.`));
         if (!model.installed) card.append(makeButton(model.partial_bytes ? 'Resume download' : 'Download & activate',()=>{ if (model.partial_bytes || confirmDownload(model)) action(model,'download',{activate:true}); }));
         else if (!model.active) card.append(makeButton('Activate',()=>action(model,'activate')),makeButton('Remove',()=>{ if (confirm(`Remove ${model.name} from AXP?`)) action(model,'remove'); },true));
-        else card.append(element('small','active-status','Active model')); }
+        else card.append(element('small','active-status',model.model_loaded ? 'Ready' : model.model_state === 'failed' ? 'Load failed' : 'Selected · Not ready')); }
       cards.push(card);
     }
     if (catalog.custom_model) { const custom=element('article','model-card'); custom.append(element('strong','',`Custom local model${catalog.custom_model.active ? ' · ACTIVE' : ''}`),
@@ -119,9 +123,11 @@ export function initAsk() {
   async function refreshHealth(){ try { const state = await askHealth();
       if (state.model_state === 'loaded') health.textContent = `● Local AI ready · ${state.active_model_name || state.model_name || 'Local model'} · ${state.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : 'CPU'}${state.fallback_reason ? ' · Intel GPU unavailable' : ''}`;
       else if (state.model_state === 'loading') health.textContent = '● Loading local model…';
-      else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode('⚠ Local model load failed ')); const retry = element('button', 'retry-model', 'Retry model');
-        retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model detected · Not loaded yet'; } catch (_) { retry.disabled = false; } }); health.append(retry); }
+      else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode(`⚠ ${state.failure_reason || 'Local model load failed'} `));
+        if (state.retryable === true) { const retry = element('button', 'retry-model', 'Retry model');
+          retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model selected · Not ready'; } catch (_) { retry.disabled = false; } }); health.append(retry); } }
       else if (state.available) health.textContent = `● Local model detected · Not loaded yet${state.model_name ? ` · ${state.model_name}` : ''}`;
+      else if (state.reason === 'backend_cpu_incompatible') health.textContent = `⚠ ${errors.backend_cpu_incompatible}`;
       else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : '○ Local answer model not configured';
     } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }
   let healthTimer; return {open: async () => { checked = true; await refreshHealth(); clearInterval(healthTimer); healthTimer=setInterval(() => { if (!document.querySelector('#ask-panel').hidden) refreshHealth(); }, 7500); }};
