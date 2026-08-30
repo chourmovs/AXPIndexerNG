@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
-from axp_client.rag.llama_cpp_backend import classify_load_failure
+import pytest
+from axp_client.rag.llama_cpp_backend import LlamaCppBackend, classify_load_failure
 from axp_client.rag.model_catalog import MODELS, catalog_model
 
 
@@ -32,12 +34,26 @@ def test_windows_illegal_instruction_is_non_retryable(tmp_path):
         assert failure["retryable"] is False
 
 
+def test_avx_preflight_is_cpu_incompatible_and_non_retryable(tmp_path):
+    backend = LlamaCppBackend(tmp_path / "unused.gguf")
+    backend.cpu = SimpleNamespace(runtime_cpu_compatible=False,
+                                  public=lambda: {"runtime_cpu_compatible": False})
+    with pytest.raises(OSError, match="AVX state"):
+        backend.ensure_loaded()
+    health = backend.health()
+    assert health["failure_type"] == health["reason"] == "backend_cpu_incompatible"
+    assert health["failure_code"] == "avx_unavailable"
+    assert health["retryable"] is False
+
+
 def test_frontend_selected_ready_and_retry_contract():
     source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text(encoding="utf-8")
     assert "model.model_loaded ? ' · ACTIVE · READY'" in source
     assert "model.model_state === 'loading' ? ' · SELECTED · LOADING'" in source
     assert "model.model_state === 'failed' ? ' · SELECTED · LOAD FAILED'" in source
     assert "state.retryable === true" in source
+    assert "backend_cpu_incompatible: 'This AXP build requires CPU instructions unavailable on this PC.'" in source
+    assert "state.reason === 'backend_cpu_incompatible'" in source
 
 
 def test_static_assets_require_revalidation():
@@ -53,3 +69,4 @@ def test_ci_wheel_index_and_release_source_build_are_distinct():
     assert "llama-cpp-python==0.3.23" in requirements
     assert "--no-binary llama-cpp-python" in release
     assert "-DGGML_NATIVE=OFF" in release
+    assert "verify_llama_runtime.py" in release

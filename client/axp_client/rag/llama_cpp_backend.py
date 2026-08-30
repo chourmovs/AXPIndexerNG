@@ -14,10 +14,17 @@ RECOMMENDED_MODEL = "Qwen3-1.7B-Q4_K_M"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
+class CpuIncompatibleError(OSError):
+    """The packaged backend's declared ISA is unavailable to this process."""
+
+
 def classify_load_failure(exc, model_path=None):
     """Map native failures to stable, safe diagnostics (never a traceback/path)."""
     text = f"{exc!r} {exc}".lower()
     winerror = getattr(exc, "winerror", None)
+    if isinstance(exc, CpuIncompatibleError):
+        return {"failure_type": "backend_cpu_incompatible", "failure_code": "avx_unavailable",
+                "failure_reason": "Local AI runtime is not compatible with this CPU.", "retryable": False}
     if winerror == -1073741795 or "-1073741795" in text or "0xc000001d" in text or "illegal instruction" in text:
         return {"failure_type": "backend_cpu_incompatible", "failure_code": "0xc000001d",
                 "failure_reason": "Local AI runtime is not compatible with this CPU.", "retryable": False}
@@ -98,7 +105,7 @@ class LlamaCppBackend:
                     self._model_state = "loading"
                     try:
                         if not self.cpu.runtime_cpu_compatible:
-                            raise OSError("CPU does not provide the AVX state required by this AXP runtime")
+                            raise CpuIncompatibleError("CPU does not provide the AVX state required by this AXP runtime")
                         valid, reason = validate_gguf(self.model_path)
                         if not valid:
                             raise ValueError(reason)

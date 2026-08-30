@@ -9,6 +9,8 @@ const progressLabels = {retrieval_started: 'Searching indexed documents…', ret
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
   local_generation_failed: 'The local answer model could not complete this request.',
   chat_model_unavailable: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
+  backend_cpu_incompatible: 'This AXP build requires CPU instructions unavailable on this PC.',
+  backend_missing: 'The local AI runtime is not installed correctly.',
   model_missing: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
   model_invalid: 'The configured local model is invalid.', model_load_failed: 'The local answer model could not be loaded.',
   context_preparation_failed: 'AXP could not prepare the indexed evidence.', validation_failed: 'AXP could not validate the local answer.',
@@ -125,6 +127,7 @@ export function initAsk() {
         if (state.retryable === true) { const retry = element('button', 'retry-model', 'Retry model');
           retry.type = 'button'; retry.addEventListener('click', async () => { retry.disabled = true; try { await retryAskModel(); health.textContent = '● Local model selected · Not ready'; } catch (_) { retry.disabled = false; } }); health.append(retry); } }
       else if (state.available) health.textContent = `● Local model detected · Not loaded yet${state.model_name ? ` · ${state.model_name}` : ''}`;
+      else if (state.reason === 'backend_cpu_incompatible') health.textContent = `⚠ ${errors.backend_cpu_incompatible}`;
       else health.textContent = state.reason === 'model_invalid' ? '⚠ Local model is invalid' : '○ Local answer model not configured';
     } catch (_) { health.textContent = '⚠ Local AI health is unavailable'; } }
   let healthTimer; return {open: async () => { checked = true; await refreshHealth(); clearInterval(healthTimer); healthTimer=setInterval(() => { if (!document.querySelector('#ask-panel').hidden) refreshHealth(); }, 7500); }};
