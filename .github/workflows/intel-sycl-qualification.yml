@@ -1,0 +1,25 @@
+name: Intel SYCL package qualification
+on:
+  workflow_dispatch:
+jobs:
+  qualify-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify pinned package
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/ggml-org/llama.cpp/releases/download/b10516/llama-b10516-bin-win-sycl-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile sycl.zip
+          if ((Get-Item sycl.zip).Length -ne 119741566) { throw 'size mismatch' }
+          $hash = (Get-FileHash sycl.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'b9a5a42ddc4033f05003b127d3fd18583565b33971eb01723c6711e95ece42b4') { throw 'hash mismatch' }
+          Expand-Archive sycl.zip runtime
+          $servers = @(Get-ChildItem runtime -Recurse -Filter llama-server.exe)
+          if ($servers.Count -ne 1 -or $servers[0].Length -eq 0) { throw 'invalid llama-server package' }
+          Write-Host 'package qualification PASS'
+          Push-Location $servers[0].Directory
+          & $servers[0].FullName --list-devices
+          if ($LASTEXITCODE -ne 0) { Write-Host 'hardware inference NOT TESTED (host may have no Intel GPU)' }
+          Pop-Location
+
