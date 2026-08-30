@@ -86,7 +86,9 @@ def test_progress_reports_real_pipeline_order_and_only_final_contains_answer(tmp
     events = []
     response = rag.ask("why?", progress=events.append)
     assert [event["event"] for event in events] == ["retrieval_started", "retrieval_complete", "gate_complete",
-                                                       "context_ready", "generation_started", "validation_started"]
+                                                       "context_preparation_started", "context_ready",
+                                                       "generation_started", "generation_complete",
+                                                       "validation_started"]
     assert all("Unsupported answer" not in json.dumps(event) for event in events)
     assert response["status"] == "ungrounded_generation" and response["answer"] is None
 

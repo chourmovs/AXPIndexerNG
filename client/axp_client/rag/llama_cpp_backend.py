@@ -33,7 +33,8 @@ class LlamaCppBackend:
         self._model = None
         self._load_lock = threading.Lock()
         self._load_ms = None
-        self._load_failed = False
+        self._model_state = "unloaded"
+        self._failure = {}
         self.last_telemetry = {}
 
     @property
@@ -46,40 +47,62 @@ class LlamaCppBackend:
             version = importlib.metadata.version("llama-cpp-python")
         except importlib.metadata.PackageNotFoundError:
             version = None
-        if self._load_failed:
+        if self._model_state == "failed":
             reason = "model_load_failed"
         return {"available": bool(valid and version and not self._load_failed), "reason": reason or (None if version else "backend_missing"),
                 "backend": "llama_cpp", "backend_version": version, "model_configured": self.model_path.is_file(),
-                "model_valid": valid, "model_loaded": self.loaded, "model_load_ms": self._load_ms,
+                "model_valid": valid, "model_loaded": self.loaded, "model_state": self._model_state,
+                "model_load_ms": self._load_ms, "last_model_load_ms": self._load_ms,
+                "model_name": self.model_path.stem, **self._failure,
                 "context_size": self.config.context_size, "recommended_model": RECOMMENDED_MODEL}
 
-    def _load(self):
+    @property
+    def _load_failed(self):
+        return self._model_state == "failed"
+
+    def ensure_loaded(self):
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
-                    valid, reason = validate_gguf(self.model_path)
-                    if not valid:
-                        raise ValueError(reason)
+                    if self._model_state == "failed":
+                        raise RuntimeError("model_load_failed")
                     started = time.perf_counter()
+                    self._model_state = "loading"
                     try:
+                        valid, reason = validate_gguf(self.model_path)
+                        if not valid:
+                            raise ValueError(reason)
                         from llama_cpp import Llama
                         self._model = Llama(model_path=str(self.model_path), n_ctx=self.config.context_size,
                                             n_gpu_layers=self.config.n_gpu_layers, verbose=False)
-                    except Exception:
-                        self._load_failed = True
+                    except Exception as exc:
+                        self._model_state = "failed"
+                        self._failure = {"failure_type": type(exc).__name__,
+                                         "failure_message": "Failed to load GGUF model",
+                                         "failed_at_ms": int(time.time() * 1000)}
                         raise
                     self._load_ms = (time.perf_counter() - started) * 1000
+                    self._model_state = "loaded"
+                    self._failure = {}
         return self._model
 
+    def retry_load(self):
+        with self._load_lock:
+            if self._model is not None:
+                return
+            self._model_state = "unloaded"
+            self._failure = {}
+            self._load_ms = None
+
     def count_tokens(self, text):
-        return len(self._load().tokenize(text.encode("utf-8"), add_bos=False, special=True))
+        return len(self.ensure_loaded().tokenize(text.encode("utf-8"), add_bos=False, special=True))
 
     def context_window(self):
         return self.config.context_size
 
     def generate(self, *, system_prompt, user_prompt):
         started = time.perf_counter()
-        model = self._load()
+        model = self.ensure_loaded()
         result = model.create_chat_completion(
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             max_tokens=self.config.max_answer_tokens, temperature=self.config.temperature,

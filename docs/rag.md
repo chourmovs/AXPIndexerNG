@@ -43,6 +43,7 @@ Provision it explicitly and offline:
 python -m axp_client chat-model import --file "D:\Downloads\Qwen3-4B-Q4_K_M.gguf"
 python -m axp_client chat-model status
 python -m axp_client chat-model verify
+python -m axp_client chat-model test
 python -m axp_client chat-model remove --yes
 ```
 
@@ -97,3 +98,25 @@ Content-Length are required, and responses use `Cache-Control: no-store` and `X-
 Debug output includes only counts, IDs, gate signals, and token diagnostics—not prompts or evidence.
 File and directory actions have the same loopback and browser-origin boundary. They accept only a database document
 ID, resolve mapped-drive/UNC access server-side, and never return the resolved confidential path to the browser.
+
+## Local model runtime lifecycle
+
+A configured model is **detected** but begins each client process **unloaded**. The first
+answerable Ask can therefore take longer: after the evidence gate accepts the question,
+AXP reports `loading` heartbeats while llama.cpp loads the GGUF, then reports context
+preparation, local generation heartbeats, and citation validation. A successfully loaded
+model remains `loaded` for later questions. A load error changes the runtime state to
+`failed`; it does not affect Document Search and is not persisted across client restarts.
+Health checks only report these states and never load the model.
+
+The Ask health area distinguishes detected/unloaded, loading, loaded, failed, and missing
+models. In the failed state, **Retry model** resets the in-memory failure so the next Ask
+can attempt a fresh load without restarting the client. Only one Ask owns model loading
+or generation at a time; another concurrent Ask receives `chat_busy`.
+
+Use `python -m axp_client chat-model test` (or `AXPIndexerClient.bat chat-model test` in
+the packaged client) to load the model, smoke-test tokenization, and perform a tiny local
+generation without a database, index, embeddings, corpus content, or network access.
+Failure output includes the local exception type and a bounded diagnostic message; full
+tracebacks are written to the local client log. Runtime health never exposes the model's
+full filesystem path, prompts, questions, or evidence.

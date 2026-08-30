@@ -26,6 +26,18 @@ class GenerationFailedError(Exception):
     pass
 
 
+class ModelLoadFailedError(Exception):
+    pass
+
+
+class ContextPreparationFailedError(Exception):
+    pass
+
+
+class ValidationFailedError(Exception):
+    pass
+
+
 class RagService:
     def __init__(self, *, backend, search_fn, connect_fn, db, embedder):
         self.backend, self.search_fn, self.connect_fn = backend, search_fn, connect_fn
@@ -34,6 +46,33 @@ class RagService:
 
     def health(self):
         return self.backend.health()
+
+    def retry_model(self):
+        self.backend.retry_load()
+        return {"status": "reset", "model_state": self.health().get("model_state", "unloaded")}
+
+    @staticmethod
+    def _run_blocking(operation, heartbeat, *, interval=1.0):
+        """Run native work off the streaming thread and report truthful liveness."""
+        result = []
+        failure = []
+
+        def run():
+            try:
+                result.append(operation())
+            except BaseException as exc:  # transported back to the request thread
+                failure.append(exc)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        started = time.perf_counter()
+        while worker.is_alive():
+            worker.join(interval)
+            if worker.is_alive():
+                heartbeat(round(time.perf_counter() - started, 1))
+        if failure:
+            raise failure[0]
+        return result[0] if result else None
 
     def retrieve(self, question):
         with self.connect_fn(self.db, readonly=True) as con:
@@ -71,49 +110,84 @@ class RagService:
                 LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s", request_id, decision.reason.value,
                             len(candidates), decision.content_documents)
                 return base
-            context_start = time.perf_counter()
-            system_tokens = self.backend.count_tokens(SYSTEM_PROMPT)
-            question_tokens = self.backend.count_tokens(user_prompt(question, ""))
-            fixed_tokens = system_tokens + question_tokens
-            generation_config = getattr(self.backend, "config", GenerationConfig())
-            context = build_context(con, content, token_counter=self.backend.count_tokens,
-                                    context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
-                                    config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
-                                        answer_reserve_tokens=generation_config.max_answer_tokens,
-                                        safety_reserve_tokens=generation_config.safety_tokens))
+            if not self._generation_lock.acquire(blocking=False):
+                raise ChatBusyError
+            try:
+                state = self.health().get("model_state")
+                if state != "loaded":
+                    emit("model_load_started")
+                    load_start = time.perf_counter()
+                    try:
+                        self._run_blocking(self.backend.ensure_loaded,
+                                           lambda elapsed: emit("model_load_heartbeat", elapsed_s=elapsed))
+                    except Exception as exc:
+                        elapsed = time.perf_counter() - load_start
+                        emit("model_load_failed", elapsed_s=round(elapsed, 1), error="model_load_failed")
+                        LOGGER.exception("Model load failed request id=%s type=%s model=%s", request_id,
+                                         type(exc).__name__, self.health().get("model_name", "configured model"))
+                        raise ModelLoadFailedError from exc
+                    emit("model_load_complete", elapsed_s=round(time.perf_counter() - load_start, 1))
+                emit("context_preparation_started")
+                context_start = time.perf_counter()
+                try:
+                    system_tokens = self.backend.count_tokens(SYSTEM_PROMPT)
+                    question_tokens = self.backend.count_tokens(user_prompt(question, ""))
+                    fixed_tokens = system_tokens + question_tokens
+                    generation_config = getattr(self.backend, "config", GenerationConfig())
+                    context = build_context(con, content, token_counter=self.backend.count_tokens,
+                                            context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
+                                            config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
+                                                answer_reserve_tokens=generation_config.max_answer_tokens,
+                                                safety_reserve_tokens=generation_config.safety_tokens))
+                except Exception as exc:
+                    LOGGER.exception("Context preparation failed request id=%s type=%s", request_id,
+                                     type(exc).__name__)
+                    raise ContextPreparationFailedError from exc
+            except Exception:
+                self._generation_lock.release()
+                raise
         context_ms = (time.perf_counter() - context_start) * 1000
         if not context.blocks:
+            self._generation_lock.release()
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
             return base
         emit("context_ready", documents=len({block.document_id for block in context.blocks}),
              sources=len(context.blocks))
-        if not self._generation_lock.acquire(blocking=False):
-            raise ChatBusyError
         generation_start = time.perf_counter()
         try:
             try:
-                emit("generation_started", model_was_loaded=bool(self.health().get("model_loaded")))
-                answer = self.backend.generate(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt(question, context.prompt_text))
+                emit("generation_started")
+                answer = self._run_blocking(
+                    lambda: self.backend.generate(system_prompt=SYSTEM_PROMPT,
+                                                  user_prompt=user_prompt(question, context.prompt_text)),
+                    lambda elapsed: emit("generation_heartbeat", elapsed_s=elapsed))
             except Exception as exc:
-                LOGGER.error("Local generation failed request id=%s type=%s", request_id, type(exc).__name__)
+                LOGGER.exception("Local generation failed request id=%s type=%s", request_id, type(exc).__name__)
                 raise GenerationFailedError from exc
         finally:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
+        telemetry = getattr(self.backend, "last_telemetry", None) or {}
+        emit("generation_complete", elapsed_s=round(generation_ms / 1000, 1),
+             **{key: telemetry[key] for key in ("prompt_tokens", "completion_tokens", "tokens_per_second")
+                if telemetry.get(key) is not None})
         emit("validation_started")
-        if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
-            base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
-        else:
-            valid, cited = validate_citations(answer, [block.id for block in context.blocks])
-            if valid:
-                base.update(status="answered", answerable=True, answer=answer,
-                            sources=[block.source() for block in context.blocks if block.id in cited])
+        try:
+            if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
+                base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
             else:
-                base["status"] = "ungrounded_generation"
-                base["decision"] = {"reason": "invalid_citations", "best_relevance": decision.best_relevance}
+                valid, cited = validate_citations(answer, [block.id for block in context.blocks])
+                if valid:
+                    base.update(status="answered", answerable=True, answer=answer,
+                                sources=[block.source() for block in context.blocks if block.id in cited])
+                else:
+                    base["status"] = "ungrounded_generation"
+                    base["decision"] = {"reason": "invalid_citations", "best_relevance": decision.best_relevance}
+        except Exception as exc:
+            LOGGER.exception("Validation failed request id=%s type=%s", request_id, type(exc).__name__)
+            raise ValidationFailedError from exc
         base["timings"] = {"retrieval_ms": retrieval_ms, "context_ms": context_ms, "generation_ms": generation_ms,
                            "total_ms": (time.perf_counter() - started) * 1000}
-        telemetry = getattr(self.backend, "last_telemetry", None)
         if telemetry:
             base["generation"] = telemetry
         if debug:
