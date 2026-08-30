@@ -77,6 +77,8 @@ class ModelManager:
                            "active": selected, "selected": selected,
                            "model_loaded": bool(selected and health.get("model_loaded")),
                            "model_state": health.get("model_state") if selected else "installed",
+                           "failure_type": health.get("failure_type") if selected else None,
+                           "failure_reason": health.get("failure_reason") if selected else None,
                            "retryable": health.get("retryable") if selected else None,
                            "partial_bytes": partial.stat().st_size if partial.exists() else 0,
                            "download": self._job.public() if self._job and self._job.model_id == model.id else None})

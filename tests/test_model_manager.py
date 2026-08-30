@@ -158,6 +158,29 @@ def test_active_model_cannot_be_removed(tmp_path, fixture_model, monkeypatch):
         manager.remove(model.id)
 
 
+def test_verified_selected_model_reports_template_load_failure_without_corruption(tmp_path, fixture_model,
+                                                                                  monkeypatch):
+    model, data = fixture_model
+    monkeypatch.setattr(manager_module, "load_settings", lambda: {"chat_active_model_id": model.id})
+    runtime = SimpleNamespace(health=lambda: {
+        "model_state": "failed", "model_loaded": False,
+        "failure_type": "model_template_incompatible",
+        "failure_reason": "The selected model uses a chat template that is incompatible with this AXP runtime.",
+        "retryable": False,
+    })
+    manager = ModelManager(tmp_path, runtime=runtime)
+    path = manager.model_path(model.id)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(data)
+    manager.manifest_path(model.id).write_text("{}", encoding="utf-8")
+
+    selected = next(entry for entry in manager.catalog()["models"] if entry["id"] == model.id)
+    assert selected["installed"] and selected["selected"]
+    assert selected["model_state"] == "failed"
+    assert selected["failure_type"] == "model_template_incompatible"
+    assert selected["retryable"] is False
+
+
 def test_release_catalog_is_immutable_and_consistent():
     assert {model.id for model in MODELS} == {"qwen3-1.7b-q4km", "smollm3-3b-q4km"}
     for model in MODELS:

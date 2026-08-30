@@ -55,9 +55,9 @@ startup or request time.
 
 ## CPU runtime and supply chain
 
-The portable runtime pins `llama-cpp-python==0.3.23` and installs a prebuilt basic CPU wheel from the project's official
-wheel index (`https://abetlen.github.io/llama-cpp-python/whl/cpu`). Release installation sets `PIP_ONLY_BINARY` for this
-package and fails rather than compiling. The bundled Python is WinPython CPython 3.11.8, Windows x86-64. CUDA, GPU
+The portable runtime pins `llama-cpp-python==0.3.24`. CI installs a basic CPU wheel from the project's official
+wheel index (`https://abetlen.github.io/llama-cpp-python/whl/cpu`) and fails rather than compiling. The portable release
+builds the same pin from source under AXP's conservative ISA policy. The bundled Python is WinPython CPython 3.11.8. CUDA, GPU
 drivers, compilers, CMake, pip, and system Python are not end-user prerequisites. The release acceptance step imports
 `Llama` using the bundled interpreter. Network restrictions prevented recording the exact wheel SHA-256 during this
 implementation; release artifact provenance should be captured by CI before publication.

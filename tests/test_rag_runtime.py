@@ -58,7 +58,7 @@ def test_model_import_is_atomic_hashed_and_retains_source(tmp_path):
 
 
 @pytest.mark.parametrize("model_name", ["Qwen3-1.7B-Q4_K_M.gguf", "SmolLM3-3B-Q4_K_M.gguf"])
-def test_llama_cpp_023_non_thinking_contract_for_curated_models(tmp_path, model_name):
+def test_llama_cpp_024_non_thinking_contract_for_curated_models(tmp_path, model_name):
     calls = {}
     class Model:
         def create_chat_completion(self, messages, max_tokens, temperature, top_p, top_k):

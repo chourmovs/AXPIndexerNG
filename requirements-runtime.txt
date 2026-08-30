@@ -14,4 +14,4 @@ py-cpuinfo==9.0.0
 # stays lightweight. Tagged releases override this with --no-binary and compile
 # the same pin using the AXP-owned conservative CMake policy.
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-llama-cpp-python==0.3.23
+llama-cpp-python==0.3.24
