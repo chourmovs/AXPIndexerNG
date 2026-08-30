@@ -7,8 +7,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .model import validate_gguf
 from .cpu import detect_cpu
+from .model import validate_gguf
 
 RECOMMENDED_MODEL = "Qwen3-1.7B-Q4_K_M"
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)

@@ -9,11 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 for package_root in (ROOT / "client", ROOT / "shared"):
     sys.path.insert(0, str(package_root))
 
-from axp_client.rag.model_catalog import MODELS  # noqa: E402
-from axp_client.rag.model_manager import TrustedRedirectHandler  # noqa: E402
-
-
 def main():
+    from axp_client.rag.model_catalog import MODELS
+    from axp_client.rag.model_manager import TrustedRedirectHandler
+
     opener = urllib.request.build_opener(TrustedRedirectHandler())
     failures = []
     for model in MODELS:
