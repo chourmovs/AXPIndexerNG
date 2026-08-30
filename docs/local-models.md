@@ -16,10 +16,13 @@ tokens are requested or stored. When company network policy blocks Hugging
 Face, users can import an approved local GGUF instead; AXP never weakens TLS or
 changes proxy, VPN, firewall, or certificate settings.
 
-Release maintainers can run `python scripts/verify_chat_model_catalog.py` to
-check each immutable revision's remote size and LFS SHA-256 metadata without
-downloading either multi-gigabyte model. This is an explicit release check and
-is not part of normal startup or CI network activity.
+Release maintainers can install `requirements-catalog-verifier.txt` and run
+`python scripts/verify_chat_model_catalog.py` to check each immutable
+revision's remote size and canonical LFS/content SHA-256 through the Hugging
+Face repository metadata API without downloading either multi-gigabyte model.
+Xet hashes, when reported, are diagnostic identities and are never treated as
+the downloaded file SHA-256. This is an explicit release check and is not part
+of normal startup or CI network activity.
 
 Models live beneath `model-cache/chat/models`, outside the release archive.
 Activation updates the selected ID and compatible path together, unloads the

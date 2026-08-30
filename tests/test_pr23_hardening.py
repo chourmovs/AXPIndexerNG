@@ -1,4 +1,6 @@
+import importlib.util
 import re
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlparse
@@ -6,6 +8,12 @@ from urllib.parse import urlparse
 import pytest
 from axp_client.rag.llama_cpp_backend import LlamaCppBackend, classify_load_failure
 from axp_client.rag.model_catalog import MODELS, catalog_model
+
+VERIFIER_PATH = Path(__file__).parents[1] / "scripts/verify_chat_model_catalog.py"
+VERIFIER_SPEC = importlib.util.spec_from_file_location("verify_chat_model_catalog", VERIFIER_PATH)
+VERIFIER = importlib.util.module_from_spec(VERIFIER_SPEC)
+VERIFIER_SPEC.loader.exec_module(VERIFIER)
+verify_entry = VERIFIER.verify_entry
 
 
 def test_curated_catalog_is_exact_and_immutable():
@@ -23,6 +31,42 @@ def test_curated_catalog_is_exact_and_immutable():
     assert (smol.size_bytes, smol.revision, smol.sha256) == (
         1_915_305_312, "4965cb60b150737b68a0408c36aeefb65078f894",
         "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e")
+
+
+@pytest.mark.parametrize(("model_id", "xet_hash"), (
+    ("qwen3-1.7b-q4km", "0a8e661bad7f1ea5accdd078b6a2aca20ff0201100bbf128aa1cc22c643d7221"),
+    ("smollm3-3b-q4km", "777b1c9982e98ca62b4a6a16914bb6bfb7d07585714aea681276e96c90aa0f04"),
+))
+def test_catalog_verifier_accepts_distinct_xet_and_lfs_identities(model_id, xet_hash):
+    model = catalog_model(model_id)
+    repo_file = SimpleNamespace(path=model.filename, size=model.size_bytes,
+                                lfs=SimpleNamespace(oid=model.sha256), xet_hash=xet_hash)
+
+    class Api:
+        def get_paths_info(self, **kwargs):
+            assert kwargs == {"repo_id": model.repository, "paths": [model.filename],
+                              "revision": model.revision, "repo_type": "model"}
+            return [repo_file]
+
+    result = verify_entry(Api(), model)
+    assert result == {"size": model.size_bytes, "sha256": model.sha256, "xet_hash": xet_hash}
+    assert result["xet_hash"] != result["sha256"]
+
+
+@pytest.mark.parametrize("failure", ("size", "sha256", "mutable", "missing", "lfs"))
+def test_catalog_verifier_rejects_invalid_canonical_metadata(failure):
+    model = catalog_model("qwen3-1.7b-q4km")
+    checked_model = replace(model, revision="main") if failure == "mutable" else model
+    lfs = None if failure == "lfs" else {"oid": "0" * 64 if failure == "sha256" else model.sha256}
+    repo_file = {"path": model.filename, "size": model.size_bytes + (1 if failure == "size" else 0),
+                 "lfs": lfs, "xet_hash": "0a8e661bad7f1ea5accdd078b6a2aca20ff0201100bbf128aa1cc22c643d7221"}
+
+    class Api:
+        def get_paths_info(self, **_kwargs):
+            return [] if failure == "missing" else [repo_file]
+
+    with pytest.raises(ValueError):
+        verify_entry(Api(), checked_model)
 
 
 def test_windows_illegal_instruction_is_non_retryable(tmp_path):

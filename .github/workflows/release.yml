@@ -12,6 +12,8 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONPATH=(Resolve-Path client).Path
+          python -m pip install -r requirements-catalog-verifier.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Catalog verifier dependency installation failed' }
           python scripts/verify_chat_model_catalog.py
       - name: Download and verify WinPython 3.11.8
         shell: pwsh
