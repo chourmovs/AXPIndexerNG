@@ -2,8 +2,7 @@ import json
 import sqlite3
 
 import pytest
-from axp_core.metadata import (IndexRebuildRequired, ensure_index_signature,
-                               index_signature, validate_index_signature)
+from axp_core.metadata import IndexRebuildRequired, ensure_index_signature, index_signature, validate_index_signature
 from axp_core.schema import EMBEDDING_SEMANTIC_VERSION
 
 

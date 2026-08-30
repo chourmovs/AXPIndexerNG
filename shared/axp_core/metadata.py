@@ -1,8 +1,13 @@
 import json
 import logging
 
-from .schema import (CHUNKER_VERSION, DISTANCE_METRIC, EMBEDDING_INPUT_VERSION,
-                     EMBEDDING_SEMANTIC_VERSION, SCHEMA_VERSION)
+from .schema import (
+    CHUNKER_VERSION,
+    DISTANCE_METRIC,
+    EMBEDDING_INPUT_VERSION,
+    EMBEDDING_SEMANTIC_VERSION,
+    SCHEMA_VERSION,
+)
 
 
 class IndexRebuildRequired(RuntimeError):

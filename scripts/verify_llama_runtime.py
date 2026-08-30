@@ -3,6 +3,7 @@ import importlib.metadata
 import json
 import platform
 import re
+
 from axp_client.rag.llama_cpp_backend import GenerationConfig, build_chat_invocation
 
 FORBIDDEN_FEATURES = {"AVX2", "AVX_VNNI", "AVX512", "AVX512_VBMI", "AVX512_VNNI",
