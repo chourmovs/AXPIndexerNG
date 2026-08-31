@@ -60,10 +60,17 @@ function renderResponse(article, response, turn) {
   if (response.timings) { const generation=response.generation || {}; const seconds = ((generation.generation_ms || response.timings.total_ms) / 1000).toFixed(1); const count = response.sources?.length || 0;
     const device=generation.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : generation.inference_device_effective === 'none' ? 'No inference device' : 'CPU';
     const reduced=response.context?.context_reduced_for_latency ? ' · reduced context' : '';
-    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · ${device}${reduced} · ${generation.prompt_tokens || response.context?.final_prompt_tokens || '—'} prompt tokens · ${seconds} s`);
+    const expanded=response.context?.search_depth === 1 ? 'Expanded search · ' : '';
+    const evidence=response.context?.selected_evidence_tokens ?? '—';
+    const meta=element('small', 'answer-meta', `${expanded}${response.context?.selected_documents ?? count} document${(response.context?.selected_documents ?? count) === 1 ? '' : 's'} · ${evidence} evidence tokens · ${device}${reduced} · ${seconds} s`);
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     article.append(meta); }
+  if (response.status === 'answered' && response.context?.search_depth !== 1) {
+    const more=element('button','secondary compact search-more','Search more'); more.type='button';
+    more.addEventListener('click',()=>article.dispatchEvent(new CustomEvent('search-more',{bubbles:true})));
+    article.append(more);
+  }
 }
 export function initAsk() {
   const form = document.querySelector('#ask-form'), input = document.querySelector('#ask-input'), submit = document.querySelector('#ask-submit');
@@ -87,7 +94,7 @@ export function initAsk() {
   form.addEventListener('submit', async event => { event.preventDefault(); const question = input.value.trim(); if (!question || busy) return;
     busy = true; submit.disabled = true; input.disabled = true; turn += 1; const current = turn;
     const user = element('article', 'turn user-turn'); user.append(element('h3', '', 'You'), element('p', '', question));
-    const axp = element('article', 'turn axp-turn'); axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
+    const axp = element('article', 'turn axp-turn'); axp.dataset.question=question; axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
     phaseStarted = Date.now(); progressMode='pipeline'; progressData={}; liveLabel = 'Starting local processing…'; updateProgress(); timer = setInterval(updateProgress, 1000);
     try { await askStream(question, message => {
         if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; progressMode='pipeline'; progressData={}; updateProgress(); }
@@ -109,6 +116,23 @@ export function initAsk() {
     finally { clearInterval(timer); progress.replaceChildren();
       if (!axp.querySelector('.answer-text, .inline-error, .generation-cancelled')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
+  });
+  history.addEventListener('search-more', async event => {
+    const article=event.target.closest('.axp-turn'); const question=article?.dataset.question;
+    if (!article || !question || busy) return;
+    const button=article.querySelector('.search-more'); button.disabled=true; busy=true;
+    progress.replaceChildren(element('strong','','Expanding search…'));
+    try { let expanded=null; await askStream(question, message=>{
+      const labels={retrieval_complete:'Ranking documents…',context_preparation_started:'Preparing wider evidence…',
+        context_ready:'Evaluating expanded context…',generation_started:'Generating expanded answer…'};
+      if(labels[message.event]) progress.replaceChildren(element('strong','',labels[message.event]));
+      if(message.event==='final') expanded=message.response;
+      if(message.event==='error') throw Object.assign(new Error(errors[message.error]||message.error),{code:message.error});
+    },1);
+      if(expanded){ const heading=article.querySelector('h3'); article.replaceChildren(heading); renderResponse(article,expanded,article.id||turn); }
+    } catch(exception) { button.disabled=false; progress.replaceChildren(element('small','inline-error',errors[exception.code]||exception.message)); }
+    finally { busy=false; if(article.querySelector('.search-more')) article.querySelector('.search-more').disabled=false;
+      if(!progress.querySelector('.inline-error')) progress.replaceChildren(); }
   });
   const manager = document.querySelector('#model-manager'), list = document.querySelector('#model-list');
   const managerError = document.querySelector('#model-manager-error'); let downloadTimer;

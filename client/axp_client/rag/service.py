@@ -3,9 +3,12 @@ import threading
 import time
 import uuid
 
+from axp_core.hybrid import SearchConfig
+
 from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
+from .depth import depth_policy
 from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
@@ -88,10 +91,14 @@ class RagService:
     def _run_blocking(self, operation, heartbeat, *, interval=1.0):
         return self.operations.run(operation, heartbeat, interval=interval)
 
-    def retrieve(self, question):
+    def retrieve(self, question, search_depth=0):
+        config = getattr(self.backend, "config", GenerationConfig())
+        policy = depth_policy(search_depth, evidence_tokens=config.max_evidence_tokens,
+                              answer_tokens=config.max_answer_tokens)
         with self.connect_fn(self.db, readonly=True) as con:
             return retrieve_rag_candidates(con, self.embedder, question, search_fn=self.search_fn,
-                                           limit=RETRIEVAL_LIMIT)
+                limit=policy.retrieval_limit, search_config=SearchConfig(
+                    lexical_candidates=policy.candidate_depth, vector_candidates=policy.candidate_depth))
 
     def evaluate_gate(self, question, *, retrieval=None, config=None):
         retrieval = retrieval or self.retrieve(question)
@@ -109,12 +116,15 @@ class RagService:
             signals["documents"], result_count,
         )
 
-    def ask(self, question, *, debug=False, retrieval=None, progress=None):
+    def ask(self, question, *, debug=False, retrieval=None, progress=None, search_depth=0):
         def emit(event, **details):
             if progress is not None:
                 progress({"event": event, **details})
 
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
+        generation_config = getattr(self.backend, "config", GenerationConfig())
+        depth = depth_policy(search_depth, evidence_tokens=generation_config.max_evidence_tokens,
+                             answer_tokens=generation_config.max_answer_tokens)
         if self.operations.busy or not self._generation_lock.acquire(blocking=False):
             raise ChatBusyError
         self._generation_lock.release()
@@ -123,12 +133,26 @@ class RagService:
         emit("retrieval_started")
         with self.connect_fn(self.db, readonly=True) as con:
             retrieval = retrieval or retrieve_rag_candidates(
-                con, self.embedder, question, search_fn=self.search_fn, limit=RETRIEVAL_LIMIT
+                con, self.embedder, question, search_fn=self.search_fn, limit=depth.retrieval_limit,
+                search_config=SearchConfig(lexical_candidates=depth.candidate_depth,
+                                           vector_candidates=depth.candidate_depth)
             )
-            candidates, content = retrieval.candidates, retrieval.content_evidence
+            candidates, all_content = retrieval.candidates, retrieval.content_evidence
+            eligible_documents = [doc for doc in retrieval.ranked_documents if
+                                  doc["best_evidence_score"] >= .55 or
+                                  ((doc["exact_identifier_present"] or doc["exact_phrase_present"])
+                                   and max(float(hit.get("vector_similarity") or 0)
+                                           for hit in doc["ranked_hits"]) >= .45)][:2]
+            content = [hit for doc in eligible_documents for hit in doc["ranked_hits"]]
+            LOGGER.info("RAG retrieval request_id=%s search_depth=%s query_length=%s candidates=%s "
+                        "relevant_chunks=%s relevant_documents=%s", request_id, search_depth, len(question),
+                        len(candidates), len(all_content), len(retrieval.ranked_documents))
+            LOGGER.info("RAG document ranking request_id=%s top=%s", request_id, [{key: doc[key] for key in
+                ("document_id", "filename", "document_score", "best_evidence_score", "second_evidence_score",
+                 "strong_hit_count", "title_coverage")} for doc in retrieval.ranked_documents[:5]])
             related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
-            decision = decide_answerability(content)
+            decision = decide_answerability(all_content)
             self._log_gate(request_id, decision, len(candidates))
             emit("gate_complete", answerable=decision.answerable)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
@@ -172,16 +196,18 @@ class RagService:
                     system_tokens = self.backend.count_tokens(SYSTEM_PROMPT)
                     question_tokens = self.backend.count_tokens(user_prompt(question, ""))
                     fixed_tokens = system_tokens + question_tokens
-                    generation_config = getattr(self.backend, "config", GenerationConfig())
+                    effective_answer_tokens = min(depth.target_answer_tokens, max(0,
+                        self.backend.context_window() - fixed_tokens - generation_config.safety_tokens))
                     context = build_context(con, content, token_counter=self.backend.count_tokens,
                                             context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
                                             config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
-                                                max_documents=generation_config.max_context_documents,
-                                                max_seeds_per_document=generation_config.max_seeds_per_document,
+                                                max_documents=2,
+                                                max_seeds_per_document=depth.seed_limit,
+                                                neighbor_radius=depth.neighbor_radius,
                                                 max_blocks=generation_config.max_context_blocks,
-                                                answer_reserve_tokens=generation_config.max_answer_tokens,
+                                                answer_reserve_tokens=effective_answer_tokens,
                                                 safety_reserve_tokens=generation_config.safety_tokens,
-                                                max_evidence_tokens=generation_config.max_evidence_tokens))
+                                                max_evidence_tokens=depth.target_evidence_tokens))
                     original_context = context
                     health = self.health()
                     model_id = health.get("active_model_id") or health.get("model_name")
@@ -202,10 +228,10 @@ class RagService:
                             candidate = build_context(con, content, token_counter=self.backend.count_tokens,
                                 context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
                                 config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
-                                    max_documents=generation_config.max_context_documents,
-                                    max_seeds_per_document=generation_config.max_seeds_per_document,
+                                    max_documents=2, max_seeds_per_document=depth.seed_limit,
+                                    neighbor_radius=depth.neighbor_radius,
                                     max_blocks=generation_config.max_context_blocks,
-                                    answer_reserve_tokens=generation_config.max_answer_tokens,
+                                    answer_reserve_tokens=effective_answer_tokens,
                                     safety_reserve_tokens=generation_config.safety_tokens,
                                     max_evidence_tokens=target))
                             if not candidate.blocks:
@@ -231,6 +257,11 @@ class RagService:
             return base
         evidence_tokens = context.diagnostics["evidence_tokens"]
         context_telemetry = {
+            "search_depth": search_depth, "input_multiplier": depth.input_multiplier,
+            "output_multiplier": depth.output_multiplier,
+            "target_evidence_tokens": depth.target_evidence_tokens,
+            "target_answer_tokens": depth.target_answer_tokens,
+            "effective_answer_tokens": effective_answer_tokens,
             "retrieved_results": len(candidates),
             "selected_documents": context.diagnostics["selected_documents"],
             "selected_blocks": context.diagnostics["selected_blocks"],
@@ -244,6 +275,9 @@ class RagService:
             "estimated_prefill_seconds": estimated,
             "latency_budget_exceeded": estimated is not None and estimated > POLICY.preferred_seconds,
             "context_reduced_for_latency": reduced,
+            "context_limited": (depth.target_evidence_tokens is not None and
+                                context.diagnostics["evidence_budget_tokens"] < depth.target_evidence_tokens),
+            "latency_limited": reduced,
         }
         base["context"] = context_telemetry
         if (estimated is not None and estimated > POLICY.hard_seconds and
@@ -262,7 +296,14 @@ class RagService:
              blocks=context.diagnostics["selected_blocks"], evidence_tokens=evidence_tokens,
              evidence_budget_tokens=context.diagnostics["evidence_budget_tokens"],
              estimated_total_prompt_tokens=fixed_tokens + evidence_tokens,
-             context_window_tokens=self.backend.context_window(), max_answer_tokens=generation_config.max_answer_tokens)
+             context_window_tokens=self.backend.context_window(), max_answer_tokens=effective_answer_tokens)
+        LOGGER.info("RAG context request_id=%s selected_documents=%s selected_seed_chunks=%s "
+                    "selected_chunk_ranges=%s target_evidence_tokens=%s effective_evidence_tokens=%s "
+                    "target_answer_tokens=%s context_limited=%s latency_limited=%s", request_id,
+                    context.diagnostics["selected_documents"], context.diagnostics["selected_seed_chunks"],
+                    context.diagnostics["selected_chunk_ranges"], depth.target_evidence_tokens,
+                    context.diagnostics["evidence_budget_tokens"], depth.target_answer_tokens,
+                    context_telemetry["context_limited"], reduced)
         generation_start = time.perf_counter()
         try:
             try:
@@ -283,7 +324,8 @@ class RagService:
                         emit("generation_waiting_first_token", elapsed_s=elapsed)
                 answer = self._run_blocking(
                     lambda: self.backend.generate(system_prompt=SYSTEM_PROMPT,
-                                                  user_prompt=user_prompt(question, context.prompt_text)),
+                                                  user_prompt=user_prompt(question, context.prompt_text),
+                                                  max_tokens=effective_answer_tokens),
                     generation_poll, interval=.25)
             except GenerationCancelled:
                 elapsed = (time.perf_counter() - generation_start) * 1000
@@ -338,7 +380,7 @@ class RagService:
             base["debug"]["tokens"] = {"context_window_tokens": self.backend.context_window(),
                 "system_tokens": system_tokens, "question_tokens": question_tokens,
                 "evidence_tokens": context.diagnostics["evidence_tokens"],
-                "reserved_answer_tokens": generation_config.max_answer_tokens,
+                "reserved_answer_tokens": effective_answer_tokens,
                 "total_prompt_tokens": fixed_tokens + context.diagnostics["evidence_tokens"]}
         LOGGER.info("RAG generation request_id=%s model=%s device=%s evidence_tokens=%s prompt_tokens=%s "
                     "prompt_eval_ms=%s prompt_eval_tps=%s ttft_ms=%s completion_tokens=%s decode_tps=%s "

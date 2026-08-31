@@ -50,6 +50,10 @@ def _vector(row):
     return float(row.get("vector_similarity", row.get("relevance_score")) or 0)
 
 
+def _lexical(row):
+    return float(row.get("content_lexical_coverage", row.get("lexical_coverage")) or 0)
+
+
 def decide_answerability(results, config=None):
     config = config or AnswerabilityConfig()
     if not results:
@@ -57,13 +61,13 @@ def decide_answerability(results, config=None):
                    "support_chunks": 0, "documents": 0, "exact_content_matches": 0}
         return AnswerabilityDecision(False, "low", DecisionReason.NO_CONTENT_EVIDENCE, signals)
     strong = [r for r in results if _vector(r) >= config.strong_vector_similarity
-              and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
+              and _lexical(r) >= config.support_lexical_coverage]
     support = [r for r in results if _vector(r) >= config.support_vector_similarity
-               and float(r.get("lexical_coverage") or 0) >= config.support_lexical_coverage]
+               and _lexical(r) >= config.support_lexical_coverage]
     exact = [r for r in results if (r.get("exact_content_identifier_match") or r.get("exact_content_phrase_match"))
              and _vector(r) >= config.support_vector_similarity]
     signals = {"best_vector_similarity": max(map(_vector, results)),
-               "best_lexical_coverage": max(float(r.get("lexical_coverage") or 0) for r in results),
+               "best_lexical_coverage": max(_lexical(r) for r in results),
                "strong_chunks": len(strong), "support_chunks": len(support),
                "documents": len({r["document_id"] for r in results}), "exact_content_matches": len(exact)}
     if exact:

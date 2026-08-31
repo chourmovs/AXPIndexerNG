@@ -381,12 +381,12 @@ class IntelSyclBackend:
         if not isinstance(tokens, list): raise IntelSyclError("intel_gpu_tokenization_failed")
         return len(tokens)
 
-    def generate(self, *, system_prompt, user_prompt):
+    def generate(self, *, system_prompt, user_prompt, max_tokens=None):
         self.ensure_loaded(); self._cancel_event.clear(); started = time.perf_counter()
         system = (NO_THINK_DIRECTIVE + system_prompt if self.chat_template_kwargs.get("enable_thinking") is False
                   else system_prompt)
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-                   "stream": True, "max_tokens": self.config.max_answer_tokens, "temperature": self.config.temperature,
+                   "stream": True, "max_tokens": self.config.max_answer_tokens if max_tokens is None else max_tokens,
                    "return_progress": True,
                    "top_p": self.config.top_p, "top_k": self.config.top_k,
                    "repeat_penalty": self.config.repeat_penalty}

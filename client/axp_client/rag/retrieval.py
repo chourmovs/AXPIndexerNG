@@ -13,6 +13,7 @@ class RagRetrievalResult:
     content_evidence: list[dict]
     metadata_related: list[dict]
     timings: dict
+    ranked_documents: list[dict]
 
     @property
     def diagnostics(self):
@@ -20,13 +21,40 @@ class RagRetrievalResult:
             "retrieval_candidates": len(self.candidates),
             "content_candidates": len(self.content_evidence),
             "metadata_candidates": len(self.candidates) - len(self.content_evidence),
+            "ranked_documents": self.ranked_documents,
         }
 
 
-def retrieve_rag_candidates(con, embedder, question, *, search_fn, limit=24):
+def rank_documents(hits):
+    grouped = {}
+    for hit in hits:
+        grouped.setdefault(int(hit["document_id"]), []).append(hit)
+    ranked = []
+    for document_id, rows in grouped.items():
+        rows.sort(key=lambda row: (-float(row.get("evidence_score", row.get("relevance_score")) or 0),
+                                   int(row.get("chunk_id") or 0)))
+        scores = [float(row.get("evidence_score", row.get("relevance_score")) or 0) for row in rows[:3]]
+        scores += [0.0] * (3 - len(scores))
+        strong = sum(bool(float(row.get("evidence_score", row.get("relevance_score")) or 0) >= .55 or
+                          row.get("exact_content_identifier_match") or row.get("exact_content_phrase_match"))
+                     for row in rows)
+        first = rows[0]
+        ranked.append({"document_id": document_id, "filename": first.get("filename"), "title": first.get("title"),
+            "best_evidence_score": scores[0], "second_evidence_score": scores[1], "third_evidence_score": scores[2],
+            "strong_hit_count": strong, "title_coverage": max(float(r.get("title_coverage") or 0) for r in rows),
+            "exact_identifier_present": any(r.get("exact_content_identifier_match") for r in rows),
+            "exact_phrase_present": any(r.get("exact_content_phrase_match") for r in rows),
+            "document_score": scores[0] + .20*scores[1] + .10*scores[2] + .05*min(strong, 3),
+            "ranked_hits": rows})
+    ranked.sort(key=lambda doc: (-doc["document_score"], -int(doc["exact_identifier_present"]),
+                                 -int(doc["exact_phrase_present"]), doc["document_id"]))
+    return ranked
+
+
+def retrieve_rag_candidates(con, embedder, question, *, search_fn, limit=24, search_config=None):
     """Search once, then classify and enrich candidates without changing Search output."""
     started = time.perf_counter()
-    found = search_fn(con, embedder, question, limit=limit, profile="hybrid", explain=True)
+    found = search_fn(con, embedder, question, limit=limit, profile="hybrid", explain=True, config=search_config)
     candidates = [dict(row) for row in found.get("results", found)]
     document_ids = sorted({int(row["document_id"]) for row in candidates})
     documents = {}
@@ -70,9 +98,11 @@ def retrieve_rag_candidates(con, embedder, question, *, search_fn, limit=24):
             related_by_document.setdefault(
                 document_id, {"document_id": document_id, "filename": document.get("filename")}
             )
+    ranked_documents = rank_documents(content)
     return RagRetrievalResult(
         candidates=candidates,
         content_evidence=content,
         metadata_related=list(related_by_document.values()),
         timings={"retrieval_ms": (time.perf_counter() - started) * 1000},
+        ranked_documents=ranked_documents,
     )
