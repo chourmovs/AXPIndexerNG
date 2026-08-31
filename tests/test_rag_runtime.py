@@ -65,7 +65,7 @@ def test_llama_cpp_024_non_thinking_contract_for_curated_models(tmp_path, model_
             calls.update(messages=messages, max_tokens=max_tokens, temperature=temperature,
                          top_p=top_p, top_k=top_k)
             return {"choices": [{"message": {"content": "<think>secret</think>Final [S1]"}}], "usage": {}}
-    backend = LlamaCppBackend(tmp_path / model_name, GenerationConfig())
+    backend = LlamaCppBackend(tmp_path / model_name, GenerationConfig(), {"enable_thinking": False})
     backend._model = Model()
     assert backend.generate(system_prompt="system", user_prompt="user") == "Final [S1]"
     assert "chat_template_kwargs" not in calls
@@ -80,7 +80,7 @@ def test_future_chat_signature_uses_template_kwargs_without_text_directive(tmp_p
                                    chat_template_kwargs=None):
             calls.append(locals())
             return {"choices": [{"message": {"content": "Final"}}], "usage": {}}
-    backend = LlamaCppBackend(tmp_path / "unused")
+    backend = LlamaCppBackend(tmp_path / "unused", chat_template_kwargs={"enable_thinking": False})
     backend._model = Model()
     assert backend.generate(system_prompt="system", user_prompt="user") == "Final"
     assert calls[0]["chat_template_kwargs"] == {"enable_thinking": False}

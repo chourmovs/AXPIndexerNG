@@ -18,7 +18,9 @@ NO_THINK_DIRECTIVE = "/no_think\n"
 
 def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt, config, template_kwargs):
     """Build an invocation compatible with the installed llama-cpp API before calling it."""
-    supports_template_kwargs = "chat_template_kwargs" in inspect.signature(create_chat_completion).parameters
+    parameters = inspect.signature(create_chat_completion).parameters
+    supports_template_kwargs = "chat_template_kwargs" in parameters
+    supports_kwargs = any(value.kind is inspect.Parameter.VAR_KEYWORD for value in parameters.values())
     non_thinking = bool(template_kwargs) and template_kwargs.get("enable_thinking") is False
     system_content = NO_THINK_DIRECTIVE + system_prompt if non_thinking and not supports_template_kwargs else system_prompt
     invocation = {
@@ -31,6 +33,8 @@ def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt,
     }
     if supports_template_kwargs and template_kwargs:
         invocation["chat_template_kwargs"] = template_kwargs
+    if "repeat_penalty" in parameters or supports_kwargs:
+        invocation["repeat_penalty"] = config.repeat_penalty
     return invocation, supports_template_kwargs, non_thinking and not supports_template_kwargs
 
 
@@ -81,6 +85,7 @@ class GenerationConfig:
     temperature: float = 0.2
     top_p: float = 0.8
     top_k: int = 20
+    repeat_penalty: float = 1.0
     n_gpu_layers: int = 0
 
 
@@ -99,7 +104,7 @@ class LlamaCppBackend:
         self.last_telemetry = {}
         self._chat_template_kwargs_supported = None
         self._no_think_compatibility = None
-        self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
+        self.chat_template_kwargs = dict(chat_template_kwargs) if chat_template_kwargs is not None else {}
         self.cpu = detect_cpu()
         self._progress_lock = threading.Lock()
         self._cancel_event = threading.Event()

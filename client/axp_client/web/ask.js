@@ -111,9 +111,11 @@ export function initAsk() {
       const stateLabel = !model.selected ? '' : model.model_loaded ? ' · ACTIVE · READY' :
         model.model_state === 'loading' ? ' · SELECTED · LOADING' : model.model_state === 'failed' ?
           ` · SELECTED · LOAD FAILED${model.failure_type === 'model_template_incompatible' ? ' — INCOMPATIBLE CHAT TEMPLATE' : ''}` : ' · SELECTED';
-      card.append(element('strong','',`${model.name}${stateLabel}`),
-        element('p','muted',`${model.profile === 'fast' ? 'Fast · Recommended for standard workstations' : 'Balanced'} · ${model.display_size} · ${model.license}`),
+      const badge = model.experimental ? 'EXPERIMENTAL' : model.recommended ? 'RECOMMENDED' : model.profile === 'balanced' ? 'BALANCED' : '';
+      card.append(element('strong','',`${model.name}${badge ? ` · ${badge}` : ''}${stateLabel}`),
+        element('p','muted',`${model.profile === 'fast' ? 'Fast' : 'Balanced'} · ${model.display_size} · ${model.license}`),
         element('small','',`${model.repository} · ${model.quantization}`));
+      if (model.experimental) card.append(element('p','muted','Optimized for fast local inference / RAG. Review model license terms before organizational deployment.'));
       const job=model.download;
       if (job && activeDownloadStates.has(job.state)) { downloading=true; const bar=element('progress'); bar.max=100; bar.value=job.percentage;
         card.append(element('strong','download-state',downloadLabel(job.state)),bar,

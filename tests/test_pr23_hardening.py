@@ -41,6 +41,7 @@ def test_curated_catalog_is_exact_and_immutable():
 @pytest.mark.parametrize(("model_id", "xet_hash"), (
     ("qwen3-1.7b-q4km", "0a8e661bad7f1ea5accdd078b6a2aca20ff0201100bbf128aa1cc22c643d7221"),
     ("smollm3-3b-q4km", "777b1c9982e98ca62b4a6a16914bb6bfb7d07585714aea681276e96c90aa0f04"),
+    ("lfm25-1.2b-qad-q4", "0c8edd57ac878dddf1f995815a17626e4753f3a2a9b9816be8baaae62d103590"),
 ))
 def test_catalog_verifier_accepts_distinct_xet_and_lfs_identities(model_id, xet_hash):
     model = catalog_model(model_id)

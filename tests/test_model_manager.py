@@ -182,7 +182,7 @@ def test_verified_selected_model_reports_template_load_failure_without_corruptio
 
 
 def test_release_catalog_is_immutable_and_consistent():
-    assert {model.id for model in MODELS} == {"qwen3-1.7b-q4km", "smollm3-3b-q4km"}
+    assert {model.id for model in MODELS} == {"qwen3-1.7b-q4km", "smollm3-3b-q4km", "lfm25-1.2b-qad-q4"}
     for model in MODELS:
         assert len(model.revision) == 40 and all(char in "0123456789abcdef" for char in model.revision)
         assert len(model.sha256) == 64 and model.filename.endswith(".gguf")

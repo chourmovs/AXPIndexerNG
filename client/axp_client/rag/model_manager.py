@@ -135,7 +135,7 @@ class ModelManager:
             return type(profile)(**values)
         runner = BenchmarkRunner(lambda limit: controller._cpu_backend(settings, configured(limit)),
             lambda limit: controller._make_backend({**settings, "chat_inference_device": "intel_gpu"}, configured(limit)),
-            profile.name, {"cpu": controller.hardware.cpu_name, "intel_gpu": controller.hardware.intel_gpu_name,
+            profile.id, {"cpu": controller.hardware.cpu_name, "intel_gpu": controller.hardware.intel_gpu_name,
                            "intel_device_id": controller.hardware.intel_gpu_device_id,
                            "sycl_device": controller.hardware.sycl_device_name})
         def transaction():

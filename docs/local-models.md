@@ -1,8 +1,10 @@
 # Local AI models
 
-Ask AXP supports two release-curated, compact GGUF models: **Qwen3 1.7B
-Q4_K_M** (Fast, recommended for standard workstations) and **SmolLM3 3B
-Q4_K_M** (Balanced). Existing manually imported GGUF files remain available as
+Ask AXP supports three release-curated, compact GGUF models: **Qwen3 1.7B
+Q4_K_M** (Fast, recommended for standard workstations), **SmolLM3 3B
+Q4_K_M** (Balanced), and **LFM2.5 1.2B QAD Q4_0** (experimental Fast local
+RAG option). Review the LFM Open License v1.0 terms before organizational
+deployment. Existing manually imported GGUF files remain available as
 a Custom local model and are never copied merely to migrate settings.
 
 Downloads happen only after a user selects **Download** or **Download &
@@ -23,6 +25,12 @@ Face repository metadata API without downloading either multi-gigabyte model.
 Xet hashes, when reported, are diagnostic identities and are never treated as
 the downloaded file SHA-256. This is an explicit release check and is not part
 of normal startup or CI network activity.
+
+CI qualifies LFM catalog integrity (immutable revision, exact 695,755,488-byte
+size and canonical GGUF SHA-256) without loading the approximately 696 MB
+model. Actual LFM loading and template execution require field qualification
+after an explicit download and activation. The release archive never bundles
+or automatically downloads the GGUF.
 
 Models live beneath `model-cache/chat/models`, outside the release archive.
 Activation updates the selected ID and compatible path together, unloads the
