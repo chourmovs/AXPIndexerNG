@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
 import tempfile
 import time
+import uuid
 import urllib.error
 import urllib.request
 import zipfile
@@ -19,6 +21,7 @@ from axp_core.runtime import atomic_write_json
 from .accelerator_catalog import INTEL_SYCL
 
 APPROVED_HOSTS = ("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
+LOGGER = logging.getLogger("axp_client")
 
 
 class AcceleratorError(RuntimeError):
@@ -112,6 +115,7 @@ class AcceleratorManager:
         parent = self.runtime_root.parent
         parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{INTEL_SYCL.tag}-", dir=parent))
+        backup = parent / f"{self.runtime_root.name}.backup-{uuid.uuid4().hex}"
         try:
             safe_extract(archive, staging)
             binaries = discover_binaries(staging)
@@ -119,13 +123,33 @@ class AcceleratorManager:
                         "upstream_commit": INTEL_SYCL.commit, "asset_sha256": INTEL_SYCL.sha256,
                         "installed_at": int(time.time()), **binaries}
             atomic_write_json(staging / "manifest.json", manifest)
-            if self.runtime_root.exists():
-                shutil.rmtree(self.runtime_root)
-            os.replace(staging, self.runtime_root)
+            had_runtime = self.runtime_root.exists()
+            if had_runtime:
+                self._replace_with_retry(self.runtime_root, backup)
+            try:
+                self._replace_with_retry(staging, self.runtime_root)
+            except Exception:
+                if had_runtime and backup.exists() and not self.runtime_root.exists():
+                    self._replace_with_retry(backup, self.runtime_root)
+                raise
+            if backup.exists():
+                shutil.rmtree(backup)
             return manifest
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             raise
+
+    @staticmethod
+    def _replace_with_retry(source, destination):
+        delays = (0.05, 0.1, 0.2, 0.4)
+        for attempt in range(len(delays) + 1):
+            try:
+                os.replace(source, destination)
+                return
+            except (PermissionError, OSError):
+                if attempt == len(delays):
+                    raise
+                time.sleep(delays[attempt])
 
     def download_and_install(self, progress=None, cancel=None):
         """Download only after this explicit method is called; URL is catalog-owned."""
@@ -174,4 +198,13 @@ class AcceleratorManager:
         return result
 
     def remove(self):
-        shutil.rmtree(self.runtime_root, ignore_errors=True)
+        try:
+            shutil.rmtree(self.runtime_root)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            LOGGER.exception("Intel accelerator removal failed")
+            raise AcceleratorError("accelerator_remove_failed") from exc
+        if self.runtime_root.exists():
+            LOGGER.error("Intel accelerator removal left runtime directory present")
+            raise AcceleratorError("accelerator_remove_failed")

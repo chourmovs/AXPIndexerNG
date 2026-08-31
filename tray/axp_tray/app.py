@@ -16,6 +16,8 @@ from axp_core.locking import AlreadyLocked, FileLock, daemon_instance_running
 from axp_core.runtime import (
     atomic_write_json,
     configure_logging,
+    data_dir,
+    installation_root,
     load_settings,
     read_json,
     runtime_paths,
@@ -318,6 +320,8 @@ def main(argv=None):
 
         print(json.dumps(self_test(args.db)))
         return
+    LOGGER.info("Startup context component=tray pid=%s python_version=%s installation_root=%s data_dir=%s",
+                os.getpid(), sys.version.split()[0], installation_root(), data_dir())
     try:
         TrayApplication().run()
     except AlreadyLocked:

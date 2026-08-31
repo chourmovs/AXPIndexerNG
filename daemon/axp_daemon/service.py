@@ -267,6 +267,9 @@ def _provision_embedder(profile, model_cache, allow_download, retry_s, publisher
 def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300, embedding_batch_size=64,
                allow_model_download=False, model_download_retry_s=60, launch_mode="interactive"):
     paths = runtime_paths()
+    LOGGER.info("Startup context component=daemon pid=%s launch_mode=%s db_path=%s embedding_profile=%s "
+                "embedding_batch_size=%s scan_interval=%s", os.getpid(), launch_mode, db, embedding_profile,
+                embedding_batch_size, scan_interval)
     try:
         lock = FileLock(daemon_lock_path(db, paths["runtime"])).acquire()
     except AlreadyLocked:

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 from axp_core.background import access_path_for
 from axp_core.database import connect
-from axp_core.runtime import configure_logging, load_settings
+from axp_core.runtime import configure_logging, load_settings, validate_loopback_host
 
 from .rag.model_manager import ModelManager, ModelManagerError
 from .rag.runtime_manager import InferenceRuntimeManager
@@ -44,6 +44,7 @@ def _is_loopback(address):
 
 
 MAX_ASK_BODY = 64 * 1024
+MAX_ADMIN_BODY = 8 * 1024
 MAX_QUESTION_LENGTH = 4_000
 CHAT_FAILURE_CODES = {"model_missing", "model_invalid", "backend_missing",
                       "backend_cpu_incompatible", "model_load_failed", "model_template_incompatible"}
@@ -75,6 +76,37 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
     quality_reranker = None
 
     class Handler(BaseHTTPRequestHandler):
+        def end_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; "
+                             "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+                             "frame-ancestors 'none'")
+            super().end_headers()
+
+        def read_json_body(self, max_bytes):
+            if self.headers.get_content_type() != "application/json":
+                return None, ("unsupported_media_type", 415)
+            raw_length = self.headers.get("Content-Length")
+            if raw_length is None:
+                return None, ("invalid_request", 400)
+            try:
+                length = int(raw_length)
+            except ValueError:
+                return None, ("invalid_request", 400)
+            if length < 0:
+                return None, ("invalid_request", 400)
+            if length > max_bytes:
+                return None, ("request_too_large", 413)
+            try:
+                body = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return None, ("invalid_json", 400)
+            if not isinstance(body, dict):
+                return None, ("invalid_request", 400)
+            return body, None
+
         def local_action_allowed(self):
             if not _is_loopback(self.client_address[0]):
                 return False
@@ -96,7 +128,6 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("X-Content-Type-Options", "nosniff")
             if urlparse(self.path).path.startswith(("/api/ask", "/api/models")):
                 self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -168,7 +199,6 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 "text/html" if names[url.path].endswith(".html") else "text/javascript",
             )
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
 
@@ -181,13 +211,12 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if model_manager is None:
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    body = json.loads(self.rfile.read(length) or b"{}")
+                    body, error = self.read_json_body(MAX_ADMIN_BODY)
+                    if error:
+                        return self.send_json({"error": error[0]}, error[1])
                     if not isinstance(body, dict) or not isinstance(body.get("device"), str):
                         return self.send_json({"error": "invalid_inference_device"}, 400)
                     return self.send_json(model_manager.set_device(body["device"]))
-                except (ValueError, json.JSONDecodeError):
-                    return self.send_json({"error": "invalid_request"}, 400)
                 except ModelManagerError as exc:
                     status = 409 if exc.code in ("chat_busy", "intel_gpu_unavailable") else 400
                     return self.send_json({"error": exc.code, **exc.details}, status)
@@ -210,7 +239,8 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if model_manager is None: return self.send_json({"error": "not_configured"}, 503)
                 try:
                     if url.path.endswith("/cancel"): return self.send_json(model_manager.cancel_benchmark(), 202)
-                    length = int(self.headers.get("Content-Length", "0")); body = json.loads(self.rfile.read(length) or b"{}")
+                    body, error = self.read_json_body(MAX_ADMIN_BODY)
+                    if error: return self.send_json({"error": error[0]}, error[1])
                     return self.send_json(model_manager.start_benchmark(body.get("profile", "quick")), 202)
                 except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
             if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
@@ -221,7 +251,8 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
                     if parts[3] == "download":
-                        length = int(self.headers.get("Content-Length", "0")); body = json.loads(self.rfile.read(length) or b"{}")
+                        body, error = self.read_json_body(MAX_ADMIN_BODY)
+                        if error: return self.send_json({"error": error[0]}, error[1])
                         return self.send_json(model_manager.start_download(parts[2], activate=bool(body.get("activate"))), 202)
                     result = getattr(model_manager, parts[3])(parts[2])
                     return self.send_json(result)
@@ -247,24 +278,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     return send({"error": "ask is only available locally"}, 403)
                 if not self.local_action_allowed():
                     return send({"error": "forbidden_origin"}, 403)
-                if self.headers.get_content_type() != "application/json":
-                    return send({"error": "unsupported_media_type"}, 415)
-                raw_length = self.headers.get("Content-Length")
-                if raw_length is None:
-                    return send({"error": "invalid_request"}, 400)
-                try:
-                    length = int(raw_length)
-                except ValueError:
-                    return send({"error": "invalid_request"}, 400)
-                if length < 0:
-                    return send({"error": "invalid_request"}, 400)
-                if length > MAX_ASK_BODY:
-                    return send({"error": "request_too_large"}, 413)
-                try:
-                    body = json.loads(self.rfile.read(length))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    return send({"error": "invalid_json"}, 400)
-                if not isinstance(body, dict) or not isinstance(body.get("question"), str):
+                body, error = self.read_json_body(MAX_ASK_BODY)
+                if error:
+                    return send({"error": error[0]}, error[1])
+                if not isinstance(body.get("question"), str):
                     return send({"error": "invalid_question"}, 400)
                 question = body["question"].strip()
                 if not question:
@@ -282,7 +299,6 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     self.send_response(200)
                     self.send_header("Content-Type", "application/x-ndjson")
                     self.send_header("Cache-Control", "no-store")
-                    self.send_header("X-Content-Type-Options", "nosniff")
                     self.end_headers()
 
                     terminal_sent = False
@@ -360,8 +376,8 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 except ValidationFailedError:
                     return send({"error": "validation_failed"}, 503)
             if url.path == "/api/shutdown":
-                if not _is_loopback(self.client_address[0]):
-                    return self.send_json({"error": "shutdown is only available locally"}, 403)
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
                 LOGGER.info("Web client shutdown requested")
                 self.send_json({"status": "stopping", "pid": os.getpid()})
                 threading.Thread(target=self.server.shutdown, name="axp-client-shutdown", daemon=True).start()
@@ -406,12 +422,15 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
 
 
 def serve(db, embedder, host="127.0.0.1", port=8765):
+    validate_loopback_host(host)
     settings = load_settings()
     backend = InferenceRuntimeManager(settings)
     rag_service = RagService(backend=backend, search_fn=search, connect_fn=connect, db=db, embedder=embedder)
     model_manager = ModelManager(settings["model_cache"], runtime=rag_service)
     server = ThreadingHTTPServer((host, port), make_handler(db, embedder, rag_service=rag_service,
                                                             model_manager=model_manager))
+    LOGGER.info("Startup context component=client pid=%s host=%s port=%s db_path=%s",
+                os.getpid(), host, port, db)
     try:
         server.serve_forever()
     finally:
