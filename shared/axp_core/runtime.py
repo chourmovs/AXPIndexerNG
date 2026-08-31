@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import os
 import tempfile
@@ -60,6 +61,22 @@ DEFAULT_SETTINGS = {
 
 
 ATOMIC_WRITE_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4)
+MAX_SETTINGS_RECOVERY_FILES = 3
+
+
+def validate_loopback_host(host):
+    """Return a safe loopback bind host without performing DNS resolution."""
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("web_host_must_be_loopback")
+    value = host.strip()
+    if value.rstrip(".").lower() == "localhost":
+        return value
+    try:
+        if ipaddress.ip_address(value).is_loopback:
+            return value
+    except ValueError:
+        pass
+    raise ValueError("web_host_must_be_loopback")
 
 
 def atomic_write_json(path, value):
@@ -99,18 +116,75 @@ def read_json(path, default=None):
         return default
 
 
+def _valid_settings_object(path):
+    try:
+        with Path(path).open(encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else None
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _normalize_settings(current):
+    settings = {**DEFAULT_SETTINGS, **current}
+    validators = {
+        "web_host": lambda value: validate_loopback_host(value),
+        "web_port": lambda value: value if type(value) is int and 1 <= value <= 65535 else None,
+        "scan_interval_s": lambda value: value if type(value) is int and 0 < value <= 31_536_000 else None,
+        "embedding_batch_size": lambda value: value if type(value) is int and 0 < value <= 1_000_000 else None,
+        "model_download_retry_s": lambda value: value if type(value) is int and 0 < value <= 86_400 else None,
+        "download_missing_models": lambda value: value if type(value) is bool else None,
+        "auto_start_daemon": lambda value: value if type(value) is bool else None,
+        "auto_restart_daemon": lambda value: value if type(value) is bool else None,
+        "daemon_runtime_mode": lambda value: value if value in ("interactive", "scheduled_task") else None,
+        "chat_inference_device": lambda value: value if value in ("auto", "cpu", "intel_gpu") else None,
+        "background_drive_mappings": lambda value: value if isinstance(value, dict) and all(
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()) else None,
+        **{key: (lambda value: value if isinstance(value, (str, os.PathLike)) and str(value).strip() else None)
+           for key in ("db_path", "model_cache", "chat_model_path")},
+    }
+    for key, validator in validators.items():
+        try:
+            valid = validator(settings.get(key))
+        except (TypeError, ValueError):
+            valid = None
+        if valid is None:
+            logging.getLogger(__name__).warning("Invalid persisted setting %s; using default", key)
+            settings[key] = DEFAULT_SETTINGS[key]
+        else:
+            settings[key] = str(valid) if isinstance(valid, os.PathLike) else valid
+    return settings
+
+
+def _preserve_corrupt_settings(path):
+    target = Path(path)
+    recovery = target.with_name(f"{target.name}.corrupt-{time.time_ns()}")
+    os.replace(target, recovery)
+    files = sorted(target.parent.glob(f"{target.name}.corrupt-*"), key=lambda item: item.stat().st_mtime_ns,
+                   reverse=True)
+    for old in files[MAX_SETTINGS_RECOVERY_FILES:]:
+        try:
+            old.unlink()
+        except OSError:
+            logging.getLogger(__name__).warning("Unable to prune settings recovery file", exc_info=True)
+
+
 def load_settings():
     paths = runtime_paths()
-    current = read_json(paths["settings"], {}) or {}
-    settings = {**DEFAULT_SETTINGS, **current}
-    if settings.get("daemon_runtime_mode") not in ("interactive", "scheduled_task"):
-        settings["daemon_runtime_mode"] = "interactive"
-    if settings.get("chat_inference_device") not in ("auto", "cpu", "intel_gpu"):
-        settings["chat_inference_device"] = "auto"
+    settings_path = paths["settings"]
+    exists = settings_path.exists()
+    current = _valid_settings_object(settings_path)
+    if exists and current is None:
+        logging.getLogger(__name__).error("Malformed settings file preserved; recovering configuration")
+        _preserve_corrupt_settings(settings_path)
+        current = _valid_settings_object(settings_path.with_suffix(settings_path.suffix + ".bak")) or {}
+    elif current is None:
+        current = {}
+    settings = _normalize_settings(current)
     if not settings.get("installation_id"):
         settings["installation_id"] = str(uuid.uuid4())
     if settings != current:
-        atomic_write_json(paths["settings"], settings)
+        save_settings(settings)
     root = installation_root()
     for key in ("db_path", "model_cache", "chat_model_path"):
         value = Path(settings[key])
@@ -126,7 +200,11 @@ def save_settings(settings):
             serializable[key] = str(Path(serializable[key]).resolve().relative_to(root))
         except ValueError:
             serializable[key] = str(Path(serializable[key]).resolve())
-    atomic_write_json(runtime_paths()["settings"], serializable)
+    target = runtime_paths()["settings"]
+    previous = _valid_settings_object(target)
+    if previous is not None:
+        atomic_write_json(target.with_suffix(target.suffix + ".bak"), previous)
+    atomic_write_json(target, serializable)
 
 
 def configure_logging(name, filename):

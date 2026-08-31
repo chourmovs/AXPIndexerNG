@@ -386,7 +386,7 @@ class RagService:
                     "prompt_eval_ms=%s prompt_eval_tps=%s ttft_ms=%s completion_tokens=%s decode_tps=%s "
                     "generation_ms=%s latency_budget_s=%s context_reduced=%s", request_id,
                     self.health().get("model_name"), effective_device, evidence_tokens,
-                    fixed_tokens + evidence_tokens, telemetry.get("time_to_first_token_ms"),
+                    fixed_tokens + evidence_tokens, telemetry.get("prompt_eval_ms"),
                     telemetry.get("prompt_eval_tokens_per_second"), telemetry.get("time_to_first_token_ms"),
                     telemetry.get("completion_tokens"), telemetry.get("decode_tokens_per_second"),
                     telemetry.get("generation_ms"), POLICY.preferred_seconds, reduced)

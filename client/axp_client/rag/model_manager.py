@@ -202,6 +202,7 @@ class ModelManager:
                     self._accelerator_job.error = None if exc.code == "accelerator_download_cancelled" else exc.code
                     self._accelerator_job.updated_at = time.time()
             except Exception:
+                LOGGER.exception("Unexpected Intel accelerator download failure")
                 with self._lock:
                     self._accelerator_job.state = "failed"; self._accelerator_job.error = "accelerator_download_failed"
                     self._accelerator_job.updated_at = time.time()
@@ -233,7 +234,10 @@ class ModelManager:
         if controller and (controller.health().get("inference_device_effective") == "intel_gpu" or
                            controller.health().get("sidecar_pid")):
             raise ModelManagerError("accelerator_in_use")
-        self.accelerators.remove()
+        try:
+            self.accelerators.remove()
+        except AcceleratorError as exc:
+            raise ModelManagerError("accelerator_remove_failed") from exc
         if controller: controller.hardware = detect_hardware()
         return self.catalog()
 
@@ -312,6 +316,9 @@ class ModelManager:
             self._state(job, "failed", "tls_error" if isinstance(exc.reason, ssl.SSLError) else "network_error")
         except OSError:
             self._state(job, "failed", "network_error")
+        except Exception:
+            LOGGER.exception("Unexpected model download failure model_id=%s", model.id)
+            self._state(job, "failed", "model_download_failed")
 
     def activate(self, model_id):
         model = catalog_model(model_id); path = self.model_path(model_id)
@@ -366,4 +373,15 @@ class ModelManager:
     def remove(self, model_id):
         if load_settings().get("chat_active_model_id") == model_id: raise ModelManagerError("model_active")
         if catalog_model(model_id) is None: raise ModelManagerError("model_not_found")
-        shutil.rmtree(self.models_dir / model_id, ignore_errors=True); return self.catalog()
+        target = self.models_dir / model_id
+        try:
+            shutil.rmtree(target)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            LOGGER.exception("Chat model removal failed model_id=%s", model_id)
+            raise ModelManagerError("model_remove_failed") from exc
+        if target.exists():
+            LOGGER.error("Chat model removal left directory present model_id=%s", model_id)
+            raise ModelManagerError("model_remove_failed")
+        return self.catalog()

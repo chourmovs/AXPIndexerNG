@@ -140,7 +140,7 @@ def test_shutdown_address_security():
     response = {}
     handler.send_json = lambda value, status=200: response.update(value=value, status=status)
     handler.do_POST()
-    assert response == {"value": {"error": "shutdown is only available locally"}, "status": 403}
+    assert response == {"value": {"error": "forbidden_origin"}, "status": 403}
 
 
 def test_shutdown_endpoint_accepts_loopback(tmp_path):

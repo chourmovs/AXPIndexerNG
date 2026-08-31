@@ -174,13 +174,18 @@ def main(argv=None):
         service = RagService(backend=create_chat_backend(load_settings()), search_fn=search,
                              connect_fn=connect, db=a.db, embedder=e)
         retrieval, decision = service.evaluate_gate(a.query)
-        scores = [{key: row.get(key) for key in
-                   ("document_id", "chunk_id", "lexical_score", "vector_similarity", "hybrid_score")}
-                  for row in retrieval.candidates]
+        fields = ("document_id", "chunk_id", "filename", "vector_similarity", "lexical_coverage",
+                  "content_lexical_coverage", "title_coverage", "filename_coverage", "heading_coverage",
+                  "convergence_score", "evidence_score", "rrf_rank", "reranker_score", "final_rank",
+                  "exact_identifier_match", "exact_content_identifier_match", "exact_phrase_match",
+                  "exact_content_phrase_match")
+        scores = [{key: row[key] for key in fields if key in row} for row in retrieval.candidates]
         print(json.dumps({"query": a.query,
-                          "top_lexical_score": max((row.get("lexical_score") or 0 for row in scores), default=0),
                           "top_vector_similarities": sorted(
                               (row.get("vector_similarity") or 0 for row in scores), reverse=True)[:10],
+                          "top_evidence_scores": sorted(
+                              (row.get("evidence_score") or 0 for row in scores), reverse=True)[:10],
+                          "document_ranking": retrieval.ranked_documents,
                           "scores": scores, "answerability": decision.public()}, ensure_ascii=False, indent=2))
         return
     if a.cmd == "rag-eval":

@@ -157,8 +157,14 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
     unfiltered_count = len(ranked)
     query_terms = _meaningful_terms(query)
     ranked = [item for item in ranked if _relevance(item, query_terms, config)]
-    ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["evidence_score"],
-                               -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
+    if profile == "quality":
+        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"],
+                                   -(x["reranker_score"] if x["reranker_score"] is not None else float("-inf")),
+                                   -x["evidence_score"], -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
+    else:
+        # Preserve the PR40 hybrid ordering exactly; reranking is quality-only.
+        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["evidence_score"],
+                                   -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
     final = diversify(ranked, limit, config.max_chunks_per_document)
     for rank, item in enumerate(final, 1):
         item["final_rank"] = rank
