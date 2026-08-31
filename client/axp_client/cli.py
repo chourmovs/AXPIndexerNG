@@ -109,19 +109,30 @@ def main(argv=None):
             profile = catalog_model(settings.get("chat_active_model_id"))
             if profile is None: p.error("chat-model intel-test requires an active catalog model")
             runtime = InferenceRuntimeManager(settings); backend = runtime.backend
-            print(f"Intel GPU:\n    {runtime.hardware.sycl_device_name or runtime.hardware.intel_gpu_name}")
-            print(f"\nRuntime:\n    llama.cpp {INTEL_SYCL.tag} SYCL\n\nModel:\n    {profile.name}")
+            print(f"Intel GPU detected: {'yes' if runtime.hardware.intel_gpu_detected else 'no'}")
+            print(f"SYCL runtime installed: {'yes' if runtime.hardware.sycl_runtime_installed else 'no'}")
+            print(f"SYCL probe: {'passed' if runtime.hardware.sycl_probe_ok else 'failed'}")
+            print(f"Selected device: {runtime.hardware.sycl_device_name or runtime.hardware.intel_gpu_name or 'none'}")
+            print(f"Model startup: {profile.name}")
+            print("Offload requested: yes")
             try:
                 backend.ensure_loaded(); health = backend.health()
-                answer = backend.generate(system_prompt="Reply concisely.", user_prompt="Reply with OK.")
+                answer = backend.generate(system_prompt="Follow the instruction exactly.",
+                                          user_prompt="Reply with exactly: AXP_OK")
                 telemetry = backend.last_telemetry
-                print(f"\nOffload:\n    confirmed\n    {health.get('offloaded_layers')} / {health.get('total_layers')} layers")
-                print(f"\nModel load:\n    {health.get('model_load_ms', 0)/1000:.1f} s")
+                print(f"Offloaded layers: {health.get('offloaded_layers')} / {health.get('total_layers')}")
+                print(f"GPU buffer: {health.get('gpu_buffer_bytes')} bytes")
+                print(f"Model load: {health.get('model_load_ms', 0)/1000:.1f} s")
                 print(f"TTFT: {telemetry.get('time_to_first_token_ms')} ms")
                 print(f"Decode: {telemetry.get('decode_tokens_per_second')} tok/s")
-                print("\nRESULT:\n    PASS" if answer else "\nRESULT:\n    FAIL\nreason:\n    empty_generation")
+                print("Qualification result: PASS — GPU inference proven" if answer else
+                      "Qualification result: FAIL — inference request failed")
             except Exception:
-                print(f"\nRESULT:\n    FAIL\nreason:\n    {backend.health().get('failure_type', 'intel_gpu_backend_failed')}")
+                failure = backend.health().get('failure_type', 'intel_gpu_backend_failed')
+                labels = {"intel_gpu_offload_not_confirmed": "GPU offload not confirmed",
+                          "intel_sycl_runtime_missing": "runtime unavailable",
+                          "intel_gpu_unavailable": "GPU device unavailable"}
+                print(f"Qualification result: FAIL — {labels.get(failure, 'model load failed')}")
             finally: runtime.close()
         elif a.model_cmd == "benchmark":
             settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))

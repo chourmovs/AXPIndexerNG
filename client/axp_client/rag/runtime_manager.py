@@ -106,7 +106,11 @@ class InferenceRuntimeManager:
         profile = catalog_model(self.settings.get("chat_active_model_id"))
         accelerator_reason = self.hardware.accelerator_reason or None
         fallback = accelerator_reason if requested != "cpu" else None
-        effective = "intel_gpu" if requested == "intel_gpu" and value.get("gpu_offload_confirmed") else "cpu"
+        if requested == "intel_gpu":
+            effective = ("intel_gpu" if value.get("gpu_offload_confirmed") else
+                         "none" if value.get("backend") == "intel_sycl" else "cpu")
+        else:
+            effective = "cpu"
         value.update(active_model_id=self.settings.get("chat_active_model_id"),
                      active_model_name=profile.name if profile else value.get("model_name"),
                      inference_device_requested=requested,

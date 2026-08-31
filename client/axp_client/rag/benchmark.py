@@ -80,13 +80,25 @@ class BenchmarkRunner:
 
     def _measure(self, backend, state):
         self._state(state)
+        prompt = benchmark_prompt(self.job.profile)
+        prompt_tokens = backend.count_tokens(prompt)
         backend.generate(system_prompt="Answer only from the supplied synthetic benchmark text.",
-                         user_prompt=benchmark_prompt(self.job.profile))
+                         user_prompt=prompt)
         if self._cancel.is_set(): raise InterruptedError
         telemetry = backend.last_telemetry
-        return {"ttft_ms": telemetry.get("time_to_first_token_ms"),
+        ttft = telemetry.get("time_to_first_token_ms")
+        prompt_eval_ms = telemetry.get("prompt_eval_ms") or ttft
+        return {"prompt_tokens": telemetry.get("prompt_tokens") or prompt_tokens,
+                "prompt_eval_ms": prompt_eval_ms,
+                "prompt_eval_timing_derived": telemetry.get("prompt_eval_ms") is None,
+                "prompt_eval_tokens_per_second": (telemetry.get("prompt_eval_tokens_per_second") or
+                    (prompt_tokens / (prompt_eval_ms / 1000) if prompt_eval_ms else None)),
+                "ttft_ms": ttft,
                 "generation_ms": telemetry.get("generation_ms"),
-                "decode_tps": telemetry.get("decode_tokens_per_second")}
+                "completion_tokens": telemetry.get("completion_tokens"),
+                "decode_ms": telemetry.get("decode_ms"),
+                "decode_tps": telemetry.get("decode_tokens_per_second"),
+                "decode_tokens_per_second": telemetry.get("decode_tokens_per_second")}
 
     def _backend_result(self, factory, prefix, label):
         backend = factory(PROFILES[self.job.profile]["max_tokens"])
@@ -95,8 +107,10 @@ class BenchmarkRunner:
             self._state(f"{prefix}_loading"); started = time.perf_counter(); backend.ensure_loaded()
             load_ms = (time.perf_counter()-started)*1000
             cold = self._measure(backend, f"{prefix}_cold"); warm = self._measure(backend, f"{prefix}_warm")
+            health = backend.health()
             return {"backend": label, "model_load_ms": load_ms, "cold": cold, "warm": warm,
-                    **({"gpu_offload_confirmed": backend.health().get("gpu_offload_confirmed")} if prefix == "intel" else {})}
+                    **({key: health.get(key) for key in ("gpu_offload_confirmed", "offloaded_layers",
+                        "total_layers", "gpu_buffer_bytes", "sycl_device_name")} if prefix == "intel" else {})}
         finally: backend.close(); self._current_backend = None
 
     def _run(self):

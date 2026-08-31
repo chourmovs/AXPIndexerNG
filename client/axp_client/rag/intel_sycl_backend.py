@@ -29,6 +29,8 @@ INTEL_LOAD_STALL_WARN_AFTER_S = 240
 INTEL_LOAD_HARD_TIMEOUT_S = 600
 INTEL_LOAD_ACTIVITY_STALE_S = 120
 OFFLOAD_RE = re.compile(r"offload(?:ed|ing)?\s+(\d+)(?:\s*/\s*|\s+of\s+)(\d+)\s+layers?", re.I)
+BUFFER_RE = re.compile(r"(SYCL\d*|GPU|CPU|model).*?buffer size\s*=\s*([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)", re.I)
+MAX_GPU_MARKERS = 32
 
 
 class IntelSyclError(RuntimeError):
@@ -68,6 +70,7 @@ class IntelSyclBackend:
         self.gpu_offload_requested = True; self.gpu_offload_confirmed = False
         self.offloaded_layers = self.total_layers = None; self._diagnostic = []; self.sycl_device_name = None
         self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
+        self.native_gpu_markers = []
         self._load_cancel = threading.Event(); self._load_progress_lock = threading.Lock()
         self._load_progress = self._new_load_progress(); self._api_key = None
         self._auth_dir = self._auth_file = None; self._reader_thread = None
@@ -143,6 +146,9 @@ class IntelSyclBackend:
                 "sycl_device_name": self.sycl_device_name, "sycl_device_selector": DEVICE_SELECTOR,
                 "gpu_offload_requested": True, "gpu_offload_confirmed": self.gpu_offload_confirmed,
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
+                "gpu_buffer_bytes": self.gpu_buffer_bytes, "cpu_buffer_bytes": self.cpu_buffer_bytes,
+                "native_gpu_markers": list(self.native_gpu_markers),
+                "accelerator_state": "confirmed" if self.gpu_offload_confirmed else "unconfirmed",
                 "generation_phase": progress["phase"], "generation_elapsed_s": progress["elapsed_s"],
                 "time_to_first_token_ms": progress["time_to_first_token_ms"],
                 "generated_fragments": progress["generated_fragments"],
@@ -153,6 +159,35 @@ class IntelSyclBackend:
                 "model_load_slow": load["slow_warning"],
                 "model_load_suspected_stall": load["suspected_stall"],
                 "sidecar_running": self._process is not None and self._process.poll() is None, **self._failure}
+
+    def _record_native_evidence(self, line):
+        """Consume one native line. Positive proof is sticky for this model session."""
+        text, lower = line.strip(), line.lower()
+        strong = False
+        match = OFFLOAD_RE.search(line)
+        if match:
+            self.offloaded_layers, self.total_layers = map(int, match.groups())
+            strong = self.offloaded_layers > 0
+        if INTEL_GPU_RE.search(line) and re.search(r"(?:SYCL|Level.Zero|device)", line, re.I):
+            self.sycl_device_name = text[:300]
+        buffer = BUFFER_RE.search(line)
+        if buffer:
+            scale = {"B": 1, "KB": 1024, "KIB": 1024, "MB": 1024**2, "MIB": 1024**2,
+                     "GB": 1024**3, "GIB": 1024**3}[buffer.group(3).upper()]
+            size = int(float(buffer.group(2)) * scale)
+            if re.search(r"SYCL|GPU", buffer.group(1), re.I):
+                self.gpu_buffer_bytes = size
+                strong = strong or size > 0
+            else:
+                self.cpu_buffer_bytes = size
+        explicit = bool(re.search(r"offloading (?:\d+ repeating layers|output layer) to gpu", line, re.I))
+        strong = strong or explicit
+        if match or buffer or explicit or ("selected" in lower and "sycl" in lower and "device" in lower):
+            self.native_gpu_markers.append(text[:500])
+            self.native_gpu_markers = self.native_gpu_markers[-MAX_GPU_MARKERS:]
+        # Never assign False here: absence on a subsequent line is not evidence.
+        if strong:
+            self.gpu_offload_confirmed = True
 
     def _endpoint(self, path): return f"http://{LOOPBACK}:{self._port}{path}"
 
@@ -181,25 +216,7 @@ class IntelSyclBackend:
                          "runtime_initializing" if "sycl" in lower or "level zero" in lower else None)
                 if phase:
                     with self._load_progress_lock: self._load_progress["phase"] = phase
-                match = OFFLOAD_RE.search(line)
-                if match:
-                    self.offloaded_layers, self.total_layers = map(int, match.groups())
-                if INTEL_GPU_RE.search(line) and re.search(r"(?:SYCL|Level.Zero|device|buffer)", line, re.I):
-                    self.sycl_device_name = line.strip()[:300]
-                buffer = re.search(r"(SYCL\d*|GPU|CPU|model).*?buffer size\s*=\s*([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)", line, re.I)
-                if buffer:
-                    scale = {"B": 1, "KB": 1024, "KIB": 1024, "MB": 1024**2, "MIB": 1024**2,
-                             "GB": 1024**3, "GIB": 1024**3}[buffer.group(3).upper()]
-                    size = int(float(buffer.group(2)) * scale)
-                    if re.search(r"SYCL|GPU", buffer.group(1), re.I):
-                        self.gpu_buffer_bytes = size; self.gpu_offload_confirmed = size > 0
-                    else: self.cpu_buffer_bytes = size
-                if re.search(r"offloading (?:\d+ repeating layers|output layer) to gpu", line, re.I):
-                    self.gpu_offload_confirmed = True
-                text = "".join(self._diagnostic)
-                self.gpu_offload_confirmed = bool(self.sycl_device_name and
-                    (self.offloaded_layers and self.offloaded_layers > 0 or
-                     re.search(r"(?:SYCL|GPU).*(?:buffer|offload)", text, re.I)))
+                self._record_native_evidence(line)
         finally:
             handler.close()
 
@@ -244,6 +261,10 @@ class IntelSyclBackend:
             if self.runtime_dir not in self.server_path.parents or not self.server_path.is_file():
                 raise IntelSyclError("intel_sycl_runtime_invalid")
             self.close(); started = self._monotonic(); self._model_state = "loading"; self._port = self._free_port()
+            self.gpu_offload_confirmed = False
+            self.offloaded_layers = self.total_layers = None
+            self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
+            self.native_gpu_markers = []
             self._load_cancel.clear(); self._create_auth(); self._load_progress = self._new_load_progress()
             with self._load_progress_lock:
                 self._load_progress.update(active=True, phase="spawning", started_monotonic=started,
@@ -352,7 +373,9 @@ class IntelSyclBackend:
                 "finish_reason": finish, "backend": "intel_sycl", "runtime": INTEL_SYCL.tag,
                 "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
-                "inference_device_effective": "local Intel GPU"}
+                "inference_device_requested": "intel_gpu", "inference_device_effective": "intel_gpu",
+                "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
+                "gpu_buffer_bytes": self.gpu_buffer_bytes}
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)
             return answer
         except GenerationCancelled:

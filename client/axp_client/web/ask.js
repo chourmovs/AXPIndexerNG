@@ -8,6 +8,8 @@ const progressLabels = {retrieval_started: 'Searching indexed documents…', ret
   model_load_started: 'Loading local AI model…', model_load_heartbeat: 'Loading local AI model…', model_load_complete: 'Local AI model loaded.',
   model_load_progress: 'Starting Intel GPU backend…',
   context_preparation_started: 'Preparing evidence…', context_ready: 'Evidence prepared', generation_started: 'Evaluating prompt locally…',
+  context_reduced_for_latency: 'Reducing context to meet latency target…',
+  generation_skipped: 'Relevant evidence ready; local answer skipped.',
   generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
   local_generation_failed: 'The local answer model could not complete this request.',
@@ -48,14 +50,17 @@ function renderDocuments(turn, heading, rows, sourceCards = false) {
 function renderResponse(article, response, turn) {
   const answer = element('div', 'answer-text');
   if (response.status === 'answered' && response.answerable) renderAnswerText(answer, response.answer, turn);
+  else if (response.status === 'local_generation_skipped_latency_budget') answer.textContent = 'Local answer skipped because estimated generation latency exceeds the interactive budget. Relevant evidence is shown instead.';
   else if (response.status === 'ungrounded_generation') answer.textContent = 'AXP found related evidence but could not produce a sufficiently grounded answer. Try rephrasing the question.';
   else answer.textContent = "I couldn't find enough information in the indexed documents to answer this reliably.";
   article.append(answer);
-  const documents = response.status === 'answered' ? renderDocuments(turn, 'Sources', response.sources, true) :
+  const documents = ['answered','local_generation_skipped_latency_budget'].includes(response.status) ? renderDocuments(turn, 'Sources', response.sources, true) :
     renderDocuments(turn, 'Related documents', response.related_documents, false);
   if (documents) article.append(documents);
   if (response.timings) { const generation=response.generation || {}; const seconds = ((generation.generation_ms || response.timings.total_ms) / 1000).toFixed(1); const count = response.sources?.length || 0;
-    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · ${generation.inference_device_effective || 'local CPU'} · ${seconds} s`);
+    const device=generation.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : generation.inference_device_effective === 'none' ? 'No inference device' : 'CPU';
+    const reduced=response.context?.context_reduced_for_latency ? ' · reduced context' : '';
+    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · ${device}${reduced} · ${generation.prompt_tokens || response.context?.final_prompt_tokens || '—'} prompt tokens · ${seconds} s`);
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     article.append(meta); }
@@ -138,7 +143,9 @@ export function initAsk() {
     list.replaceChildren(...cards); const requested=catalog.device.inference_device_requested || 'auto';
     document.querySelectorAll('input[name="device"]').forEach(radio=>{ radio.checked=radio.value===requested; });
     const intel=document.querySelector('input[name="device"][value="intel_gpu"]'); intel.disabled=!catalog.hardware.accelerator_available;
-    document.querySelector('#intel-device-status').textContent=catalog.hardware.accelerator_available ? '— available' : `— unavailable (${catalog.hardware.accelerator_reason || 'not installed'})`;
+    const intelProven=catalog.device.inference_device_effective==='intel_gpu';
+    document.querySelector('#intel-device-status').textContent=intelProven ? '— Ready — hardware acceleration confirmed' :
+      catalog.hardware.intel_gpu_detected ? '— Detected — inference acceleration not confirmed' : `— unavailable (${catalog.hardware.accelerator_reason || 'not installed'})`;
     const accelerator=catalog.hardware.accelerator || {}; const installed=accelerator.installed;
     const acceleratorJob=accelerator.download; const acceleratorDownloadActive=activeDownloadStates.has(acceleratorJob?.state);
     downloading=downloading || acceleratorDownloadActive;
@@ -183,7 +190,7 @@ export function initAsk() {
   function formatRate(value){ return value ? `${(value/1048576).toFixed(1)} MB/s` : 'Calculating speed'; }
   function formatEta(value){ if(value==null)return ''; const seconds=Math.ceil(value); return ` · ~${Math.floor(seconds/60)}m ${String(seconds%60).padStart(2,'0')}s remaining`; }
   async function refreshHealth(){ try { const state = await askHealth();
-      if (state.model_state === 'loaded') health.textContent = `● Local AI ready · ${state.active_model_name || state.model_name || 'Local model'} · ${state.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : 'CPU'}${state.fallback_reason ? ' · Intel GPU unavailable' : ''}`;
+      if (state.model_state === 'loaded') health.textContent = `● Local AI ready · ${state.active_model_name || state.model_name || 'Local model'} · ${state.inference_device_effective === 'intel_gpu' ? `Intel GPU · hardware acceleration confirmed${state.offloaded_layers ? ` · ${state.offloaded_layers}/${state.total_layers || '?'} layers offloaded` : ''}` : state.inference_device_requested === 'intel_gpu' ? 'Intel GPU detected — GPU inference not confirmed' : 'CPU'}`;
       else if (state.model_state === 'loading') health.textContent = '● Loading local model…';
       else if (state.model_state === 'failed') { health.replaceChildren(document.createTextNode(`⚠ ${state.failure_reason || 'Local model load failed'} `));
         if (state.retryable === true) { const retry = element('button', 'retry-model', 'Retry model');

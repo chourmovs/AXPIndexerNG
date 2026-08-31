@@ -7,6 +7,7 @@ from .answerability import decide_answerability
 from .citations import validate_citations
 from .context import build_context
 from .llama_cpp_backend import GenerationCancelled, GenerationConfig
+from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
 from .retrieval import retrieve_rag_candidates
@@ -181,6 +182,41 @@ class RagService:
                                                 answer_reserve_tokens=generation_config.max_answer_tokens,
                                                 safety_reserve_tokens=generation_config.safety_tokens,
                                                 max_evidence_tokens=generation_config.max_evidence_tokens))
+                    original_context = context
+                    health = self.health()
+                    model_id = health.get("active_model_id") or health.get("model_name")
+                    effective_device = health.get("inference_device_effective")
+                    estimate = PERFORMANCE_ESTIMATES.get(model_id, effective_device)
+                    prompt_tps = (estimate or {}).get("prompt_eval_tokens_per_second")
+                    if prompt_tps is None and effective_device == "cpu":
+                        prompt_tps = POLICY.default_cpu_prompt_tps
+                    estimated = estimate_prefill_seconds(
+                        fixed_tokens + (context.diagnostics["evidence_tokens"] or 0), prompt_tps)
+                    reduced = False
+                    original_budget = context.diagnostics["evidence_budget_tokens"]
+                    # Rebuild from ranked hits at complete evidence boundaries for each rung.
+                    if estimated is not None and estimated > POLICY.preferred_seconds:
+                        for target in POLICY.evidence_ladder:
+                            if original_budget is not None and target >= original_budget:
+                                continue
+                            candidate = build_context(con, content, token_counter=self.backend.count_tokens,
+                                context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
+                                config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
+                                    max_documents=generation_config.max_context_documents,
+                                    max_seeds_per_document=generation_config.max_seeds_per_document,
+                                    max_blocks=generation_config.max_context_blocks,
+                                    answer_reserve_tokens=generation_config.max_answer_tokens,
+                                    safety_reserve_tokens=generation_config.safety_tokens,
+                                    max_evidence_tokens=target))
+                            if not candidate.blocks:
+                                continue
+                            context, reduced = candidate, True
+                            estimated = estimate_prefill_seconds(
+                                fixed_tokens + (context.diagnostics["evidence_tokens"] or 0), prompt_tps)
+                            emit("context_reduced_for_latency", evidence_budget_tokens=target,
+                                 estimated_prefill_seconds=estimated)
+                            if estimated is not None and estimated <= POLICY.preferred_seconds:
+                                break
                 except Exception as exc:
                     LOGGER.exception("Context preparation failed request id=%s type=%s", request_id,
                                      type(exc).__name__)
@@ -194,6 +230,34 @@ class RagService:
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
             return base
         evidence_tokens = context.diagnostics["evidence_tokens"]
+        context_telemetry = {
+            "retrieved_results": len(candidates),
+            "selected_documents": context.diagnostics["selected_documents"],
+            "selected_blocks": context.diagnostics["selected_blocks"],
+            "raw_candidate_evidence_tokens": original_context.diagnostics["evidence_tokens"],
+            "selected_evidence_tokens": evidence_tokens,
+            "final_prompt_tokens": fixed_tokens + evidence_tokens,
+            "original_evidence_budget": original_budget,
+            "effective_evidence_budget": context.diagnostics["evidence_budget_tokens"],
+            "latency_budget_seconds": POLICY.preferred_seconds,
+            "latency_hard_limit_seconds": POLICY.hard_seconds,
+            "estimated_prefill_seconds": estimated,
+            "latency_budget_exceeded": estimated is not None and estimated > POLICY.preferred_seconds,
+            "context_reduced_for_latency": reduced,
+        }
+        base["context"] = context_telemetry
+        if (estimated is not None and estimated > POLICY.hard_seconds and
+                evidence_tokens <= POLICY.minimum_evidence_tokens):
+            self._generation_lock.release()
+            base.update(status="local_generation_skipped_latency_budget", answerable=False,
+                        sources=[block.source() for block in context.blocks],
+                        decision={"reason": "local_generation_skipped_latency_budget",
+                                  "best_relevance": decision.best_relevance})
+            base["timings"] = {"retrieval_ms": retrieval_ms, "context_ms": context_ms,
+                               "total_ms": (time.perf_counter() - started) * 1000}
+            emit("generation_skipped", reason="local_generation_skipped_latency_budget", terminal=True,
+                 **context_telemetry)
+            return base
         emit("context_ready", documents=context.diagnostics["selected_documents"],
              blocks=context.diagnostics["selected_blocks"], evidence_tokens=evidence_tokens,
              evidence_budget_tokens=context.diagnostics["evidence_budget_tokens"],
@@ -233,6 +297,18 @@ class RagService:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
         telemetry = getattr(self.backend, "last_telemetry", None) or {}
+        telemetry.update({"inference_device_requested": health.get("inference_device_requested"),
+                          "inference_device_effective": effective_device,
+                          "prompt_tokens": fixed_tokens + evidence_tokens})
+        ttft = telemetry.get("time_to_first_token_ms")
+        if telemetry.get("prompt_eval_ms") is None and ttft:
+            telemetry["prompt_eval_ms"] = ttft
+            telemetry["prompt_eval_timing_derived"] = True
+        if telemetry.get("prompt_eval_tokens_per_second") is None and telemetry.get("prompt_eval_ms"):
+            telemetry["prompt_eval_tokens_per_second"] = telemetry["prompt_tokens"] / (telemetry["prompt_eval_ms"] / 1000)
+        PERFORMANCE_ESTIMATES.update(model_id, effective_device,
+            prompt_tps=telemetry.get("prompt_eval_tokens_per_second"),
+            decode_tps=telemetry.get("decode_tokens_per_second"))
         emit("generation_complete", elapsed_s=round(generation_ms / 1000, 1),
              **{key: telemetry[key] for key in ("time_to_first_token_ms", "generation_ms", "decode_ms",
                  "completion_tokens", "decode_tokens_per_second", "overall_tokens_per_second",
@@ -264,13 +340,14 @@ class RagService:
                 "evidence_tokens": context.diagnostics["evidence_tokens"],
                 "reserved_answer_tokens": generation_config.max_answer_tokens,
                 "total_prompt_tokens": fixed_tokens + context.diagnostics["evidence_tokens"]}
-        LOGGER.info("RAG generation request_id=%s model=%s evidence_tokens=%s prompt_tokens_estimated=%s "
-                    "ttft_ms=%s completion_tokens=%s decode_tps=%s generation_ms=%s n_threads=%s "
-                    "n_threads_batch=%s n_batch=%s", request_id, self.health().get("model_name"), evidence_tokens,
+        LOGGER.info("RAG generation request_id=%s model=%s device=%s evidence_tokens=%s prompt_tokens=%s "
+                    "prompt_eval_ms=%s prompt_eval_tps=%s ttft_ms=%s completion_tokens=%s decode_tps=%s "
+                    "generation_ms=%s latency_budget_s=%s context_reduced=%s", request_id,
+                    self.health().get("model_name"), effective_device, evidence_tokens,
                     fixed_tokens + evidence_tokens, telemetry.get("time_to_first_token_ms"),
+                    telemetry.get("prompt_eval_tokens_per_second"), telemetry.get("time_to_first_token_ms"),
                     telemetry.get("completion_tokens"), telemetry.get("decode_tokens_per_second"),
-                    telemetry.get("generation_ms"), telemetry.get("n_threads"),
-                    telemetry.get("n_threads_batch"), telemetry.get("n_batch"))
+                    telemetry.get("generation_ms"), POLICY.preferred_seconds, reduced)
         LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s generation_ms=%.1f", request_id,
                     base["decision"]["reason"], len(candidates), decision.content_documents, generation_ms)
         return base
