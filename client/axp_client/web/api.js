@@ -29,10 +29,10 @@ export const setInferenceDevice = device => jsonRequest('/api/models/device',
 export const openDocument = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open`, {method: 'POST'});
 export const openDocumentDirectory = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open-dir`, {method: 'POST'});
 
-export async function askStream(question, onEvent) {
+export async function askStream(question, onEvent, searchDepth = 0) {
   let response;
   try { response = await fetch('/api/ask/stream', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question})}); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
+    body: JSON.stringify({question, search_depth: searchDepth})}); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
   if (!response.ok) {
     let body = {}; try { body = await response.json(); } catch (_) { /* normalized below */ }
     throw new ApiError(body.error || 'http_error', body.error || 'AXP request failed.', response.status);

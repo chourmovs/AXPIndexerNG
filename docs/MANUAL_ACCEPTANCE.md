@@ -38,3 +38,17 @@ HTTP, security, retrieval-field, and tray lifecycle tests.
 2. Confirm the tray log contains `Daemon heartbeat stale but daemon instance is still active; duplicate restart
    suppressed`.
 3. Confirm that no new `pythonw` daemon process starts. Do not terminate processes by executable name.
+# PR40 document-centric retrieval and Search More (Windows)
+
+1. Start AXP against an existing, pre-PR40 indexed database containing two related documents; do not rescan it.
+2. Search for a phrase covered by both documents. Confirm relevance percentages descend, and inspect the score
+   tooltip for vector, content lexical, title, and convergence signals.
+3. Ask the same question. Confirm the best document and a genuinely relevant supporting document both appear,
+   citations open correctly, and the metadata reports actual evidence tokens and the active CPU/Intel GPU backend.
+4. In `client.log`, locate the request id and verify the bounded document ranking, selected seed chunks/ranges,
+   target/effective evidence budgets, and any context/latency limitation.
+5. Click **Search more**. Keep the first validated answer visible while it runs; confirm progress advances through
+   expansion, ranking, wider evidence preparation, evaluation, and generation.
+6. Confirm the replacement answer is validated, metadata begins with **Expanded search**, and logs show
+   `search_depth=1`, multipliers of 1.5, retrieval depths 150/150 with limit 36, up to three distinct seeds per
+   document, and truthful target/effective budgets. A failed/cancelled expansion must leave the prior answer intact.

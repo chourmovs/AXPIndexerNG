@@ -15,6 +15,20 @@ class ContextConfig:
     max_evidence_tokens: int | None = None
 
 
+def select_distinct_seeds(hits, maximum):
+    """Choose dense, spatially distinct passages; neighbors arrive through expansion."""
+    selected = []
+    for hit in sorted(hits, key=lambda row: (-float(row.get("evidence_score", row.get("relevance_score")) or 0),
+                                              int(row.get("chunk_id") or 0))):
+        number = int(hit["chunk_no"])
+        if any(abs(number - int(existing["chunk_no"])) <= 1 for existing in selected):
+            continue
+        selected.append(hit)
+        if len(selected) == maximum:
+            break
+    return selected
+
+
 def _format(block):
     lines = [
         f"[{block.id}]", f"Document: {block.filename or block.title}", f"Document ID: {block.document_id}",
@@ -29,17 +43,16 @@ def _format(block):
 
 def build_context(con, hits, config=None, *, token_counter=None, context_window=None, fixed_prompt_tokens=0):
     config = config or ContextConfig()
-    selected, counts, documents = [], {}, []
+    selected, documents = [], []
     for hit in hits:
         doc = int(hit["document_id"])
-        if doc not in counts:
+        if doc not in documents:
             if len(documents) >= config.max_documents:
                 continue
             documents.append(doc)
-            counts[doc] = 0
-        if counts[doc] < config.max_seeds_per_document:
-            selected.append(hit)
-            counts[doc] += 1
+    for doc in documents:
+        selected.extend(select_distinct_seeds([hit for hit in hits if int(hit["document_id"]) == doc],
+                                               config.max_seeds_per_document))
 
     by_doc = {}
     relevance = {}
@@ -56,7 +69,7 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
         current["lexical_coverage"] = max(current["lexical_coverage"], float(hit.get("lexical_coverage") or 0))
         for key in ("exact_identifier_match", "exact_phrase_match", "exact_filename_match"):
             current[key] = current[key] or bool(hit.get(key))
-    blocks = []
+    blocks_by_doc = {}
     for doc in documents:
         numbers = sorted(by_doc.get(doc, ()))
         if not numbers:
@@ -75,7 +88,7 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
             groups[-1].append(row)
         for group in groups:
             row = group[0]
-            blocks.append(EvidenceBlock(
+            blocks_by_doc.setdefault(doc, []).append(EvidenceBlock(
                 id="", document_id=doc, title=row["title"], filename=row["filename"], path=row["path"],
                 page_no=next((x["page_no"] for x in group if x["page_no"] is not None), None),
                 section_heading=next((x["section_heading"] for x in group if x["section_heading"]), ""),
@@ -83,6 +96,12 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
                 relevance_score=relevance[doc], text="\n\n".join(x["text"] for x in group),
                 relevance_signals=relevance_signals[doc],
             ))
+    # Admit each document's primary block before any document's secondary block.
+    blocks = []
+    for index in range(max((len(value) for value in blocks_by_doc.values()), default=0)):
+        for doc in documents:
+            if index < len(blocks_by_doc.get(doc, ())):
+                blocks.append(blocks_by_doc[doc][index])
     accepted, rendered, used = [], [], 0
     token_budget = None
     physical_budget = None
@@ -149,4 +168,6 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
     evidence_tokens = token_counter(prompt) if token_counter else None
     return ContextResult(prompt, accepted, {"evidence_tokens": evidence_tokens, "evidence_budget_tokens": token_budget,
         "physical_context_budget_tokens": physical_budget, "max_evidence_tokens": config.max_evidence_tokens,
-        "selected_documents": len({block.document_id for block in accepted}), "selected_blocks": len(accepted)})
+        "selected_documents": len({block.document_id for block in accepted}), "selected_blocks": len(accepted),
+        "selected_seed_chunks": [int(hit["chunk_no"]) for hit in selected],
+        "selected_chunk_ranges": [[min(block.chunk_nos), max(block.chunk_nos)] for block in accepted]})

@@ -16,7 +16,8 @@ THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 NO_THINK_DIRECTIVE = "/no_think\n"
 
 
-def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt, config, template_kwargs):
+def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt, config, template_kwargs,
+                          max_tokens=None):
     """Build an invocation compatible with the installed llama-cpp API before calling it."""
     parameters = inspect.signature(create_chat_completion).parameters
     supports_template_kwargs = "chat_template_kwargs" in parameters
@@ -26,7 +27,7 @@ def build_chat_invocation(create_chat_completion, *, system_prompt, user_prompt,
     invocation = {
         "messages": [{"role": "system", "content": system_content},
                      {"role": "user", "content": user_prompt}],
-        "max_tokens": config.max_answer_tokens,
+        "max_tokens": config.max_answer_tokens if max_tokens is None else max_tokens,
         "temperature": config.temperature,
         "top_p": config.top_p,
         "top_k": config.top_k,
@@ -224,11 +225,11 @@ class LlamaCppBackend:
     def context_window(self):
         return self.config.context_size
 
-    def generate(self, *, system_prompt, user_prompt):
+    def generate(self, *, system_prompt, user_prompt, max_tokens=None):
         model = self.ensure_loaded()
         invocation, supported, compatibility = build_chat_invocation(
             model.create_chat_completion, system_prompt=system_prompt, user_prompt=user_prompt,
-            config=self.config, template_kwargs=self.chat_template_kwargs,
+            config=self.config, template_kwargs=self.chat_template_kwargs, max_tokens=max_tokens,
         )
         self._chat_template_kwargs_supported = supported
         self._no_think_compatibility = compatibility

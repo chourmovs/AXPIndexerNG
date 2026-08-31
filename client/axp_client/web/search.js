@@ -9,7 +9,10 @@ function renderResult(row, terms) { const article = element('article', 'result-c
   const title = element('h3'); appendHighlighted(title, row.title || row.filename || row.path, terms);
   const score = element('span', 'relevance', `Relevance ${percent(row.relevance_score)}%`); const details = [];
   if (row.vector_similarity != null) details.push(`Vector similarity: ${percent(row.vector_similarity)}%`);
-  if (row.lexical_coverage != null) details.push(`Lexical coverage: ${percent(row.lexical_coverage)}%`); score.title = details.join('\n'); header.append(title, score);
+  if (row.content_lexical_coverage != null) details.push(`Content lexical coverage: ${percent(row.content_lexical_coverage)}%`);
+  if (row.title_coverage != null) details.push(`Title coverage: ${percent(row.title_coverage)}%`);
+  if (row.convergence_score != null) details.push(`Convergence: ${percent(row.convergence_score)}%`);
+  score.title = details.join('\n'); header.append(title, score);
   const path = element('div', 'path', row.path); const source = element('small', '', `Source: ${row.source_label || row.source_path || '—'}`);
   const snippet = element('p'); appendHighlighted(snippet, row.snippet, terms); article.append(header, path, source, snippet, createDocumentActions(row.document_id)); return article; }
 export function initSearch() { const form = document.querySelector('#search-form'); const results = document.querySelector('#results');

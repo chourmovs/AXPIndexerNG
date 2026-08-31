@@ -6,7 +6,7 @@ class ChatBackend(Protocol):
 
     def retry_load(self) -> None: ...
 
-    def generate(self, *, system_prompt: str, user_prompt: str) -> str: ...
+    def generate(self, *, system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> str: ...
 
     def health(self) -> dict: ...
 
@@ -20,8 +20,8 @@ class FakeChatBackend:
         self.response = response
         self.calls = []
 
-    def generate(self, *, system_prompt, user_prompt):
-        self.calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt})
+    def generate(self, *, system_prompt, user_prompt, max_tokens=None):
+        self.calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt, "max_tokens": max_tokens})
         return self.response
 
     def ensure_loaded(self):

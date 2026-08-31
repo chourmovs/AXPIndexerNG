@@ -36,21 +36,17 @@ class SearchConfig:
 
 
 def diversify(rows, limit, maximum=3):
-    """Round-robin documents, then second/third hits, without losing diagnostic rows."""
-    groups, order = {}, []
+    """Apply a stable document cap without disturbing global relevance order."""
+    counts = {}
+    result = []
     for row in rows:
         doc = row["document_id"]
-        if doc not in groups:
-            groups[doc] = []
-            order.append(doc)
-        groups[doc].append(row)
-    result = []
-    for depth in range(maximum):
-        for doc in order:
-            if depth < len(groups[doc]):
-                result.append(groups[doc][depth])
-                if len(result) == limit:
-                    return result
+        if counts.get(doc, 0) >= maximum:
+            continue
+        result.append(row)
+        counts[doc] = counts.get(doc, 0) + 1
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -62,22 +58,44 @@ def _meaningful_terms(value):
     }
 
 
+def _coverage(query_terms, value):
+    return len(query_terms & _meaningful_terms(value)) / len(query_terms) if query_terms else 0.0
+
+
 def _relevance(item, query_terms, config):
-    candidate_text = " ".join(
-        str(item.get(field) or "") for field in ("title", "filename", "heading", "snippet", "identifiers")
-    )
-    candidate_terms = _meaningful_terms(candidate_text)
-    coverage = len(query_terms & candidate_terms) / len(query_terms) if query_terms else 0.0
+    content = " ".join(str(item.get(field) or "") for field in ("snippet", "identifiers"))
+    content_coverage = _coverage(query_terms, content)
+    title_coverage = _coverage(query_terms, item.get("title"))
+    filename_coverage = _coverage(query_terms, item.get("filename"))
+    heading_coverage = _coverage(query_terms, item.get("heading"))
+    aggregate = " ".join(str(item.get(field) or "") for field in
+                         ("title", "filename", "heading", "snippet", "identifiers"))
+    coverage = _coverage(query_terms, aggregate)
     distance = item.get("vector_distance")
     similarity = None if distance is None else max(-1.0, min(1.0, 1.0 - float(distance)))
+    meaningful_exact = bool(item["exact_identifier_match"] or item["exact_phrase_match"])
     accepted = bool(
-        item["exact_priority"]
+        (meaningful_exact and (similarity or 0) >= config.min_vector_similarity)
         or (similarity is not None and similarity >= config.min_vector_similarity)
-        or (item.get("lexical_rank") is not None and coverage >= config.min_lexical_coverage)
+        or (item.get("lexical_rank") is not None and content_coverage >= config.min_lexical_coverage)
     )
+    v = max(0.0, min(1.0, similarity or 0.0))
+    convergence = min(v, content_coverage)
+    score = (0.50 * v + 0.20 * content_coverage + 0.15 * convergence + 0.10 * title_coverage
+             + 0.03 * filename_coverage + 0.02 * heading_coverage)
+    if accepted:
+        score += 0.10 * item["exact_identifier_match"] + 0.08 * item["exact_phrase_match"]
+        score += 0.05 * item["exact_filename_match"]
     item["vector_similarity"] = similarity
     item["lexical_coverage"] = float(coverage)
-    item["relevance_score"] = float(max(coverage, similarity if similarity is not None else -1.0))
+    item["content_lexical_coverage"] = float(content_coverage)
+    item["title_coverage"] = float(title_coverage)
+    item["filename_coverage"] = float(filename_coverage)
+    item["heading_coverage"] = float(heading_coverage)
+    item["convergence_score"] = float(convergence)
+    item["evidence_score"] = float(max(0.0, min(1.0, score)))
+    item["relevance_score"] = item["evidence_score"]
+    item["meaningful_exact_priority"] = int(meaningful_exact and accepted)
     return accepted
 
 
@@ -139,6 +157,8 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
     unfiltered_count = len(ranked)
     query_terms = _meaningful_terms(query)
     ranked = [item for item in ranked if _relevance(item, query_terms, config)]
+    ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["evidence_score"],
+                               -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
     final = diversify(ranked, limit, config.max_chunks_per_document)
     for rank, item in enumerate(final, 1):
         item["final_rank"] = rank

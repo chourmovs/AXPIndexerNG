@@ -273,6 +273,9 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     return send({"error": "question_too_large"}, 413)
                 if not isinstance(body.get("debug", False), bool):
                     return send({"error": "invalid_debug"}, 400)
+                search_depth = body.get("search_depth", 0)
+                if type(search_depth) is not int or search_depth not in (0, 1):
+                    return send({"error": "invalid_request", "code": "invalid_search_depth"}, 400)
                 if rag_service is None:
                     return send({"error": "chat_model_unavailable"}, 503)
                 if url.path == "/api/ask/stream":
@@ -301,7 +304,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                                 raise
 
                     try:
-                        response = rag_service.ask(question, debug=body.get("debug", False), progress=progress)
+                        ask_options = {"debug": body.get("debug", False), "progress": progress}
+                        if search_depth:
+                            ask_options["search_depth"] = search_depth
+                        response = rag_service.ask(question, **ask_options)
                         progress({"event": "final", "response": response})
                     except ChatUnavailableError:
                         progress({"event": "error", "error": _chat_failure_code(rag_service)})
@@ -336,7 +342,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                                 LOGGER.info("Ask stream client disconnected before terminal event")
                     return
                 try:
-                    return send(rag_service.ask(question, debug=body.get("debug", False)))
+                    ask_options = {"debug": body.get("debug", False)}
+                    if search_depth:
+                        ask_options["search_depth"] = search_depth
+                    return send(rag_service.ask(question, **ask_options))
                 except ChatUnavailableError:
                     return send({"error": _chat_failure_code(rag_service)}, 503)
                 except ChatBusyError:
