@@ -10,7 +10,6 @@ from axp_daemon.embeddings import embedder_for_index
 from .rag.evaluation import evaluate, format_summary, load_cases, threshold_sweep
 from .rag.factory import create_chat_backend
 from .rag.benchmark import BenchmarkRunner
-from .rag.accelerator_catalog import INTEL_SYCL
 from .rag.runtime_manager import InferenceRuntimeManager
 from .rag.model_catalog import catalog_model
 from .rag.model import import_model, model_status, remove_model, verify_model

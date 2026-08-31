@@ -1,5 +1,3 @@
-from io import StringIO
-
 import pytest
 
 from axp_client.rag.intel_sycl_backend import IntelSyclBackend

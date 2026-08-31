@@ -374,7 +374,6 @@ class IntelSyclBackend:
                 "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
                 "inference_device_requested": "intel_gpu", "inference_device_effective": "intel_gpu",
-                "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
                 "gpu_buffer_bytes": self.gpu_buffer_bytes}
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)
             return answer
