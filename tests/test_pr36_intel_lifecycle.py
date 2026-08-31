@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 
 from axp_client.rag.intel_sycl_backend import (
@@ -27,7 +28,12 @@ def test_ephemeral_auth_is_unique_private_and_cleaned(tmp_path, monkeypatch):
     monkeypatch.setenv("AXPINDEXER_DATA_DIR", str(tmp_path / "data"))
     item = make_backend(tmp_path)
     item._create_auth(); first, artifact = item._api_key, item._auth_file
-    assert artifact.read_text() == first and artifact.stat().st_mode & 0o077 == 0
+    assert artifact.read_text() == first
+    # Windows does not implement POSIX permission bits: its stat mode normally
+    # reports the writable/readable DOS attributes even after os.open(..., 0o600).
+    # The file instead inherits the current user's private temporary-data ACL.
+    if os.name != "nt":
+        assert artifact.stat().st_mode & 0o077 == 0
     item.close(); assert not artifact.exists()
     item._create_auth(); assert item._api_key != first
     assert "api_key" not in str(item.health())
