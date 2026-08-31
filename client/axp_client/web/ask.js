@@ -1,5 +1,6 @@
 import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice,
-  downloadIntelRuntime, removeIntelRuntime, startIntelBenchmark, cancelIntelBenchmark} from './api.js';
+  downloadIntelRuntime, cancelIntelRuntimeDownload, retryIntelProbe, removeIntelRuntime,
+  startIntelBenchmark, cancelIntelBenchmark} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
@@ -23,7 +24,7 @@ const downloadErrors = {network_error: 'Download blocked or unavailable on this 
   invalid_gguf: 'The downloaded file is not a valid GGUF model and was not installed.',
   insufficient_disk: 'There is not enough free disk space for this model.',
   download_cancelled: 'Download cancelled. The verified partial data can be resumed later.'};
-const activeDownloadStates = new Set(['queued', 'connecting', 'downloading', 'verifying', 'installing']);
+const activeDownloadStates = new Set(['queued', 'connecting', 'downloading', 'verifying', 'installing', 'probing']);
 
 function renderAnswerText(container, answer, turnId) {
   const matcher = /\[S(\d+)\]/g; let offset = 0;
@@ -132,21 +133,35 @@ export function initAsk() {
     const intel=document.querySelector('input[name="device"][value="intel_gpu"]'); intel.disabled=!catalog.hardware.accelerator_available;
     document.querySelector('#intel-device-status').textContent=catalog.hardware.accelerator_available ? '— available' : `— unavailable (${catalog.hardware.accelerator_reason || 'not installed'})`;
     const accelerator=catalog.hardware.accelerator || {}; const installed=accelerator.installed;
-    document.querySelector('#download-intel-runtime').hidden=installed || !catalog.hardware.intel_gpu_detected;
+    const acceleratorJob=accelerator.download; const acceleratorDownloadActive=activeDownloadStates.has(acceleratorJob?.state);
+    downloading=downloading || acceleratorDownloadActive;
+    document.querySelector('#download-intel-runtime').hidden=installed || !catalog.hardware.intel_gpu_detected || acceleratorDownloadActive;
+    document.querySelector('#retry-intel-probe').hidden=!installed || catalog.hardware.sycl_probe_ok || acceleratorDownloadActive;
+    const cancelRuntime=document.querySelector('#cancel-intel-runtime');
+    cancelRuntime.hidden=!['queued','connecting','downloading'].includes(acceleratorJob?.state);
+    const runtimeProgress=document.querySelector('#intel-runtime-progress'); runtimeProgress.replaceChildren();
+    if(acceleratorDownloadActive){ const phase={queued:'Preparing Intel GPU runtime download…',connecting:'Connecting securely…',downloading:'Downloading Intel GPU runtime…',verifying:'Verifying Intel GPU runtime integrity…',installing:'Installing Intel GPU runtime…',probing:'Detecting Intel SYCL / Level Zero GPU…'}[acceleratorJob.state];
+      runtimeProgress.append(element('strong','download-state',phase));
+      if(acceleratorJob.state==='downloading'){ const bar=element('progress'); bar.max=100; bar.value=acceleratorJob.percentage;
+        runtimeProgress.append(bar,element('small','',`${acceleratorJob.percentage.toFixed(1)}% · ${formatBytes(acceleratorJob.bytes_downloaded)} / ${formatBytes(acceleratorJob.bytes_total)} · ${formatRate(acceleratorJob.bytes_per_second)}${formatEta(acceleratorJob.eta_seconds)}`)); }}
     document.querySelector('#benchmark-intel').hidden=!catalog.hardware.accelerator_available;
     const benchmarkActive=catalog.benchmark && !['idle','complete','failed','cancelled'].includes(catalog.benchmark.state);
     document.querySelector('#benchmark-intel').disabled=benchmarkActive;
     document.querySelector('#cancel-benchmark').hidden=!benchmarkActive;
     document.querySelector('#remove-intel-runtime').hidden=!installed;
     document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
-      installed ? `${catalog.hardware.intel_gpu_name} · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : 'runtime installed; native probe unavailable'}` :
+      installed ? `${catalog.hardware.intel_gpu_name} · Intel GPU runtime installed · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : probeErrorMessage(catalog.hardware.sycl_probe_error)}` :
       `${catalog.hardware.intel_gpu_name} detected · SYCL runtime not installed · approximately 120 MB · Official llama.cpp Windows SYCL runtime · Experimental`;
-    if (downloading && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
+    if ((downloading || benchmarkActive) && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
   }
   document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
   document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }
     catch(exception){ managerError.textContent=exception.code==='intel_gpu_unavailable' ? 'Intel GPU inference is unavailable; CPU remains active.' : exception.message; await renderManager(); } }));
   document.querySelector('#download-intel-runtime').addEventListener('click',async()=>{ try { await downloadIntelRuntime(); await renderManager(); }
+    catch(exception){ if(exception.code==='accelerator_download_busy'){ managerError.textContent='Intel GPU runtime download is already in progress.'; await renderManager(); } else managerError.textContent=exception.message; } });
+  document.querySelector('#cancel-intel-runtime').addEventListener('click',async()=>{ try { await cancelIntelRuntimeDownload(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#retry-intel-probe').addEventListener('click',async()=>{ try { await retryIntelProbe(); await renderManager(); await refreshHealth(); }
     catch(exception){ managerError.textContent=exception.message; } });
   document.querySelector('#remove-intel-runtime').addEventListener('click',async()=>{ try { await removeIntelRuntime(); await renderManager(); }
     catch(exception){ managerError.textContent=exception.message; } });
@@ -156,6 +171,7 @@ export function initAsk() {
     catch(exception){ managerError.textContent=exception.message; } });
   function confirmDownload(model){ return confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`); }
   function downloadLabel(state){ return {queued:'Queued…',connecting:'Connecting…',downloading:'Downloading…',verifying:'Verifying SHA-256…',installing:'Installing model…'}[state] || state; }
+  function probeErrorMessage(code){ return {intel_sycl_probe_timeout:'Intel GPU detection timed out.',intel_sycl_device_not_found:'The SYCL runtime started, but no Intel GPU device was reported.',intel_gpu_driver_or_level_zero_unavailable:'The Intel GPU runtime could not access Level Zero. Check the Intel graphics driver and retry detection.',intel_sycl_probe_command_failed:'The Intel GPU runtime started but device detection failed.',intel_sycl_runtime_invalid:'The installed Intel GPU runtime is incomplete or invalid.'}[code] || 'Intel GPU probe did not succeed'; }
   function formatBytes(value){ return value >= 1e9 ? `${(value/1e9).toFixed(2)} GB` : `${(value/1e6).toFixed(1)} MB`; }
   function formatRate(value){ return value ? `${(value/1048576).toFixed(1)} MB/s` : 'Calculating speed'; }
   function formatEta(value){ if(value==null)return ''; const seconds=Math.ceil(value); return ` · ~${Math.floor(seconds/60)}m ${String(seconds%60).padStart(2,'0')}s remaining`; }

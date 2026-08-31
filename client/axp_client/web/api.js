@@ -13,6 +13,8 @@ async function jsonRequest(url, options = {}) {
 export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
 export const downloadIntelRuntime = () => jsonRequest('/api/models/accelerator/download', {method:'POST'});
+export const cancelIntelRuntimeDownload = () => jsonRequest('/api/models/accelerator/cancel', {method:'POST'});
+export const retryIntelProbe = () => jsonRequest('/api/models/accelerator/probe', {method:'POST'});
 export const removeIntelRuntime = () => jsonRequest('/api/models/accelerator/remove', {method:'POST'});
 export const startIntelBenchmark = profile => jsonRequest('/api/models/benchmark', {method:'POST',
   headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile})});

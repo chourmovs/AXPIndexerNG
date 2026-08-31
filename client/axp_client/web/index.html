@@ -21,6 +21,9 @@
       <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU (Experimental) <span id="intel-device-status">— unavailable</span></label></fieldset>
       <section id="intel-runtime-actions"><p id="intel-runtime-description" class="muted"></p>
         <button id="download-intel-runtime" type="button" class="compact">Download Intel GPU runtime</button>
+        <div id="intel-runtime-progress"></div>
+        <button id="retry-intel-probe" type="button" class="compact" hidden>Retry Intel GPU detection</button>
+        <button id="cancel-intel-runtime" type="button" class="secondary compact" hidden>Cancel</button>
         <button id="benchmark-intel" type="button" class="compact" hidden>Benchmark CPU vs Intel GPU</button>
         <button id="cancel-benchmark" type="button" class="secondary compact" hidden>Cancel benchmark</button>
         <button id="remove-intel-runtime" type="button" class="secondary compact" hidden>Remove Intel GPU runtime</button></section>

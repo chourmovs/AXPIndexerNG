@@ -20,7 +20,7 @@ from .hardware import detect_hardware
 from .benchmark import BenchmarkRunner
 from .runtime_manager import ALLOWED_DEVICES, InferenceDeviceError
 
-ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing"}
+ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing", "probing"}
 APPROVED_HOSTS = ("huggingface.co", "hf.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co",
                   "cdn-lfs-eu-1.hf.co", "cas-bridge.xethub.hf.co")
 
@@ -58,6 +58,24 @@ class DownloadJob:
     def public(self): return asdict(self)
 
 
+@dataclass
+class AcceleratorDownloadJob:
+    state: str = "queued"
+    bytes_downloaded: int = 0
+    bytes_total: int = INTEL_SYCL.exact_size
+    percentage: float = 0
+    bytes_per_second: float = 0
+    eta_seconds: float | None = None
+    started_at: float = 0
+    updated_at: float = 0
+    error: str | None = None
+    probe_error: str | None = None
+    probe_duration_ms: int = 0
+    resumed_from_bytes: int = 0
+
+    def public(self): return asdict(self)
+
+
 class ModelManager:
     def __init__(self, cache_root, runtime=None, opener=None):
         self.root = Path(cache_root) / "chat"
@@ -69,6 +87,7 @@ class ModelManager:
         self._benchmark = None
         self.opener = opener or urllib.request.build_opener(TrustedRedirectHandler())
         self._lock, self._job, self._cancel = threading.Lock(), None, threading.Event()
+        self._accelerator_cancel = threading.Event()
 
     def model_path(self, model_id): return self.models_dir / model_id / "model.gguf"
     def manifest_path(self, model_id): return self.models_dir / model_id / "manifest.json"
@@ -97,9 +116,10 @@ class ModelManager:
                     "inference_device_effective", "fallback_reason")},
                 "hardware": {**{key: health.get(key) for key in ("intel_gpu_detected", "intel_gpu_name",
                     "intel_gpu_vendor_id", "intel_gpu_device_id", "accelerator_available", "accelerator_reason",
-                    "sycl_runtime_installed", "sycl_probe_ok", "sycl_device_name", "sycl_probe_error")},
+                    "sycl_runtime_installed", "sycl_probe_ok", "sycl_device_name", "sycl_device_count",
+                    "sycl_probe_error", "sycl_probe_returncode", "sycl_probe_duration_ms")},
                     "accelerator": {**INTEL_SYCL.public(), "installed": bool(self.accelerators.manifest()),
-                                    "download": dict(self._accelerator_job) if self._accelerator_job else None}},
+                                    "download": self._accelerator_snapshot()}},
                 "benchmark": self._benchmark.job.public() if self._benchmark else {"state": "idle"}}
 
     def start_benchmark(self, profile_name="quick"):
@@ -140,27 +160,68 @@ class ModelManager:
 
     def start_accelerator_download(self):
         with self._lock:
-            if self._accelerator_job and self._accelerator_job["state"] in ACTIVE_DOWNLOAD_STATES:
+            if self._accelerator_job and self._accelerator_job.state in ACTIVE_DOWNLOAD_STATES:
                 raise ModelManagerError("accelerator_download_busy")
-            self._accelerator_job = {"state": "queued", "bytes_downloaded": 0,
-                                     "bytes_total": INTEL_SYCL.exact_size, "percentage": 0,
-                                     "error": None}
+            self._accelerator_cancel.clear(); now = time.time()
+            self._accelerator_job = AcceleratorDownloadJob(started_at=now, updated_at=now)
         def work():
             try:
-                self._accelerator_job["state"] = "downloading"
-                def progress(done, total):
-                    self._accelerator_job.update(bytes_downloaded=done, percentage=done * 100 / total)
-                self.accelerators.download_and_install(progress)
-                self._accelerator_job.update(state="ready", bytes_downloaded=INTEL_SYCL.exact_size, percentage=100)
+                transfer_started = None
+                def progress(state, done, total, resumed):
+                    nonlocal transfer_started
+                    now_mono = time.monotonic()
+                    if state == "downloading" and transfer_started is None: transfer_started = now_mono
+                    with self._lock:
+                        job = self._accelerator_job; job.state = state; job.bytes_downloaded = done
+                        job.resumed_from_bytes = resumed; job.percentage = min(100, done * 100 / total)
+                        if transfer_started is not None:
+                            elapsed = max(now_mono - transfer_started, .001)
+                            job.bytes_per_second = max(0, (done - resumed) / elapsed)
+                            job.eta_seconds = (total - done) / job.bytes_per_second if job.bytes_per_second else None
+                        job.updated_at = time.time()
+                self.accelerators.download_and_install(progress, self._accelerator_cancel)
+                with self._lock: self._accelerator_job.state = "probing"; self._accelerator_job.updated_at = time.time()
                 controller = getattr(self.runtime, "backend", self.runtime)
                 if controller:
-                    controller.hardware = detect_hardware(self.accelerators.server_path())
+                    controller.hardware = detect_hardware(self.accelerators.server_path(), self.accelerators.runtime_root)
+                    probe_error = controller.hardware.sycl_probe_error
+                    duration = controller.hardware.sycl_probe_duration_ms
+                else:
+                    probe_error, duration = None, 0
+                with self._lock:
+                    self._accelerator_job.state = "ready"; self._accelerator_job.probe_error = probe_error
+                    self._accelerator_job.probe_duration_ms = duration; self._accelerator_job.updated_at = time.time()
             except AcceleratorError as exc:
-                self._accelerator_job.update(state="failed", error=exc.code)
+                with self._lock:
+                    self._accelerator_job.state = "cancelled" if exc.code == "accelerator_download_cancelled" else "failed"
+                    self._accelerator_job.error = None if exc.code == "accelerator_download_cancelled" else exc.code
+                    self._accelerator_job.updated_at = time.time()
             except Exception:
-                self._accelerator_job.update(state="failed", error="accelerator_download_failed")
+                with self._lock:
+                    self._accelerator_job.state = "failed"; self._accelerator_job.error = "accelerator_download_failed"
+                    self._accelerator_job.updated_at = time.time()
         threading.Thread(target=work, daemon=True, name="axp-accelerator-download").start()
-        return dict(self._accelerator_job)
+        return self._accelerator_snapshot()
+
+    def _accelerator_snapshot(self):
+        with self._lock:
+            return self._accelerator_job.public() if self._accelerator_job else None
+
+    def cancel_accelerator_download(self):
+        with self._lock:
+            if not self._accelerator_job or self._accelerator_job.state not in {"queued", "connecting", "downloading"}:
+                raise ModelManagerError("accelerator_download_not_active")
+            self._accelerator_cancel.set()
+            return self._accelerator_job.public()
+
+    def retry_accelerator_probe(self):
+        server = self.accelerators.server_path()
+        if not server:
+            raise ModelManagerError("intel_sycl_runtime_missing")
+        controller = getattr(self.runtime, "backend", self.runtime)
+        if controller:
+            controller.hardware = detect_hardware(server, self.accelerators.runtime_root)
+        return self.catalog()
 
     def remove_accelerator(self):
         controller = getattr(self.runtime, "backend", self.runtime)
