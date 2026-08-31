@@ -13,6 +13,9 @@ import time
 import urllib.error
 import urllib.request
 import tempfile
+import logging
+import uuid
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -31,6 +34,7 @@ INTEL_LOAD_ACTIVITY_STALE_S = 120
 OFFLOAD_RE = re.compile(r"offload(?:ed|ing)?\s+(\d+)(?:\s*/\s*|\s+of\s+)(\d+)\s+layers?", re.I)
 BUFFER_RE = re.compile(r"(SYCL\d*|GPU|CPU|model).*?buffer size\s*=\s*([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)", re.I)
 MAX_GPU_MARKERS = 32
+LOGGER = logging.getLogger("axp_client")
 
 
 class IntelSyclError(RuntimeError):
@@ -57,7 +61,8 @@ def parse_sse(lines):
 class IntelSyclBackend:
     def __init__(self, model_path, config, runtime_dir, server_path=None, chat_template_kwargs=None,
                  popen=subprocess.Popen, urlopen=urllib.request.urlopen, load_timeout=INTEL_LOAD_HARD_TIMEOUT_S,
-                 monotonic=time.monotonic, sleep=time.sleep):
+                 monotonic=time.monotonic, sleep=time.sleep, sycl_device_id=None, sycl_device_name=None,
+                 diagnostic=False):
         self.model_path, self.config = Path(model_path), config
         self.runtime_dir = Path(runtime_dir).resolve()
         self.server_path = Path(server_path or self.runtime_dir / "llama-server.exe").resolve()
@@ -68,7 +73,10 @@ class IntelSyclBackend:
         self._load_lock = threading.Lock(); self._cancel_event = threading.Event(); self._progress_lock = threading.Lock()
         self._progress = self._new_progress(); self._failure = {}; self.last_telemetry = {}
         self.gpu_offload_requested = True; self.gpu_offload_confirmed = False
-        self.offloaded_layers = self.total_layers = None; self._diagnostic = []; self.sycl_device_name = None
+        self.offloaded_layers = self.total_layers = None; self._diagnostic = []
+        self.sycl_device_id, self.sycl_device_name = sycl_device_id, sycl_device_name
+        self.diagnostic = diagnostic; self.verbosity = 5 if diagnostic else 4
+        self.session_id = None; self._session_result = "not_started"
         self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
         self.native_gpu_markers = []
         self._load_cancel = threading.Event(); self._load_progress_lock = threading.Lock()
@@ -80,7 +88,8 @@ class IntelSyclBackend:
         return {"active": False, "phase": "idle", "sequence": 0, "started_monotonic": None,
                 "elapsed_s": None, "time_to_first_token_ms": None, "generated_fragments": 0,
                 "generated_characters": 0, "last_fragment_age_s": None, "finish_reason": None,
-                "cancel_requested": False}
+                "cancel_requested": False, "prompt_total": None, "prompt_cached": None,
+                "prompt_processed": None, "prompt_progress_time_ms": None}
 
     @staticmethod
     def _new_load_progress():
@@ -104,7 +113,7 @@ class IntelSyclBackend:
         value.update(gpu_offload_requested=True, gpu_offload_confirmed=self.gpu_offload_confirmed,
                      offloaded_layers=self.offloaded_layers, total_layers=self.total_layers,
                      gpu_buffer_bytes=self.gpu_buffer_bytes, cpu_buffer_bytes=self.cpu_buffer_bytes,
-                     sycl_device_name=self.sycl_device_name)
+                     sycl_device_id=self.sycl_device_id, sycl_device_name=self.sycl_device_name)
         return value
 
     def request_load_cancel(self):
@@ -144,6 +153,8 @@ class IntelSyclBackend:
                 "model_state": self._model_state, "model_load_ms": self._load_ms, "context_size": self.config.context_size,
                 "sidecar_pid": getattr(self._process, "pid", None), "sidecar_host": LOOPBACK, "sidecar_port": self._port,
                 "sycl_device_name": self.sycl_device_name, "sycl_device_selector": DEVICE_SELECTOR,
+                "sycl_device_id": self.sycl_device_id, "sidecar_session_id": self.session_id,
+                "native_verbosity": self.verbosity,
                 "gpu_offload_requested": True, "gpu_offload_confirmed": self.gpu_offload_confirmed,
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
                 "gpu_buffer_bytes": self.gpu_buffer_bytes, "cpu_buffer_bytes": self.cpu_buffer_bytes,
@@ -200,6 +211,13 @@ class IntelSyclBackend:
         log = runtime_paths()["logs"] / "intel-sycl.log"
         handler = RotatingFileHandler(log, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
         try:
+            stamp = datetime.now(timezone.utc).isoformat()
+            header = ("=== AXP INTEL SESSION START ===\n" f"timestamp={stamp}\n"
+                f"session_id={self.session_id}\nruntime={INTEL_SYCL.tag}\nmodel={self.model_path.stem}\n"
+                f"pid={getattr(self._process, 'pid', None)}\nprobe_device_id={self.sycl_device_id}\n"
+                f"probe_device_name={self.sycl_device_name}\nverbosity={self.verbosity}\n"
+                "gpu_layers=all\nsplit_mode=none\n=== NATIVE LLAMA OUTPUT ===\n")
+            handler.stream.write(header); handler.flush()
             for line in iter(stream.readline, ""):
                 handler.stream.write(line); handler.flush(); self._diagnostic.append(line[-1000:])
                 self._diagnostic = self._diagnostic[-200:]
@@ -218,6 +236,12 @@ class IntelSyclBackend:
                     with self._load_progress_lock: self._load_progress["phase"] = phase
                 self._record_native_evidence(line)
         finally:
+            footer = ("=== AXP INTEL SESSION END ===\n"
+                f"timestamp={datetime.now(timezone.utc).isoformat()}\nresult={self._session_result}\n"
+                f"offloaded_layers={self.offloaded_layers}\ngpu_buffer_bytes={self.gpu_buffer_bytes}\n"
+                f"cpu_buffer_bytes={self.cpu_buffer_bytes}\n"
+                f"native_lines_seen={self._load_progress.get('native_lines_seen', 0)}\n")
+            handler.stream.write(footer); handler.flush()
             handler.close()
 
     def _create_auth(self):
@@ -227,6 +251,14 @@ class IntelSyclBackend:
         fd = os.open(self._auth_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(self._api_key); handle.flush(); os.fsync(handle.fileno())
+
+    def _sidecar_command(self):
+        """Build the pinned runtime command without ever embedding key material."""
+        return [str(self.server_path), "--model", str(self.model_path), "--host", LOOPBACK,
+                "--port", str(self._port), "--ctx-size", str(self.config.context_size),
+                "--parallel", "1", "--device", self.sycl_device_id, "--split-mode", "none",
+                "--n-gpu-layers", "all", "--api-key-file", str(self._auth_file),
+                "-lv", str(self.verbosity)]
 
     def _request(self, path, payload=None, timeout=None):
         headers = {"Authorization": f"Bearer {self._api_key}"}; data = None
@@ -260,20 +292,26 @@ class IntelSyclBackend:
             if not valid: raise IntelSyclError(reason)
             if self.runtime_dir not in self.server_path.parents or not self.server_path.is_file():
                 raise IntelSyclError("intel_sycl_runtime_invalid")
+            if not self.sycl_device_id:
+                raise IntelSyclError("intel_sycl_device_id_unresolved")
             self.close(); started = self._monotonic(); self._model_state = "loading"; self._port = self._free_port()
             self.gpu_offload_confirmed = False
             self.offloaded_layers = self.total_layers = None
             self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
             self.native_gpu_markers = []
+            self.session_id = uuid.uuid4().hex; self._session_result = "starting"
             self._load_cancel.clear(); self._create_auth(); self._load_progress = self._new_load_progress()
             with self._load_progress_lock:
                 self._load_progress.update(active=True, phase="spawning", started_monotonic=started,
                     last_native_activity_monotonic=started, model_path_configured=True)
-            command = [str(self.server_path), "--model", str(self.model_path), "--host", LOOPBACK,
-                       "--port", str(self._port), "--ctx-size", str(self.config.context_size),
-                       "--parallel", "1", "--n-gpu-layers", "999", "--api-key-file", str(self._auth_file)]
+            command = self._sidecar_command()
             try:
-                self._process = self._popen(command, cwd=str(self.runtime_dir), env=child_environment(self.runtime_dir),
+                env = child_environment(self.runtime_dir)
+                if self.diagnostic: env["GGML_SYCL_DEBUG"] = "1"
+                LOGGER.info("Intel sidecar starting session_id=%s runtime=%s model_id=%s device_id=%s device_name=%s verbosity=%s",
+                            self.session_id, INTEL_SYCL.tag, self.model_path.stem, self.sycl_device_id,
+                            self.sycl_device_name, self.verbosity)
+                self._process = self._popen(command, cwd=str(self.runtime_dir), env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, shell=False,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 with self._load_progress_lock:
@@ -302,9 +340,18 @@ class IntelSyclBackend:
                             (health_age is None or health_age >= INTEL_LOAD_ACTIVITY_STALE_S))
                     if elapsed >= self.load_timeout: raise IntelSyclError("intel_gpu_model_load_timeout")
                     self._sleep(.2)
+                LOGGER.info("Intel model server ready session_id=%s pid=%s native_lines_seen=%s",
+                            self.session_id, self._process.pid, self._load_progress["native_lines_seen"])
                 if not self.gpu_offload_confirmed:
+                    self._session_result = "offload_not_confirmed"
+                    LOGGER.info("Intel offload NOT confirmed session_id=%s device_id=%s native_lines_seen=%s failure_type=intel_gpu_offload_not_confirmed",
+                                self.session_id, self.sycl_device_id, self._load_progress["native_lines_seen"])
                     raise IntelSyclError("intel_gpu_offload_not_confirmed")
                 self._model_state = "loaded"; self._load_ms = (self._monotonic() - started) * 1000; self._failure = {}
+                self._session_result = "offload_confirmed"
+                LOGGER.info("Intel offload confirmed session_id=%s pid=%s load_ms=%.1f offloaded_layers=%s total_layers=%s gpu_buffer_bytes=%s cpu_buffer_bytes=%s",
+                            self.session_id, self._process.pid, self._load_ms, self.offloaded_layers,
+                            self.total_layers, self.gpu_buffer_bytes, self.cpu_buffer_bytes)
                 with self._load_progress_lock: self._load_progress.update(active=False, phase="ready")
             except Exception as exc:
                 self._failure = {"failure_type": str(exc) if isinstance(exc, IntelSyclError) else "intel_gpu_backend_failed",
@@ -340,12 +387,13 @@ class IntelSyclBackend:
                   else system_prompt)
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
                    "stream": True, "max_tokens": self.config.max_answer_tokens, "temperature": self.config.temperature,
+                   "return_progress": True,
                    "top_p": self.config.top_p, "top_k": self.config.top_k,
                    "repeat_penalty": self.config.repeat_penalty}
         with self._progress_lock:
             self._progress = self._new_progress(); self._progress.update(active=True, phase="waiting_first_token",
                                                                           started_monotonic=started)
-        fragments, first, finish = [], None, None
+        fragments, first, finish, native_timings = [], None, None, None
         try:
             with self._post("/v1/chat/completions", payload) as response:
                 for data in parse_sse(response):
@@ -353,6 +401,16 @@ class IntelSyclBackend:
                     if data == "[DONE]": break
                     try: chunk = json.loads(data)
                     except (ValueError, TypeError) as exc: raise IntelSyclError("intel_gpu_generation_failed") from exc
+                    progress = chunk.get("prompt_progress")
+                    if progress is None and chunk.get("type") == "prompt_progress": progress = chunk.get("data", chunk)
+                    if isinstance(progress, dict):
+                        with self._progress_lock:
+                            self._progress.update(phase="prompt_evaluating",
+                                prompt_total=progress.get("total", progress.get("prompt_total")),
+                                prompt_cached=progress.get("cached", progress.get("prompt_cached")),
+                                prompt_processed=progress.get("processed", progress.get("prompt_processed")),
+                                prompt_progress_time_ms=progress.get("time_ms", progress.get("prompt_progress_time_ms")))
+                    if isinstance(chunk.get("timings"), dict): native_timings = chunk["timings"]
                     choice = (chunk.get("choices") or [{}])[0]; delta = choice.get("delta") or {}
                     finish = choice.get("finish_reason") or finish
                     content = delta.get("content")  # reasoning_content is intentionally ignored
@@ -366,9 +424,19 @@ class IntelSyclBackend:
             ended = time.perf_counter(); answer = THINK_RE.sub("", "".join(fragments)).strip()
             completion = self.count_tokens(answer) if answer else 0; generation_ms = (ended-started)*1000
             decode_ms = (ended-first)*1000 if first else None
+            timing = native_timings or {}
+            prompt_ms = timing.get("prompt_ms", timing.get("prompt_eval_ms"))
+            prompt_n = timing.get("prompt_n", timing.get("prompt_tokens"))
+            predicted_ms = timing.get("predicted_ms", timing.get("decode_ms"))
+            predicted_n = timing.get("predicted_n", timing.get("completion_tokens"))
             self.last_telemetry = {"time_to_first_token_ms": (first-started)*1000 if first else None,
-                "generation_ms": generation_ms, "decode_ms": decode_ms, "completion_tokens": completion,
-                "decode_tokens_per_second": completion/(decode_ms/1000) if decode_ms else None,
+                "generation_ms": generation_ms, "prompt_tokens": prompt_n, "prompt_eval_ms": prompt_ms,
+                "prompt_eval_tokens_per_second": timing.get("prompt_per_second") or
+                    (prompt_n/(prompt_ms/1000) if prompt_n is not None and prompt_ms else None),
+                "prompt_eval_timing_derived": prompt_ms is None,
+                "decode_ms": predicted_ms or decode_ms, "completion_tokens": predicted_n or completion,
+                "decode_tokens_per_second": timing.get("predicted_per_second") or
+                    ((predicted_n or completion)/((predicted_ms or decode_ms)/1000) if (predicted_ms or decode_ms) else None),
                 "generated_characters": sum(map(len, fragments)), "generated_fragments": len(fragments),
                 "finish_reason": finish, "backend": "intel_sycl", "runtime": INTEL_SYCL.tag,
                 "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
@@ -398,3 +466,7 @@ class IntelSyclBackend:
         if self._auth_dir: shutil.rmtree(self._auth_dir, ignore_errors=True)
         self._api_key = None; self._auth_file = self._auth_dir = None; self._port = None
         if not failed: self._model_state = "unloaded"
+        if process is not None:
+            LOGGER.info("Intel sidecar stopped session_id=%s pid=%s result=%s native_lines_seen=%s",
+                        self.session_id, getattr(process, "pid", None), self._session_result,
+                        self._load_progress.get("native_lines_seen", 0))

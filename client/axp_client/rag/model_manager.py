@@ -1,5 +1,6 @@
 """Secure, release-catalog model installation service."""
 import hashlib
+import logging
 import os
 import shutil
 import ssl
@@ -19,6 +20,8 @@ from .accelerator_manager import AcceleratorError, AcceleratorManager
 from .hardware import detect_hardware
 from .benchmark import BenchmarkRunner
 from .runtime_manager import ALLOWED_DEVICES, InferenceDeviceError
+
+LOGGER = logging.getLogger("axp_client")
 
 ACTIVE_DOWNLOAD_STATES = {"queued", "connecting", "downloading", "verifying", "installing", "probing"}
 APPROVED_HOSTS = ("huggingface.co", "hf.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co",
@@ -150,7 +153,8 @@ class ModelManager:
         def restore():
             while runner.job.state not in ("complete", "complete_with_errors", "failed", "cancelled"): time.sleep(.2)
             try: controller.activate(settings, profile)
-            except Exception: pass
+            except Exception:
+                LOGGER.exception("Benchmark runtime restore failed model_id=%s", getattr(profile, "id", "unknown"))
         threading.Thread(target=restore, daemon=True, name="axp-benchmark-restore").start()
         return result
 

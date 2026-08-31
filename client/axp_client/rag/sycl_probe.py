@@ -29,15 +29,22 @@ def child_environment(server_dir, runtime_root=None, environ=None):
 
 
 def parse_device_list(output):
-    """Return normalized Intel GPU descriptions, excluding CPU-only devices."""
+    """Return bounded native Intel GPU identities, excluding CPU-only devices."""
     devices = []
     for raw in str(output or "").splitlines():
         line = raw.strip()
         if re.search(r"\bcpu(?:-only)?\b", line, re.I) or not INTEL_GPU_RE.search(line):
             continue
-        normalized = re.sub(r"^(?:\[?SYCL\s*\d+\]?|\d+)\s*:\s*", "", line, flags=re.I).strip()
-        if normalized and normalized not in devices:
-            devices.append(normalized[:300])
+        match = re.match(r"^(?:\[?(SYCL\s*\d+)\]?|(\d+))\s*:\s*(.+)$", line, re.I)
+        device_id = ((match.group(1) or match.group(2)) if match else None)
+        if device_id and device_id.isdigit():
+            device_id = device_id  # Preserve the runtime's literal numeric identity.
+        elif device_id:
+            device_id = re.sub(r"\s+", "", device_id).upper()
+        name = (match.group(3) if match else line).strip()[:300]
+        device = {"id": device_id, "name": name, "raw": line[:500]}
+        if name and device not in devices:
+            devices.append(device)
     return devices
 
 
@@ -53,7 +60,7 @@ def probe_sycl(server_path, runtime_root=None, timeout=15, runner=subprocess.run
     server_path = Path(server_path) if server_path else None
     base = {"installed": bool(server_path and server_path.exists()), "ok": False,
             "command_supported": False, "returncode": None, "device_count": 0,
-            "device_name": None, "error_code": None, "stdout_excerpt": "",
+            "device_id": None, "device_name": None, "devices": [], "error_code": None, "stdout_excerpt": "",
             "stderr_excerpt": "", "duration_ms": 0}
     if not server_path or not server_path.exists():
         return {**base, "error_code": "intel_sycl_runtime_missing"}
@@ -78,6 +85,7 @@ def probe_sycl(server_path, runtime_root=None, timeout=15, runner=subprocess.run
         "intel_sycl_device_not_found" if result.returncode == 0 else "intel_sycl_probe_command_failed")
     return {**base, "installed": True, "ok": error is None, "command_supported": True,
             "returncode": result.returncode, "device_count": len(devices),
-            "device_name": devices[0] if devices else None, "error_code": error,
+            "device_id": devices[0]["id"] if devices else None,
+            "device_name": devices[0]["name"] if devices else None, "devices": devices, "error_code": error,
             "stdout_excerpt": _excerpt(stdout, server_path), "stderr_excerpt": _excerpt(stderr, server_path),
             "duration_ms": round((time.monotonic() - started) * 1000)}

@@ -18,11 +18,14 @@ class HardwareCapabilities:
     intel_gpu_device_id: str | None = None
     sycl_runtime_installed: bool = False
     sycl_probe_ok: bool = False
+    sycl_device_id: str | None = None
     sycl_device_name: str | None = None
     sycl_device_count: int = 0
     sycl_probe_error: str | None = None
     sycl_probe_returncode: int | None = None
     sycl_probe_duration_ms: int = 0
+    sycl_probe_stdout_excerpt: str = ""
+    sycl_probe_stderr_excerpt: str = ""
 
     def public(self):
         return asdict(self)
@@ -72,6 +75,8 @@ def detect_hardware(accelerator_executable=None, accelerator_runtime_root=None):
                                 vendor.group(1).upper() if vendor else None,
                                 device.group(1).upper() if device else None,
                                 bool(probe and probe["installed"]), available,
-                                probe["device_name"] if probe else None, probe["device_count"] if probe else 0,
+                                probe["device_id"] if probe else None, probe["device_name"] if probe else None,
+                                probe["device_count"] if probe else 0,
                                 probe["error_code"] if probe and not available else None,
-                                probe["returncode"] if probe else None, probe["duration_ms"] if probe else 0)
+                                probe["returncode"] if probe else None, probe["duration_ms"] if probe else 0,
+                                probe["stdout_excerpt"] if probe else "", probe["stderr_excerpt"] if probe else "")

@@ -37,7 +37,8 @@ def test_binary_discovery_requires_one_nonempty_server(tmp_path):
 
 def test_device_parser_accepts_only_recognizable_intel_gpu():
     output = "0: Intel(R) Iris(R) Xe Graphics (GPU)\n1: Intel CPU\n2: NVIDIA GPU"
-    assert parse_device_list(output) == ["Intel(R) Iris(R) Xe Graphics (GPU)"]
+    assert parse_device_list(output) == [{"id": "0", "name": "Intel(R) Iris(R) Xe Graphics (GPU)",
+                                          "raw": "0: Intel(R) Iris(R) Xe Graphics (GPU)"}]
 
 
 def test_probe_contract(tmp_path):

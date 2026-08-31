@@ -388,7 +388,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             return self.send_json({"error": "not found"}, 404)
 
         def log_message(self, *args):
-            LOGGER.info(*args)
+            status = str(args[1]) if len(args) > 1 else ""
+            poll = self.command == "GET" and urlparse(self.path).path in {
+                "/health", "/api/ask/health", "/api/models", "/api/models/benchmark"}
+            (LOGGER.debug if poll and status.startswith("2") else LOGGER.info)(*args)
 
     return Handler
 
