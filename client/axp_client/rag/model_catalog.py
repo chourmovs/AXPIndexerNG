@@ -52,7 +52,7 @@ MODELS = (
                  "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
                  1_282_439_264, "1.28 GB", max_answer_tokens=192, max_evidence_tokens=2048,
                  max_context_documents=3, max_context_blocks=6, max_seeds_per_document=2,
-                 recommended=True,
+                 experimental=True, recommended=True,
                  chat_template_kwargs={"enable_thinking": False}),
     ModelProfile("smollm3-3b-q4km", "SmolLM3 3B", "balanced", "ggml-org/SmolLM3-3B-GGUF",
                  "4965cb60b150737b68a0408c36aeefb65078f894", "SmolLM3-Q4_K_M.gguf",

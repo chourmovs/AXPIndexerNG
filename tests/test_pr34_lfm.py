@@ -22,7 +22,7 @@ def test_lfm_catalog_contract_and_existing_model_identity():
         "LFM2.5-1.2B-Instruct-QAD-Q4_0.gguf",
         "bb741ebb106d543e9de114b843a3d3d73d51c74b5801e69da2abde821a0cb3e1", 695_755_488)
     assert (qwen.recommended, smol.recommended, lfm.recommended) == (True, False, False)
-    assert (qwen.experimental, smol.experimental, lfm.experimental) == (False, False, True)
+    assert (qwen.experimental, smol.experimental, lfm.experimental) == (True, False, True)
     assert lfm.license == "LFM Open License v1.0"
 
 

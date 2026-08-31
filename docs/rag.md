@@ -29,6 +29,42 @@ the server database, and refreshing or selecting Clear removes them. This visibl
 question is retrieved and grounded independently, without conversational memory or prior turns sent to the backend.
 Questions should therefore be complete and self-contained. Generation remains local and uses indexed sources only.
 
+## Latency-bounded local RAG
+
+Interactive local answers use one centralized policy: 30 seconds is the preferred prefill target and 60 seconds is
+the hard upper bound. AXP maintains conservative prompt-evaluation and decode-rate estimates per model and actual
+effective device. Before generation it estimates prefill cost from the complete candidate prompt. If necessary it
+rebuilds context from ranked, citation-bearing evidence blocks at progressively smaller budgets (1200, 800, 500, then
+300 tokens). The highest-ranked complete blocks and their source IDs remain first; diagnostic telemetry contains only
+counts, timing estimates, and IDs—not evidence text.
+
+AXP does not keep shrinking below useful grounding merely to force an answer. If even the minimum useful evidence is
+predicted to exceed the hard interactive limit, `local_generation_skipped_latency_budget` is returned as a successful,
+terminal policy outcome. Retrieval results and evidence source/open-file actions remain visible. This is neither a
+model crash nor a timeout: local generation was deliberately avoided rather than subjecting the user to a multi-minute
+prefill.
+
+## Intel GPU qualification and truthful device state
+
+Intel GPU detection, SYCL runtime installation, successful SYCL device probing, server startup, model loading, GPU
+offload confirmation, and completed GPU inference are separate states. A loaded/listening llama server is not proof of
+GPU work. Confirmation requires positive native llama.cpp evidence: non-zero offloaded layers, a non-zero SYCL/GPU
+model buffer, or an explicit layer-offload statement. Confirmation is sticky for the backend/model session; unrelated
+later native lines cannot clear it. Health exposes only a bounded set of native markers.
+
+Explicit Intel mode never silently falls back. Until proof exists its effective device is `none`, and startup fails
+with `intel_gpu_offload_not_confirmed`; Auto may truthfully report an effective `cpu`. Run the authoritative local smoke
+with `python -m axp_client.cli chat-model intel-test`. It reports detection, runtime, probe, selected device, model
+startup, requested offload, layers, GPU buffer, and then performs a minimal `AXP_OK` generation. Only model loaded +
+offload proven + inference completed produces `PASS — GPU inference proven`.
+
+Because Intel hardware was not available in the development environment, automated parser/backend tests do **not**
+prove actual Intel execution. On Windows, install the release-pinned runtime, activate SmolLM3 3B, select Intel GPU,
+run the qualification command, and record device, layer/buffer proof, load time, prompt tokens, prompt-evaluation rate,
+TTFT, completion tokens, decode rate, and generation duration. To compare another trusted SYCL build manually, replace
+the runtime only with a release-owned candidate whose URL and SHA-256 have been reviewed, run the same qualification,
+then restore and re-verify the pinned runtime; AXP intentionally provides no arbitrary download URL.
+
 ## Validated baseline model
 
 The reference is [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF), file
