@@ -50,6 +50,8 @@ class RagService:
         return {**self.backend.health(), "generation_busy": self.operations.busy or self._generation_lock.locked()}
 
     def cancel_generation(self):
+        cancel_load = getattr(self.backend, "request_load_cancel", None)
+        if cancel_load and cancel_load(): return True
         cancel = getattr(self.backend, "request_cancel", None)
         return bool(cancel and cancel())
 
@@ -143,11 +145,22 @@ class RagService:
                     emit("model_load_started")
                     load_start = time.perf_counter()
                     try:
-                        self._run_blocking(self.backend.ensure_loaded,
-                                           lambda elapsed: emit("model_load_heartbeat", elapsed_s=elapsed))
+                        def load_poll(elapsed):
+                            snapshot = getattr(self.backend, "model_load_progress", lambda: {})()
+                            if snapshot:
+                                keys = ("elapsed_s", "phase", "native_lines_seen", "last_native_activity_age_s",
+                                        "health_status", "gpu_offload_confirmed", "offloaded_layers", "total_layers",
+                                        "slow_warning", "suspected_stall")
+                                emit("model_load_progress", backend="intel_sycl",
+                                     **{key: snapshot.get(key) for key in keys})
+                            else: emit("model_load_heartbeat", elapsed_s=elapsed)
+                        self._run_blocking(self.backend.ensure_loaded, load_poll, interval=.25)
                     except Exception as exc:
                         elapsed = time.perf_counter() - load_start
-                        emit("model_load_failed", elapsed_s=round(elapsed, 1), error="model_load_failed")
+                        failure = self.health().get("failure_type", "model_load_failed")
+                        if failure == "intel_gpu_model_load_cancelled":
+                            emit("cancelled"); raise GenerationCancelled from exc
+                        emit("model_load_failed", elapsed_s=round(elapsed, 1), error=failure)
                         LOGGER.exception("Model load failed request id=%s type=%s model=%s", request_id,
                                          type(exc).__name__, self.health().get("model_name", "configured model"))
                         raise ModelLoadFailedError from exc

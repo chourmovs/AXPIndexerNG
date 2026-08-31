@@ -10,7 +10,7 @@ PROFILES = {
     "rag": {"words": 1536, "max_tokens": 64},
 }
 BENCHMARK_STATES = {"idle", "preparing", "cpu_loading", "cpu_cold", "cpu_warm", "intel_loading",
-                    "intel_cold", "intel_warm", "comparing", "complete", "failed", "cancelled"}
+                    "intel_cold", "intel_warm", "comparing", "complete", "complete_with_errors", "failed", "cancelled"}
 
 
 def benchmark_prompt(profile="quick"):
@@ -54,12 +54,12 @@ class BenchmarkRunner:
     def __init__(self, cpu_factory, intel_factory, model_name, hardware=None):
         self.cpu_factory, self.intel_factory = cpu_factory, intel_factory
         self.model_name, self.hardware = model_name, hardware or {}
-        self._lock = threading.Lock(); self._cancel = threading.Event(); self.job = BenchmarkJob()
+        self._lock = threading.Lock(); self._cancel = threading.Event(); self.job = BenchmarkJob(); self._current_backend = None
 
     def start(self, profile="quick"):
         if profile not in PROFILES: raise ValueError("invalid_benchmark_profile")
         with self._lock:
-            if self.job.state not in ("idle", "complete", "failed", "cancelled"):
+            if self.job.state not in ("idle", "complete", "complete_with_errors", "failed", "cancelled"):
                 raise RuntimeError("benchmark_busy")
             now = time.time(); self.job = BenchmarkJob("preparing", profile, started_at=now, updated_at=now)
             self._cancel.clear()
@@ -69,7 +69,12 @@ class BenchmarkRunner:
     def cancel(self):
         if self.job.state not in BENCHMARK_STATES - {"idle", "complete", "failed", "cancelled"}:
             raise RuntimeError("benchmark_not_active")
-        self.job.cancel_requested = True; self._cancel.set(); return self.job.public()
+        self.job.cancel_requested = True; self._cancel.set()
+        backend = self._current_backend
+        if backend:
+            if not getattr(backend, "request_load_cancel", lambda: False)():
+                getattr(backend, "request_cancel", lambda: False)()
+        return self.job.public()
 
     def _state(self, state): self.job.state = state; self.job.updated_at = time.time()
 
@@ -86,17 +91,26 @@ class BenchmarkRunner:
     def _backend_result(self, factory, prefix, label):
         backend = factory(PROFILES[self.job.profile]["max_tokens"])
         try:
+            self._current_backend = backend
             self._state(f"{prefix}_loading"); started = time.perf_counter(); backend.ensure_loaded()
             load_ms = (time.perf_counter()-started)*1000
             cold = self._measure(backend, f"{prefix}_cold"); warm = self._measure(backend, f"{prefix}_warm")
             return {"backend": label, "model_load_ms": load_ms, "cold": cold, "warm": warm,
                     **({"gpu_offload_confirmed": backend.health().get("gpu_offload_confirmed")} if prefix == "intel" else {})}
-        finally: backend.close()
+        finally: backend.close(); self._current_backend = None
 
     def _run(self):
         try:
             cpu = self._backend_result(self.cpu_factory, "cpu", "llama-cpp-python 0.3.24 AVX")
-            intel = self._backend_result(self.intel_factory, "intel", "llama.cpp b10516 SYCL")
+            try: intel = self._backend_result(self.intel_factory, "intel", "llama.cpp b10516 SYCL")
+            except InterruptedError: raise
+            except Exception as exc:
+                intel = {"status": "failed", "phase": "loading", "error": str(exc),
+                         "gpu_offload_confirmed": False}
+                self.job.result = {"model": self.model_name, "profile": self.job.profile,
+                    "hardware": self.hardware, "cpu": cpu, "intel_gpu": intel,
+                    "speedup": {}, "assessment": "intel_gpu_failed"}
+                self._state("complete_with_errors"); return
             self._state("comparing"); speedup, assessment = compare_results(cpu, intel)
             self.job.result = {"model": self.model_name, "profile": self.job.profile, "hardware": self.hardware,
                                "cpu": cpu, "intel_gpu": intel, "speedup": speedup, "assessment": assessment}
