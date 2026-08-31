@@ -26,6 +26,10 @@ class InferenceRuntimeManager:
         self.accelerators = accelerator_manager or AcceleratorManager(__import__("axp_core.runtime", fromlist=["data_dir"]).data_dir())
         server = self.accelerators.server_path()
         self.hardware = hardware or detect_hardware(server, self.accelerators.runtime_root)
+        LOGGER.info("Intel probe completed runtime=%s device_id=%s device_name=%s returncode=%s duration_ms=%s failure_type=%s",
+                    "b10516", self.hardware.sycl_device_id, self.hardware.sycl_device_name,
+                    self.hardware.sycl_probe_returncode, self.hardware.sycl_probe_duration_ms,
+                    self.hardware.sycl_probe_error)
         self.backend = self._make_backend(self.settings, None)
 
     def _make_backend(self, settings, profile):
@@ -43,7 +47,10 @@ class InferenceRuntimeManager:
                 top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
                 repeat_penalty=getattr(profile, "repeat_penalty", 1.0))
             return IntelSyclBackend(settings["chat_model_path"], config, self.accelerators.runtime_root,
-                self.accelerators.server_path(), getattr(profile, "chat_template_kwargs", None))
+                self.accelerators.server_path(), getattr(profile, "chat_template_kwargs", None),
+                sycl_device_id=self.hardware.sycl_device_id,
+                sycl_device_name=self.hardware.sycl_device_name,
+                diagnostic=bool(settings.get("intel_diagnostic")))
         return self._factory(settings, profile)
 
     @staticmethod
@@ -121,11 +128,14 @@ class InferenceRuntimeManager:
                      intel_gpu_device_id=self.hardware.intel_gpu_device_id,
                      sycl_runtime_installed=self.hardware.sycl_runtime_installed,
                      sycl_probe_ok=self.hardware.sycl_probe_ok,
+                     sycl_device_id=value.get("sycl_device_id") or self.hardware.sycl_device_id,
                      sycl_device_name=value.get("sycl_device_name") or self.hardware.sycl_device_name,
                      sycl_device_count=self.hardware.sycl_device_count,
                      sycl_probe_error=self.hardware.sycl_probe_error,
                      sycl_probe_returncode=self.hardware.sycl_probe_returncode,
                      sycl_probe_duration_ms=self.hardware.sycl_probe_duration_ms,
+                     sycl_probe_stdout_excerpt=self.hardware.sycl_probe_stdout_excerpt,
+                     sycl_probe_stderr_excerpt=self.hardware.sycl_probe_stderr_excerpt,
                      intel_gpu_available=self.hardware.intel_gpu_available,
                      accelerator_available=self.hardware.intel_gpu_available,
                      accelerator_reason=accelerator_reason)

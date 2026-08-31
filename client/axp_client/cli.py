@@ -31,7 +31,8 @@ def main(argv=None):
     model_sub.add_parser("status")
     model_sub.add_parser("verify")
     model_sub.add_parser("test")
-    model_sub.add_parser("intel-test")
+    intel_test = model_sub.add_parser("intel-test")
+    intel_test.add_argument("--json", action="store_true", dest="json_output")
     model_benchmark = model_sub.add_parser("benchmark")
     model_benchmark.add_argument("--profile", choices=("quick", "rag"), default="quick")
     model_remove = model_sub.add_parser("remove")
@@ -104,35 +105,40 @@ def main(argv=None):
                                ("failure_type", "failure_code", "failure_reason", "retryable")})
             print(json.dumps(result))
         elif a.model_cmd == "intel-test":
-            settings = load_settings(); settings["chat_inference_device"] = "intel_gpu"
+            settings = load_settings(); settings.update(chat_inference_device="intel_gpu", intel_diagnostic=True)
             profile = catalog_model(settings.get("chat_active_model_id"))
             if profile is None: p.error("chat-model intel-test requires an active catalog model")
             runtime = InferenceRuntimeManager(settings); backend = runtime.backend
-            print(f"Intel GPU detected: {'yes' if runtime.hardware.intel_gpu_detected else 'no'}")
-            print(f"SYCL runtime installed: {'yes' if runtime.hardware.sycl_runtime_installed else 'no'}")
-            print(f"SYCL probe: {'passed' if runtime.hardware.sycl_probe_ok else 'failed'}")
-            print(f"Selected device: {runtime.hardware.sycl_device_name or runtime.hardware.intel_gpu_name or 'none'}")
-            print(f"Model startup: {profile.name}")
-            print("Offload requested: yes")
+            result = {"runtime": "b10516", "probe_returncode": runtime.hardware.sycl_probe_returncode,
+                "probe_device_id": runtime.hardware.sycl_device_id, "probe_device_name": runtime.hardware.sycl_device_name,
+                "probe_stdout_excerpt": runtime.hardware.sycl_probe_stdout_excerpt,
+                "probe_stderr_excerpt": runtime.hardware.sycl_probe_stderr_excerpt, "model_id": profile.id,
+                "model_name": profile.name, "selected_device": runtime.hardware.sycl_device_id,
+                "verbosity": 5, "offload_requested": True, "model_load_ok": False, "axp_ok": False}
             try:
                 backend.ensure_loaded(); health = backend.health()
                 answer = backend.generate(system_prompt="Follow the instruction exactly.",
                                           user_prompt="Reply with exactly: AXP_OK")
                 telemetry = backend.last_telemetry
-                print(f"Offloaded layers: {health.get('offloaded_layers')} / {health.get('total_layers')}")
-                print(f"GPU buffer: {health.get('gpu_buffer_bytes')} bytes")
-                print(f"Model load: {health.get('model_load_ms', 0)/1000:.1f} s")
-                print(f"TTFT: {telemetry.get('time_to_first_token_ms')} ms")
-                print(f"Decode: {telemetry.get('decode_tokens_per_second')} tok/s")
-                print("Qualification result: PASS — GPU inference proven" if answer else
-                      "Qualification result: FAIL — inference request failed")
-            except Exception:
+                result.update(model_load_ok=True, axp_ok=answer.strip() == "AXP_OK",
+                    session_id=health.get("sidecar_session_id"), offloaded_layers=health.get("offloaded_layers"),
+                    total_layers=health.get("total_layers"), gpu_buffer_bytes=health.get("gpu_buffer_bytes"),
+                    cpu_buffer_bytes=health.get("cpu_buffer_bytes"), native_markers=health.get("native_gpu_markers"),
+                    prompt_tokens=telemetry.get("prompt_tokens"), prompt_eval_ms=telemetry.get("prompt_eval_ms"),
+                    prompt_eval_tps=telemetry.get("prompt_eval_tokens_per_second"),
+                    completion_tokens=telemetry.get("completion_tokens"), decode_ms=telemetry.get("decode_ms"),
+                    decode_tps=telemetry.get("decode_tokens_per_second"), qualification="pass" if answer.strip() == "AXP_OK" else "fail")
+            except Exception as exc:
                 failure = backend.health().get('failure_type', 'intel_gpu_backend_failed')
-                labels = {"intel_gpu_offload_not_confirmed": "GPU offload not confirmed",
-                          "intel_sycl_runtime_missing": "runtime unavailable",
-                          "intel_gpu_unavailable": "GPU device unavailable"}
-                print(f"Qualification result: FAIL — {labels.get(failure, 'model load failed')}")
+                health = backend.health()
+                result.update(qualification="fail", failure_type=failure, failure_detail=str(exc),
+                    session_id=health.get("sidecar_session_id"), offloaded_layers=health.get("offloaded_layers"),
+                    total_layers=health.get("total_layers"), gpu_buffer_bytes=health.get("gpu_buffer_bytes"),
+                    cpu_buffer_bytes=health.get("cpu_buffer_bytes"), native_markers=health.get("native_gpu_markers"))
             finally: runtime.close()
+            if a.json_output: print(json.dumps(result, indent=2))
+            else:
+                for key, value in result.items(): print(f"{key}: {json.dumps(value) if isinstance(value, (dict, list)) else value}")
         elif a.model_cmd == "benchmark":
             settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))
             if profile is None or not __import__("pathlib").Path(settings["chat_model_path"]).is_file():
