@@ -147,7 +147,7 @@ class ModelManager:
             if isinstance(exc, (ValueError, RuntimeError)): raise ModelManagerError(str(exc)) from exc
             raise
         def restore():
-            while runner.job.state not in ("complete", "failed", "cancelled"): time.sleep(.2)
+            while runner.job.state not in ("complete", "complete_with_errors", "failed", "cancelled"): time.sleep(.2)
             try: controller.activate(settings, profile)
             except Exception: pass
         threading.Thread(target=restore, daemon=True, name="axp-benchmark-restore").start()

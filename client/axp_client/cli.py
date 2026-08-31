@@ -10,6 +10,7 @@ from axp_daemon.embeddings import embedder_for_index
 from .rag.evaluation import evaluate, format_summary, load_cases, threshold_sweep
 from .rag.factory import create_chat_backend
 from .rag.benchmark import BenchmarkRunner
+from .rag.accelerator_catalog import INTEL_SYCL
 from .rag.runtime_manager import InferenceRuntimeManager
 from .rag.model_catalog import catalog_model
 from .rag.model import import_model, model_status, remove_model, verify_model
@@ -31,6 +32,7 @@ def main(argv=None):
     model_sub.add_parser("status")
     model_sub.add_parser("verify")
     model_sub.add_parser("test")
+    model_sub.add_parser("intel-test")
     model_benchmark = model_sub.add_parser("benchmark")
     model_benchmark.add_argument("--profile", choices=("quick", "rag"), default="quick")
     model_remove = model_sub.add_parser("remove")
@@ -102,6 +104,25 @@ def main(argv=None):
                 result.update({key: failed.get(key) for key in
                                ("failure_type", "failure_code", "failure_reason", "retryable")})
             print(json.dumps(result))
+        elif a.model_cmd == "intel-test":
+            settings = load_settings(); settings["chat_inference_device"] = "intel_gpu"
+            profile = catalog_model(settings.get("chat_active_model_id"))
+            if profile is None: p.error("chat-model intel-test requires an active catalog model")
+            runtime = InferenceRuntimeManager(settings); backend = runtime.backend
+            print(f"Intel GPU:\n    {runtime.hardware.sycl_device_name or runtime.hardware.intel_gpu_name}")
+            print(f"\nRuntime:\n    llama.cpp {INTEL_SYCL.tag} SYCL\n\nModel:\n    {profile.name}")
+            try:
+                backend.ensure_loaded(); health = backend.health()
+                answer = backend.generate(system_prompt="Reply concisely.", user_prompt="Reply with OK.")
+                telemetry = backend.last_telemetry
+                print(f"\nOffload:\n    confirmed\n    {health.get('offloaded_layers')} / {health.get('total_layers')} layers")
+                print(f"\nModel load:\n    {health.get('model_load_ms', 0)/1000:.1f} s")
+                print(f"TTFT: {telemetry.get('time_to_first_token_ms')} ms")
+                print(f"Decode: {telemetry.get('decode_tokens_per_second')} tok/s")
+                print("\nRESULT:\n    PASS" if answer else "\nRESULT:\n    FAIL\nreason:\n    empty_generation")
+            except Exception:
+                print(f"\nRESULT:\n    FAIL\nreason:\n    {backend.health().get('failure_type', 'intel_gpu_backend_failed')}")
+            finally: runtime.close()
         elif a.model_cmd == "benchmark":
             settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))
             if profile is None or not __import__("pathlib").Path(settings["chat_model_path"]).is_file():
@@ -119,7 +140,7 @@ def main(argv=None):
                                "intel_device_id": runtime.hardware.intel_gpu_device_id,
                                "sycl_device": runtime.hardware.sycl_device_name})
             runner.start(a.profile)
-            while runner.job.state not in ("complete", "failed", "cancelled"):
+            while runner.job.state not in ("complete", "complete_with_errors", "failed", "cancelled"):
                 __import__("time").sleep(.2)
             print(json.dumps(runner.job.public(), indent=2))
         elif not a.yes:

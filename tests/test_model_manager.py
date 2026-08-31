@@ -57,7 +57,12 @@ def fixture_model(monkeypatch):
 
 
 def wait_for_job(job):
-    for _ in range(200):
+    # Installation includes fsync plus two atomic replacements. Those operations
+    # can legitimately exceed two seconds on Windows CI when Defender scans the
+    # newly published GGUF and manifest; use a bounded wall-clock deadline rather
+    # than assuming a 10 ms scheduler cadence.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
         if job.state not in manager_module.ACTIVE_DOWNLOAD_STATES:
             return
         time.sleep(.01)
