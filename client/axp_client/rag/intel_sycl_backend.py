@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import secrets
+import shutil
 import socket
 import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -20,6 +24,10 @@ from .model import validate_gguf
 from .sycl_probe import DEVICE_SELECTOR, INTEL_GPU_RE, child_environment
 
 LOOPBACK = "127.0.0.1"
+INTEL_LOAD_WARN_AFTER_S = 120
+INTEL_LOAD_STALL_WARN_AFTER_S = 240
+INTEL_LOAD_HARD_TIMEOUT_S = 600
+INTEL_LOAD_ACTIVITY_STALE_S = 120
 OFFLOAD_RE = re.compile(r"offload(?:ed|ing)?\s+(\d+)(?:\s*/\s*|\s+of\s+)(\d+)\s+layers?", re.I)
 
 
@@ -46,17 +54,23 @@ def parse_sse(lines):
 
 class IntelSyclBackend:
     def __init__(self, model_path, config, runtime_dir, server_path=None, chat_template_kwargs=None,
-                 popen=subprocess.Popen, urlopen=urllib.request.urlopen, load_timeout=120):
+                 popen=subprocess.Popen, urlopen=urllib.request.urlopen, load_timeout=INTEL_LOAD_HARD_TIMEOUT_S,
+                 monotonic=time.monotonic, sleep=time.sleep):
         self.model_path, self.config = Path(model_path), config
         self.runtime_dir = Path(runtime_dir).resolve()
         self.server_path = Path(server_path or self.runtime_dir / "llama-server.exe").resolve()
         self.chat_template_kwargs = dict(chat_template_kwargs) if chat_template_kwargs is not None else {}
         self._popen, self._urlopen, self.load_timeout = popen, urlopen, load_timeout
+        self._monotonic, self._sleep = monotonic, sleep
         self._process = None; self._port = None; self._model_state = "unloaded"; self._load_ms = None
         self._load_lock = threading.Lock(); self._cancel_event = threading.Event(); self._progress_lock = threading.Lock()
         self._progress = self._new_progress(); self._failure = {}; self.last_telemetry = {}
         self.gpu_offload_requested = True; self.gpu_offload_confirmed = False
         self.offloaded_layers = self.total_layers = None; self._diagnostic = []; self.sycl_device_name = None
+        self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
+        self._load_cancel = threading.Event(); self._load_progress_lock = threading.Lock()
+        self._load_progress = self._new_load_progress(); self._api_key = None
+        self._auth_dir = self._auth_file = None; self._reader_thread = None
 
     @staticmethod
     def _new_progress():
@@ -64,6 +78,37 @@ class IntelSyclBackend:
                 "elapsed_s": None, "time_to_first_token_ms": None, "generated_fragments": 0,
                 "generated_characters": 0, "last_fragment_age_s": None, "finish_reason": None,
                 "cancel_requested": False}
+
+    @staticmethod
+    def _new_load_progress():
+        return {"active": False, "phase": "idle", "started_monotonic": None,
+                "last_native_activity_monotonic": None, "last_health_activity_monotonic": None,
+                "native_lines_seen": 0, "model_path_configured": False, "sidecar_pid": None,
+                "health_reachable": False, "health_status": "unreachable", "health_http_status": None,
+                "slow_warning": False, "suspected_stall": False, "cancel_requested": False,
+                "failure_type": None, "failure_reason": None}
+
+    def model_load_active(self):
+        with self._load_progress_lock: return self._load_progress["active"]
+
+    def model_load_progress(self):
+        with self._load_progress_lock: value = dict(self._load_progress)
+        now = self._monotonic(); start = value.get("started_monotonic")
+        value["elapsed_s"] = None if start is None else now - start
+        for name in ("native", "health"):
+            stamp = value.get(f"last_{name}_activity_monotonic")
+            value[f"last_{name}_activity_age_s"] = None if stamp is None else now - stamp
+        value.update(gpu_offload_requested=True, gpu_offload_confirmed=self.gpu_offload_confirmed,
+                     offloaded_layers=self.offloaded_layers, total_layers=self.total_layers,
+                     gpu_buffer_bytes=self.gpu_buffer_bytes, cpu_buffer_bytes=self.cpu_buffer_bytes,
+                     sycl_device_name=self.sycl_device_name)
+        return value
+
+    def request_load_cancel(self):
+        if not self.model_load_active(): return False
+        self._load_cancel.set()
+        with self._load_progress_lock: self._load_progress.update(cancel_requested=True)
+        return True
 
     @property
     def loaded(self): return self._process is not None and self._process.poll() is None and self._model_state == "loaded"
@@ -80,6 +125,7 @@ class IntelSyclBackend:
             return value
 
     def request_cancel(self):
+        if self.request_load_cancel(): return True
         with self._progress_lock:
             if not self._progress["active"]: return False
             self._cancel_event.set(); self._progress.update(phase="cancel_requested", cancel_requested=True); return True
@@ -88,7 +134,8 @@ class IntelSyclBackend:
         valid, reason = validate_gguf(self.model_path)
         if self._model_state == "failed": reason = self._failure.get("failure_type")
         progress = self.generation_progress()
-        return {"available": valid and self._model_state != "failed", "reason": reason, "backend": "intel_sycl",
+        load = self.model_load_progress()
+        return {"available": valid, "reason": reason, "backend": "intel_sycl",
                 "backend_version": INTEL_SYCL.tag, "accelerator_backend": "sycl", "accelerator_runtime": INTEL_SYCL.tag,
                 "model_configured": self.model_path.is_file(), "model_valid": valid, "model_loaded": self.loaded,
                 "model_state": self._model_state, "model_load_ms": self._load_ms, "context_size": self.config.context_size,
@@ -99,7 +146,13 @@ class IntelSyclBackend:
                 "generation_phase": progress["phase"], "generation_elapsed_s": progress["elapsed_s"],
                 "time_to_first_token_ms": progress["time_to_first_token_ms"],
                 "generated_fragments": progress["generated_fragments"],
-                "generated_characters": progress["generated_characters"], **self._failure}
+                "generated_characters": progress["generated_characters"],
+                "model_load_active": load["active"], "model_load_phase": load["phase"],
+                "model_load_elapsed_s": load["elapsed_s"],
+                "model_load_last_activity_age_s": load["last_native_activity_age_s"],
+                "model_load_slow": load["slow_warning"],
+                "model_load_suspected_stall": load["suspected_stall"],
+                "sidecar_running": self._process is not None and self._process.poll() is None, **self._failure}
 
     def _endpoint(self, path): return f"http://{LOOPBACK}:{self._port}{path}"
 
@@ -115,17 +168,72 @@ class IntelSyclBackend:
             for line in iter(stream.readline, ""):
                 handler.stream.write(line); handler.flush(); self._diagnostic.append(line[-1000:])
                 self._diagnostic = self._diagnostic[-200:]
+                with self._load_progress_lock:
+                    self._load_progress["last_native_activity_monotonic"] = self._monotonic()
+                    self._load_progress["native_lines_seen"] += 1
+                lower = line.lower()
+                phase = ("tensor_loading" if "load_tensors" in lower or "tensor loading" in lower else
+                         "model_opening" if "loading model" in lower or "model loader" in lower else
+                         "gpu_offloading" if "offload" in lower else
+                         "gpu_allocating" if "buffer size" in lower or "allocating buffer" in lower else
+                         "server_initializing" if "context initialization" in lower else
+                         "waiting_health" if "server ready" in lower or "listening" in lower else
+                         "runtime_initializing" if "sycl" in lower or "level zero" in lower else None)
+                if phase:
+                    with self._load_progress_lock: self._load_progress["phase"] = phase
                 match = OFFLOAD_RE.search(line)
                 if match:
                     self.offloaded_layers, self.total_layers = map(int, match.groups())
                 if INTEL_GPU_RE.search(line) and re.search(r"(?:SYCL|Level.Zero|device|buffer)", line, re.I):
                     self.sycl_device_name = line.strip()[:300]
+                buffer = re.search(r"(SYCL\d*|GPU|CPU|model).*?buffer size\s*=\s*([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)", line, re.I)
+                if buffer:
+                    scale = {"B": 1, "KB": 1024, "KIB": 1024, "MB": 1024**2, "MIB": 1024**2,
+                             "GB": 1024**3, "GIB": 1024**3}[buffer.group(3).upper()]
+                    size = int(float(buffer.group(2)) * scale)
+                    if re.search(r"SYCL|GPU", buffer.group(1), re.I):
+                        self.gpu_buffer_bytes = size; self.gpu_offload_confirmed = size > 0
+                    else: self.cpu_buffer_bytes = size
+                if re.search(r"offloading (?:\d+ repeating layers|output layer) to gpu", line, re.I):
+                    self.gpu_offload_confirmed = True
                 text = "".join(self._diagnostic)
                 self.gpu_offload_confirmed = bool(self.sycl_device_name and
                     (self.offloaded_layers and self.offloaded_layers > 0 or
                      re.search(r"(?:SYCL|GPU).*(?:buffer|offload)", text, re.I)))
         finally:
             handler.close()
+
+    def _create_auth(self):
+        root = runtime_paths()["runtime"] / "sidecars"; root.mkdir(parents=True, exist_ok=True)
+        self._auth_dir = Path(tempfile.mkdtemp(prefix="intel-", dir=root)); os.chmod(self._auth_dir, 0o700)
+        self._auth_file = self._auth_dir / "api-key.txt"; self._api_key = secrets.token_urlsafe(32)
+        fd = os.open(self._auth_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(self._api_key); handle.flush(); os.fsync(handle.fileno())
+
+    def _request(self, path, payload=None, timeout=None):
+        headers = {"Authorization": f"Bearer {self._api_key}"}; data = None
+        if payload is not None: data = json.dumps(payload).encode(); headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self._endpoint(path), data=data, headers=headers)
+        return self._urlopen(request, timeout=timeout or self.load_timeout)
+
+    def _health_state(self):
+        try:
+            with self._request("/health", timeout=1) as response:
+                status, raw = response.status, response.read(65536)
+        except urllib.error.HTTPError as exc:
+            status, raw = exc.code, exc.read(65536)
+        except (OSError, urllib.error.URLError): return "unreachable"
+        with self._load_progress_lock:
+            self._load_progress.update(last_health_activity_monotonic=self._monotonic(),
+                                       health_reachable=True, health_http_status=status)
+        try: body = json.loads(raw or b"{}")
+        except (ValueError, TypeError): body = None
+        marker = str(body.get("status", "")).lower() if isinstance(body, dict) else ""
+        state = ("auth_failed" if status in (401, 403) else "ready" if status == 200 and marker in ("ok", "ready")
+                 else "loading" if status in (202, 503) or marker in ("loading", "starting") else "invalid")
+        with self._load_progress_lock: self._load_progress["health_status"] = state
+        return state
 
     def ensure_loaded(self):
         if self.loaded: return self
@@ -135,33 +243,58 @@ class IntelSyclBackend:
             if not valid: raise IntelSyclError(reason)
             if self.runtime_dir not in self.server_path.parents or not self.server_path.is_file():
                 raise IntelSyclError("intel_sycl_runtime_invalid")
-            started = time.perf_counter(); self._model_state = "loading"; self._port = self._free_port()
+            self.close(); started = self._monotonic(); self._model_state = "loading"; self._port = self._free_port()
+            self._load_cancel.clear(); self._create_auth(); self._load_progress = self._new_load_progress()
+            with self._load_progress_lock:
+                self._load_progress.update(active=True, phase="spawning", started_monotonic=started,
+                    last_native_activity_monotonic=started, model_path_configured=True)
             command = [str(self.server_path), "--model", str(self.model_path), "--host", LOOPBACK,
                        "--port", str(self._port), "--ctx-size", str(self.config.context_size),
-                       "--parallel", "1", "--n-gpu-layers", "999"]
+                       "--parallel", "1", "--n-gpu-layers", "999", "--api-key-file", str(self._auth_file)]
             try:
                 self._process = self._popen(command, cwd=str(self.runtime_dir), env=child_environment(self.runtime_dir),
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, shell=False,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                threading.Thread(target=self._log_reader, args=(self._process.stdout,), daemon=True,
-                                 name="axp-intel-sycl-log").start()
-                deadline = time.monotonic() + self.load_timeout
-                while time.monotonic() < deadline:
-                    if self._process.poll() is not None: raise IntelSyclError("intel_gpu_model_load_failed")
-                    try:
-                        with self._urlopen(self._endpoint("/health"), timeout=1) as response:
-                            body = json.loads(response.read() or b"{}")
-                            if response.status == 200 and body.get("status") in ("ok", "ready", None): break
-                    except (OSError, ValueError, urllib.error.URLError): pass
-                    time.sleep(.1)
-                else: raise IntelSyclError("intel_gpu_model_load_failed")
+                with self._load_progress_lock:
+                    self._load_progress.update(phase="runtime_initializing", sidecar_pid=self._process.pid)
+                self._reader_thread = threading.Thread(target=self._log_reader, args=(self._process.stdout,), daemon=False,
+                    name="axp-intel-sycl-log"); self._reader_thread.start()
+                while True:
+                    elapsed = self._monotonic() - started
+                    if self._load_cancel.is_set(): raise IntelSyclError("intel_gpu_model_load_cancelled")
+                    if self._process.poll() is not None:
+                        text = "".join(self._diagnostic).lower()
+                        code = ("intel_gpu_out_of_memory" if re.search(r"out of memory|bad_alloc|allocation failed", text)
+                                else "intel_gpu_device_lost" if "device lost" in text
+                                else "intel_gpu_model_unsupported" if "unsupported model" in text
+                                else "intel_gpu_process_exited")
+                        raise IntelSyclError(code)
+                    state = self._health_state()
+                    if state == "auth_failed": raise IntelSyclError("intel_gpu_auth_failed")
+                    if state == "ready": break
+                    snapshot = self.model_load_progress(); native_age = snapshot["last_native_activity_age_s"]
+                    health_age = snapshot["last_health_activity_age_s"]
+                    with self._load_progress_lock:
+                        self._load_progress["slow_warning"] = elapsed >= INTEL_LOAD_WARN_AFTER_S
+                        self._load_progress["suspected_stall"] = (elapsed >= INTEL_LOAD_STALL_WARN_AFTER_S and
+                            native_age >= INTEL_LOAD_ACTIVITY_STALE_S and
+                            (health_age is None or health_age >= INTEL_LOAD_ACTIVITY_STALE_S))
+                    if elapsed >= self.load_timeout: raise IntelSyclError("intel_gpu_model_load_timeout")
+                    self._sleep(.2)
                 if not self.gpu_offload_confirmed:
-                    raise IntelSyclError("intel_gpu_backend_failed")
-                self._model_state = "loaded"; self._load_ms = (time.perf_counter() - started) * 1000; self._failure = {}
+                    raise IntelSyclError("intel_gpu_offload_not_confirmed")
+                self._model_state = "loaded"; self._load_ms = (self._monotonic() - started) * 1000; self._failure = {}
+                with self._load_progress_lock: self._load_progress.update(active=False, phase="ready")
             except Exception as exc:
                 self._failure = {"failure_type": str(exc) if isinstance(exc, IntelSyclError) else "intel_gpu_backend_failed",
                                  "failure_reason": "Intel GPU inference could not be started.", "retryable": True}
-                self._model_state = "failed"; self.close(failed=True); raise
+                code = self._failure["failure_type"]
+                self._model_state = "unloaded" if code == "intel_gpu_model_load_cancelled" else "failed"
+                with self._load_progress_lock:
+                    self._load_progress.update(active=False, phase="cancelled" if code.endswith("cancelled") else
+                        "timed_out" if code.endswith("timeout") else "failed", failure_type=code,
+                        failure_reason=self._failure["failure_reason"])
+                self.close(failed=True); raise
         return self
 
     def retry_load(self):
@@ -170,9 +303,7 @@ class IntelSyclBackend:
     def context_window(self): return self.config.context_size
 
     def _post(self, path, payload, timeout=None):
-        request = urllib.request.Request(self._endpoint(path), json.dumps(payload).encode(),
-                                         {"Content-Type": "application/json"})
-        return self._urlopen(request, timeout=timeout or self.load_timeout)
+        return self._request(path, payload, timeout)
 
     def count_tokens(self, text):
         self.ensure_loaded()
@@ -218,7 +349,10 @@ class IntelSyclBackend:
                 "generation_ms": generation_ms, "decode_ms": decode_ms, "completion_tokens": completion,
                 "decode_tokens_per_second": completion/(decode_ms/1000) if decode_ms else None,
                 "generated_characters": sum(map(len, fragments)), "generated_fragments": len(fragments),
-                "finish_reason": finish}
+                "finish_reason": finish, "backend": "intel_sycl", "runtime": INTEL_SYCL.tag,
+                "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
+                "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
+                "inference_device_effective": "local Intel GPU"}
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)
             return answer
         except GenerationCancelled:
@@ -236,4 +370,9 @@ class IntelSyclBackend:
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill(); process.wait(timeout=5)
+        if self._reader_thread and self._reader_thread is not threading.current_thread():
+            self._reader_thread.join(timeout=5)
+        self._reader_thread = None
+        if self._auth_dir: shutil.rmtree(self._auth_dir, ignore_errors=True)
+        self._api_key = None; self._auth_file = self._auth_dir = None; self._port = None
         if not failed: self._model_state = "unloaded"

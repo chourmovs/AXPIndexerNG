@@ -6,6 +6,7 @@ import {element} from './ui.js';
 
 const progressLabels = {retrieval_started: 'Searching indexed documents…', retrieval_complete: 'Retrieved candidate passages…',
   model_load_started: 'Loading local AI model…', model_load_heartbeat: 'Loading local AI model…', model_load_complete: 'Local AI model loaded.',
+  model_load_progress: 'Starting Intel GPU backend…',
   context_preparation_started: 'Preparing evidence…', context_ready: 'Evidence prepared', generation_started: 'Evaluating prompt locally…',
   generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
@@ -54,7 +55,7 @@ function renderResponse(article, response, turn) {
     renderDocuments(turn, 'Related documents', response.related_documents, false);
   if (documents) article.append(documents);
   if (response.timings) { const generation=response.generation || {}; const seconds = ((generation.generation_ms || response.timings.total_ms) / 1000).toFixed(1); const count = response.sources?.length || 0;
-    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · local CPU · ${seconds} s`);
+    const meta=element('small', 'answer-meta', `${count} source${count === 1 ? '' : 's'} · ${generation.inference_device_effective || 'local CPU'} · ${seconds} s`);
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     article.append(meta); }
@@ -86,6 +87,10 @@ export function initAsk() {
     try { await askStream(question, message => {
         if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; progressMode='pipeline'; progressData={}; updateProgress(); }
         if(message.event==='context_ready'){ liveLabel='Evidence prepared'; progressMode='context'; progressData=message; updateProgress(); }
+        else if(message.event==='model_load_progress'){ const labels={spawning:'Starting Intel GPU backend…',runtime_initializing:'Initializing SYCL / Level Zero…',model_opening:'Loading local model…',tensor_loading:'Loading model tensors…',gpu_allocating:'Allocating Intel GPU buffers…',gpu_offloading:'Offloading model to Intel GPU…',waiting_health:'Waiting for local GPU server…'};
+          const cancelButton=progressData.cancelButton||element('button','secondary compact','Cancel'); cancelButton.type='button';
+          if(!progressData.cancelButton) cancelButton.addEventListener('click',()=>cancelAskGeneration());
+          liveLabel=labels[message.phase]||progressLabels.model_load_progress; progressData={...message,cancelButton}; updateProgress(); }
         else if(message.event==='generation_started'){ const cancelButton=element('button','secondary compact','Cancel generation'); cancelButton.type='button';
           cancelButton.addEventListener('click',async()=>{ cancelButton.disabled=true; cancelButton.textContent='Cancellation requested…'; try{await cancelAskGeneration();}catch(_){/* stream remains authoritative */} });
           phaseStarted=Date.now(); liveLabel='Evaluating prompt locally…'; progressMode='waiting'; progressData={cancelButton}; updateProgress(); }
@@ -147,7 +152,7 @@ export function initAsk() {
       if(acceleratorJob.state==='downloading'){ const bar=element('progress'); bar.max=100; bar.value=acceleratorJob.percentage;
         runtimeProgress.append(bar,element('small','',`${acceleratorJob.percentage.toFixed(1)}% · ${formatBytes(acceleratorJob.bytes_downloaded)} / ${formatBytes(acceleratorJob.bytes_total)} · ${formatRate(acceleratorJob.bytes_per_second)}${formatEta(acceleratorJob.eta_seconds)}`)); }}
     document.querySelector('#benchmark-intel').hidden=!catalog.hardware.accelerator_available;
-    const benchmarkActive=catalog.benchmark && !['idle','complete','failed','cancelled'].includes(catalog.benchmark.state);
+    const benchmarkActive=catalog.benchmark && !['idle','complete','complete_with_errors','failed','cancelled'].includes(catalog.benchmark.state);
     document.querySelector('#benchmark-intel').disabled=benchmarkActive;
     document.querySelector('#cancel-benchmark').hidden=!benchmarkActive;
     document.querySelector('#remove-intel-runtime').hidden=!installed;
