@@ -61,7 +61,8 @@ def test_maxsim_cache_and_diversification():
         cache.put(key, key)
     assert cache.get("a") is None and cache.get("c") == "c"
     rows = [{"document_id": 1, "n": n} for n in range(4)] + [{"document_id": 2, "n": 9}]
-    assert [row["document_id"] for row in diversify(rows, 4, 3)] == [1, 2, 1, 1]
+    # The final cap must retain global score order rather than round-robin documents.
+    assert [row["document_id"] for row in diversify(rows, 4, 3)] == [1, 1, 1, 2]
 
 
 def test_quality_result_normalizes_numpy_scores_for_json(tmp_path):
