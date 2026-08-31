@@ -1,9 +1,10 @@
 """Unprivileged hardware discovery and accelerator probing."""
 import ctypes
 import platform
-import subprocess
 import re
 from dataclasses import asdict, dataclass
+
+from .sycl_probe import probe_sycl
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,8 @@ class HardwareCapabilities:
     sycl_device_name: str | None = None
     sycl_device_count: int = 0
     sycl_probe_error: str | None = None
+    sycl_probe_returncode: int | None = None
+    sycl_probe_duration_ms: int = 0
 
     def public(self):
         return asdict(self)
@@ -44,7 +47,7 @@ def windows_display_adapters():
     return devices
 
 
-def detect_hardware(accelerator_executable=None):
+def detect_hardware(accelerator_executable=None, accelerator_runtime_root=None):
     if platform.system() != "Windows":
         return HardwareCapabilities(platform.processor() or platform.machine() or "Unknown CPU",
                                     accelerator_reason="unsupported_platform")
@@ -57,21 +60,10 @@ def detect_hardware(accelerator_executable=None):
                        or re.search(r"VEN_8086", item["DeviceID"], re.I))), None)
     available = False
     reason = "accelerator_not_installed" if intel else "no_intel_gpu"
-    if accelerator_executable:
-        try:
-            probe = subprocess.run([str(accelerator_executable), "--list-devices"], capture_output=True,
-                                   text=True, timeout=15, check=False,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            from .intel_sycl_backend import parse_device_list
-            devices = parse_device_list((probe.stdout or "") + "\n" + (probe.stderr or ""))
-            available = probe.returncode == 0 and bool(devices)
-            reason = None if available else ("intel_sycl_device_not_found" if probe.returncode == 0
-                                              else "intel_gpu_driver_or_level_zero_unavailable")
-        except (OSError, subprocess.TimeoutExpired):
-            reason = "intel_gpu_driver_or_level_zero_unavailable"
-            devices = []
-    else:
-        devices = []
+    probe = probe_sycl(accelerator_executable, accelerator_runtime_root) if accelerator_executable else None
+    available = bool(probe and probe["ok"])
+    if probe:
+        reason = None if available else probe["error_code"]
     identity = intel.get("DeviceID", "") if intel else ""
     vendor = re.search(r"VEN_([0-9A-F]{4})", identity, re.I)
     device = re.search(r"DEV_([0-9A-F]{4})", identity, re.I)
@@ -79,5 +71,7 @@ def detect_hardware(accelerator_executable=None):
                                 bool(intel), intel["DeviceString"] if intel else None, available, reason,
                                 vendor.group(1).upper() if vendor else None,
                                 device.group(1).upper() if device else None,
-                                bool(accelerator_executable), available, devices[0] if devices else None,
-                                len(devices), reason if accelerator_executable and not available else None)
+                                bool(probe and probe["installed"]), available,
+                                probe["device_name"] if probe else None, probe["device_count"] if probe else 0,
+                                probe["error_code"] if probe and not available else None,
+                                probe["returncode"] if probe else None, probe["duration_ms"] if probe else 0)

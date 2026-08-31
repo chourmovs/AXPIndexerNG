@@ -191,15 +191,18 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 except ModelManagerError as exc:
                     status = 409 if exc.code in ("chat_busy", "intel_gpu_unavailable") else 400
                     return self.send_json({"error": exc.code, **exc.details}, status)
-            if url.path in ("/api/models/accelerator/download", "/api/models/accelerator/remove"):
+            if url.path in ("/api/models/accelerator/download", "/api/models/accelerator/remove",
+                            "/api/models/accelerator/cancel", "/api/models/accelerator/probe"):
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
                 if model_manager is None:
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
-                    result = (model_manager.start_accelerator_download() if url.path.endswith("/download")
-                              else model_manager.remove_accelerator())
-                    return self.send_json(result, 202 if url.path.endswith("/download") else 200)
+                    if url.path.endswith("/download"): result = model_manager.start_accelerator_download()
+                    elif url.path.endswith("/cancel"): result = model_manager.cancel_accelerator_download()
+                    elif url.path.endswith("/probe"): result = model_manager.retry_accelerator_probe()
+                    else: result = model_manager.remove_accelerator()
+                    return self.send_json(result, 202 if url.path.endswith(("/download", "/cancel")) else 200)
                 except ModelManagerError as exc:
                     return self.send_json({"error": exc.code, **exc.details}, 409)
             if url.path in ("/api/models/benchmark", "/api/models/benchmark/cancel"):

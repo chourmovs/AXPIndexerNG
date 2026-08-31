@@ -127,11 +127,13 @@ class AcceleratorManager:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
-    def download_and_install(self, progress=None):
+    def download_and_install(self, progress=None, cancel=None):
         """Download only after this explicit method is called; URL is catalog-owned."""
         self.download_root.mkdir(parents=True, exist_ok=True)
         part = self.download_root / f"{INTEL_SYCL.id}.zip.part"
         offset = part.stat().st_size if part.exists() and part.stat().st_size <= INTEL_SYCL.exact_size else 0
+        if progress:
+            progress("connecting", offset, INTEL_SYCL.exact_size, offset)
         digest = hashlib.sha256()
         if offset:
             with part.open("rb") as old:
@@ -145,8 +147,12 @@ class AcceleratorManager:
             response = self.opener.open(urllib.request.Request(INTEL_SYCL.url,
                 headers={"Accept-Encoding": "identity"}), timeout=60)
         downloaded = offset
+        if progress:
+            progress("downloading", downloaded, INTEL_SYCL.exact_size, offset)
         with response, part.open("ab" if offset else "wb") as target:
             while True:
+                if cancel and cancel.is_set():
+                    raise AcceleratorError("accelerator_download_cancelled")
                 chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
@@ -154,12 +160,15 @@ class AcceleratorManager:
                 if downloaded > INTEL_SYCL.exact_size:
                     raise AcceleratorError("accelerator_size_mismatch")
                 if progress:
-                    progress(downloaded, INTEL_SYCL.exact_size)
+                    progress("downloading", downloaded, INTEL_SYCL.exact_size, offset)
         if downloaded != INTEL_SYCL.exact_size:
             raise AcceleratorError("accelerator_size_mismatch")
         if digest.hexdigest() != INTEL_SYCL.sha256:
             part.unlink(missing_ok=True)
             raise AcceleratorError("accelerator_sha256_mismatch")
+        if progress:
+            progress("verifying", downloaded, INTEL_SYCL.exact_size, offset)
+            progress("installing", downloaded, INTEL_SYCL.exact_size, offset)
         result = self.install_archive(part)
         part.unlink(missing_ok=True)
         return result

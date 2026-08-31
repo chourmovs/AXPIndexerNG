@@ -25,7 +25,7 @@ class InferenceRuntimeManager:
         self.settings = dict(settings)
         self.accelerators = accelerator_manager or AcceleratorManager(__import__("axp_core.runtime", fromlist=["data_dir"]).data_dir())
         server = self.accelerators.server_path()
-        self.hardware = hardware or detect_hardware(server)
+        self.hardware = hardware or detect_hardware(server, self.accelerators.runtime_root)
         self.backend = self._make_backend(self.settings, None)
 
     def _make_backend(self, settings, profile):
@@ -116,6 +116,8 @@ class InferenceRuntimeManager:
                      sycl_device_name=value.get("sycl_device_name") or self.hardware.sycl_device_name,
                      sycl_device_count=self.hardware.sycl_device_count,
                      sycl_probe_error=self.hardware.sycl_probe_error,
+                     sycl_probe_returncode=self.hardware.sycl_probe_returncode,
+                     sycl_probe_duration_ms=self.hardware.sycl_probe_duration_ms,
                      intel_gpu_available=self.hardware.intel_gpu_available,
                      accelerator_available=self.hardware.intel_gpu_available,
                      accelerator_reason=accelerator_reason)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import socket
 import subprocess
@@ -18,35 +17,14 @@ from axp_core.runtime import runtime_paths
 from .accelerator_catalog import INTEL_SYCL
 from .llama_cpp_backend import GenerationCancelled, NO_THINK_DIRECTIVE, THINK_RE
 from .model import validate_gguf
+from .sycl_probe import DEVICE_SELECTOR, INTEL_GPU_RE, child_environment
 
 LOOPBACK = "127.0.0.1"
-DEVICE_SELECTOR = "level_zero:gpu"
 OFFLOAD_RE = re.compile(r"offload(?:ed|ing)?\s+(\d+)(?:\s*/\s*|\s+of\s+)(\d+)\s+layers?", re.I)
-INTEL_GPU_RE = re.compile(r"(?=.*intel)(?=.*(?:gpu|graphics|arc|iris|uhd|xe)).+", re.I)
 
 
 class IntelSyclError(RuntimeError):
     pass
-
-
-def child_environment(runtime_dir):
-    env = dict(os.environ)
-    for key in tuple(env):
-        if key.upper().startswith(("ONEAPI_", "SYCL_")) or key.upper() in ("ZE_AFFINITY_MASK",):
-            env.pop(key, None)
-    env["ONEAPI_DEVICE_SELECTOR"] = DEVICE_SELECTOR
-    env["PATH"] = str(runtime_dir) + os.pathsep + env.get("PATH", "")
-    return env
-
-
-def parse_device_list(output):
-    """Return recognizably Intel GPU device lines, never CPU-only matches."""
-    devices = []
-    for raw in output.splitlines():
-        line = raw.strip()
-        if INTEL_GPU_RE.search(line) and not re.search(r"\bcpu\b", line, re.I):
-            devices.append(line[:300])
-    return devices
 
 
 def parse_sse(lines):
@@ -64,28 +42,6 @@ def parse_sse(lines):
             event.clear()
     if event:
         yield "\n".join(event)
-
-
-def probe_sycl(server_path, timeout=15, runner=subprocess.run):
-    server_path = Path(server_path)
-    if not server_path.is_file() or not server_path.stat().st_size:
-        return {"sycl_probe_ok": False, "sycl_device_name": None, "sycl_device_count": 0,
-                "sycl_probe_error": "intel_sycl_runtime_invalid"}
-    try:
-        result = runner([str(server_path), "--list-devices"], cwd=str(server_path.parent),
-            env=child_environment(server_path.parent), capture_output=True, text=True, timeout=timeout,
-            check=False, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except subprocess.TimeoutExpired:
-        return {"sycl_probe_ok": False, "sycl_device_name": None, "sycl_device_count": 0,
-                "sycl_probe_error": "intel_gpu_driver_or_level_zero_unavailable"}
-    except OSError:
-        return {"sycl_probe_ok": False, "sycl_device_name": None, "sycl_device_count": 0,
-                "sycl_probe_error": "intel_sycl_runtime_invalid"}
-    devices = parse_device_list((result.stdout or "") + "\n" + (result.stderr or ""))
-    error = None if result.returncode == 0 and devices else (
-        "intel_sycl_device_not_found" if result.returncode == 0 else "intel_gpu_driver_or_level_zero_unavailable")
-    return {"sycl_probe_ok": error is None, "sycl_device_name": devices[0] if devices else None,
-            "sycl_device_count": len(devices), "sycl_probe_error": error}
 
 
 class IntelSyclBackend:
