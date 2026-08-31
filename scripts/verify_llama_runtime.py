@@ -4,12 +4,27 @@ import json
 import platform
 import re
 import inspect
+from pathlib import Path
 
 from axp_client.rag.llama_cpp_backend import GenerationConfig, build_chat_invocation
 
 FORBIDDEN_FEATURES = {"AVX2", "AVX_VNNI", "AVX512", "AVX512_VBMI", "AVX512_VNNI",
                       "AVX512_BF16", "BMI2", "FMA", "F16C", "LLAMAFILE"}
 EXPECTED_BACKEND_VERSION = "0.3.24"
+# The pinned source release vendors llama.cpp's LFM2 architecture. Keeping the
+# upstream enum marker here makes this compatibility contract statically gated
+# without downloading the field-qualification GGUF.
+REQUIRED_MODEL_ARCHITECTURE = "LLM_ARCH_LFM2"
+
+
+def verify_lfm2_architecture(package_file):
+    """Confirm the packaged native library contains its LFM2 architecture name."""
+    package_dir = Path(package_file).resolve().parent
+    libraries = [path for path in package_dir.rglob("*")
+                 if path.is_file() and path.suffix.lower() in {".dll", ".pyd", ".so", ".dylib"}]
+    if not libraries or not any(b"lfm2" in path.read_bytes().lower() for path in libraries):
+        raise RuntimeError("packaged llama.cpp does not expose LFM2 architecture support")
+    return True
 
 
 def verify_hf_generation_tag():
@@ -52,6 +67,7 @@ def main():
         raise RuntimeError(f"expected llama-cpp-python {EXPECTED_BACKEND_VERSION}, found {backend_version}")
     reported = verify_features(system_info)
     hf_generation_tag_supported = verify_hf_generation_tag()
+    lfm2_architecture_supported = verify_lfm2_architecture(llama_cpp.__file__)
     cpu = detect_cpu().public()
     invocation, supports_template_kwargs, no_think_compatibility = build_chat_invocation(
         llama_cpp.Llama.create_chat_completion, system_prompt="contract probe", user_prompt="contract probe",
@@ -66,6 +82,7 @@ def main():
                       "forbidden_features": {feature: reported.get(feature, False)
                                              for feature in sorted(FORBIDDEN_FEATURES)},
                       "hf_generation_tag_supported": hf_generation_tag_supported,
+                      "lfm2_architecture_supported": lfm2_architecture_supported,
                       "chat_stream_supported": chat_stream_supported,
                       "chat_template_kwargs_supported": supports_template_kwargs,
                       "no_think_compatibility": no_think_compatibility,

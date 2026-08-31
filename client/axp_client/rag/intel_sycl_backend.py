@@ -94,7 +94,7 @@ class IntelSyclBackend:
         self.model_path, self.config = Path(model_path), config
         self.runtime_dir = Path(runtime_dir).resolve()
         self.server_path = Path(server_path or self.runtime_dir / "llama-server.exe").resolve()
-        self.chat_template_kwargs = chat_template_kwargs or {"enable_thinking": False}
+        self.chat_template_kwargs = dict(chat_template_kwargs) if chat_template_kwargs is not None else {}
         self._popen, self._urlopen, self.load_timeout = popen, urlopen, load_timeout
         self._process = None; self._port = None; self._model_state = "unloaded"; self._load_ms = None
         self._load_lock = threading.Lock(); self._cancel_event = threading.Event(); self._progress_lock = threading.Lock()
@@ -232,7 +232,8 @@ class IntelSyclBackend:
                   else system_prompt)
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
                    "stream": True, "max_tokens": self.config.max_answer_tokens, "temperature": self.config.temperature,
-                   "top_p": self.config.top_p, "top_k": self.config.top_k}
+                   "top_p": self.config.top_p, "top_k": self.config.top_k,
+                   "repeat_penalty": self.config.repeat_penalty}
         with self._progress_lock:
             self._progress = self._new_progress(); self._progress.update(active=True, phase="waiting_first_token",
                                                                           started_monotonic=started)

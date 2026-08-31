@@ -39,7 +39,9 @@ class InferenceRuntimeManager:
                 max_context_documents=getattr(profile, "max_context_documents", 6),
                 max_context_blocks=getattr(profile, "max_context_blocks", 12),
                 max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
-                temperature=getattr(profile, "temperature", .2))
+                temperature=getattr(profile, "temperature", .2),
+                top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
+                repeat_penalty=getattr(profile, "repeat_penalty", 1.0))
             return IntelSyclBackend(settings["chat_model_path"], config, self.accelerators.runtime_root,
                 self.accelerators.server_path(), getattr(profile, "chat_template_kwargs", None))
         return self._factory(settings, profile)
@@ -52,7 +54,9 @@ class InferenceRuntimeManager:
             max_context_documents=getattr(profile, "max_context_documents", 6),
             max_context_blocks=getattr(profile, "max_context_blocks", 12),
             max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
-            temperature=getattr(profile, "temperature", .2))
+            temperature=getattr(profile, "temperature", .2),
+            top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
+            repeat_penalty=getattr(profile, "repeat_penalty", 1.0))
         return LlamaCppBackend(settings["chat_model_path"], config,
             getattr(profile, "chat_template_kwargs", None))
 
