@@ -63,7 +63,7 @@ def test_title_separator_normalization_without_reindex(variant):
     assert matching["evidence_score"] > unrelated["evidence_score"]
 
 
-def test_service_pipeline_builds_context_from_24_sub_point_55_hits(tmp_path):
+def test_scalar_service_rejects_24_topical_sub_point_55_hits(tmp_path):
     documents = tuple((document_id, "content") for document_id in range(1, 9))
     rows = []
     for document_id in range(1, 9):
@@ -73,11 +73,8 @@ def test_service_pipeline_builds_context_from_24_sub_point_55_hits(tmp_path):
                                  vector=.58 - offset * .01, lexical=.45))
     rag, backend = service(tmp_path, rows, documents=documents)
     response = rag.ask("What is the density of n-Heptane 99%?")
-    assert response["status"] == "answered"
-    assert response["decision"]["reason"] == "multiple_support"
-    assert response["context"]["selected_documents"] >= 1
-    assert response["context"]["selected_blocks"] > 0
-    assert backend.calls
+    assert response["status"] == "insufficient_evidence"
+    assert not backend.calls
 
 
 def test_search_more_status_and_depth_contract_is_explicit():
