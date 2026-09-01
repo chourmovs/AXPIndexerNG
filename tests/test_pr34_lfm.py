@@ -5,10 +5,10 @@ from axp_client.rag.model_catalog import CATALOG_VERSION, MODELS, catalog_model
 
 
 def test_lfm_catalog_contract_and_existing_model_identity():
-    assert CATALOG_VERSION == 2
+    assert CATALOG_VERSION == 3
     assert [model.id for model in MODELS] == [
-        "qwen3-1.7b-q4km", "smollm3-3b-q4km", "lfm25-1.2b-qad-q4"]
-    qwen, smol, lfm = MODELS
+        "qwen3-1.7b-q4km", "smollm3-3b-q4km", "lfm25-1.2b-qad-q4", "lfm25-2.6b-q4"]
+    qwen, smol, lfm, lfm26 = MODELS
     assert (qwen.repository, qwen.revision, qwen.filename, qwen.sha256, qwen.size_bytes) == (
         "ggml-org/Qwen3-1.7B-GGUF", "daeb8e2d528a760970442092f6bf1e55c3b659eb",
         "Qwen3-1.7B-Q4_K_M.gguf", "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
@@ -21,14 +21,14 @@ def test_lfm_catalog_contract_and_existing_model_identity():
         "LiquidAI/LFM2.5-1.2B-Instruct-GGUF", "6767265158422fb8a19c62ceb45f16f05363615b",
         "LFM2.5-1.2B-Instruct-QAD-Q4_0.gguf",
         "bb741ebb106d543e9de114b843a3d3d73d51c74b5801e69da2abde821a0cb3e1", 695_755_488)
-    assert (qwen.recommended, smol.recommended, lfm.recommended) == (True, False, False)
-    assert (qwen.experimental, smol.experimental, lfm.experimental) == (True, False, True)
+    assert (qwen.recommended, smol.recommended, lfm.recommended, lfm26.recommended) == (True, False, False, False)
+    assert (qwen.experimental, smol.experimental, lfm.experimental, lfm26.experimental) == (True, False, True, True)
     assert lfm.license == "LFM Open License v1.0"
 
 
 def test_public_quantization_and_maturity_are_model_owned():
     public = {model.id: model.public() for model in MODELS}
-    assert [public[model.id]["quantization"] for model in MODELS] == ["Q4_K_M", "Q4_K_M", "QAD Q4_0"]
+    assert [public[model.id]["quantization"] for model in MODELS] == ["Q4_K_M", "Q4_K_M", "QAD Q4_0", "Q4_0"]
     assert public["lfm25-1.2b-qad-q4"]["experimental"] is True
     assert public["qwen3-1.7b-q4km"]["recommended"] is True
 
@@ -45,7 +45,7 @@ def test_thinking_and_sampling_are_model_specific():
     def modern(messages, max_tokens, temperature, top_p, top_k, repeat_penalty,
                chat_template_kwargs=None):
         pass
-    qwen, smol, lfm = MODELS
+    qwen, smol, lfm, lfm26 = MODELS
     for model in (qwen, smol):
         call = invocation(model, modern)
         assert call["chat_template_kwargs"] == {"enable_thinking": False}
@@ -55,6 +55,8 @@ def test_thinking_and_sampling_are_model_specific():
     assert "chat_template_kwargs" not in call
     assert not call["messages"][0]["content"].startswith("/no_think")
     assert (call["temperature"], call["top_p"], call["top_k"], call["repeat_penalty"]) == (0.1, 0.1, 50, 1.05)
+    call = invocation(lfm26, modern)
+    assert (call["temperature"], call["top_p"], call["top_k"], call["repeat_penalty"]) == (0.1, 1.0, 50, 1.1)
 
 
 def test_legacy_qwen_no_think_fallback_but_lfm_has_no_directive():

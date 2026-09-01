@@ -5,7 +5,7 @@ the browser can never nominate a download location.
 """
 from dataclasses import asdict, dataclass, field
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,16 @@ MODELS = (
                  max_answer_tokens=160, max_evidence_tokens=1536,
                  max_context_documents=3, max_context_blocks=5, max_seeds_per_document=2,
                  temperature=0.1, top_p=0.1, top_k=50, repeat_penalty=1.05),
+    ModelProfile("lfm25-2.6b-q4", "LFM2.5 2.6B", "balanced",
+                 "LiquidAI/LFM2.5-2.6B-GGUF",
+                 "b22e29ebf6249a8c9fcdda36914743e9980595c4",
+                 "LFM2.5-2.6B-Q4_0.gguf",
+                 "91ad0c3150fdfd0d66d1abc0fbb1491c1d4cc14ae74915ddc937345c697c3a2b",
+                 1_593_894_720, "~1.59 GB", license="LFM Open License v1.0",
+                 quantization="Q4_0", experimental=True, recommended=False,
+                 context_size=6144, max_answer_tokens=256, max_evidence_tokens=3072,
+                 max_context_documents=4, max_context_blocks=8, max_seeds_per_document=2,
+                 temperature=0.1, top_p=1.0, top_k=50, repeat_penalty=1.1),
 )
 
 

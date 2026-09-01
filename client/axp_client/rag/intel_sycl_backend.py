@@ -35,10 +35,26 @@ OFFLOAD_RE = re.compile(r"offload(?:ed|ing)?\s+(\d+)(?:\s*/\s*|\s+of\s+)(\d+)\s+
 BUFFER_RE = re.compile(r"(SYCL\d*|GPU|CPU|model).*?buffer size\s*=\s*([\d.]+)\s*(KiB|MiB|GiB|KB|MB|GB|B)", re.I)
 MAX_GPU_MARKERS = 32
 LOGGER = logging.getLogger("axp_client")
+DEVICE_LOST_TYPE = "intel_gpu_device_lost"
+DEVICE_LOST_CODE = "UR_RESULT_ERROR_DEVICE_LOST"
+DEVICE_LOST_REASON = "The Intel GPU inference device was reset during generation."
 
 
 class IntelSyclError(RuntimeError):
     pass
+
+
+def classify_native_failure(text):
+    """Classify specific fatal native markers without treating generic SYCL output as fatal."""
+    value = str(text)
+    device_lost = (bool(re.search(r"UR_RESULT_ERROR_DEVICE_LOST", value, re.I)) or
+                   bool(re.search(r"level_zero backend failed with error:\s*20\b", value, re.I)) or
+                   (bool(re.search(r"SYCL error", value, re.I)) and
+                    bool(re.search(r"DEVICE[_ ]LOST", value, re.I))))
+    if device_lost:
+        return {"failure_type": DEVICE_LOST_TYPE, "failure_code": DEVICE_LOST_CODE,
+                "failure_reason": DEVICE_LOST_REASON, "retryable": True}
+    return None
 
 
 def parse_sse(lines):
@@ -82,6 +98,11 @@ class IntelSyclBackend:
         self._load_cancel = threading.Event(); self._load_progress_lock = threading.Lock()
         self._load_progress = self._new_load_progress(); self._api_key = None
         self._auth_dir = self._auth_file = None; self._reader_thread = None
+        self._native_failure_lock = threading.Lock(); self._native_failure = None
+        self.device_loss_count = 0; self.last_device_loss_at = None
+        self.last_device_loss_code = None
+        self.device_recovery_attempted = False; self.device_recovery_succeeded = False
+        self._startup_result = "not_started"
 
     @staticmethod
     def _new_progress():
@@ -159,6 +180,12 @@ class IntelSyclBackend:
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
                 "gpu_buffer_bytes": self.gpu_buffer_bytes, "cpu_buffer_bytes": self.cpu_buffer_bytes,
                 "native_gpu_markers": list(self.native_gpu_markers),
+                "startup_result": self._startup_result, "terminal_result": self._session_result,
+                "device_loss_count": self.device_loss_count,
+                "last_device_loss_at": self.last_device_loss_at,
+                "last_device_loss_code": self.last_device_loss_code,
+                "device_recovery_attempted": self.device_recovery_attempted,
+                "device_recovery_succeeded": self.device_recovery_succeeded,
                 "accelerator_state": "confirmed" if self.gpu_offload_confirmed else "unconfirmed",
                 "generation_phase": progress["phase"], "generation_elapsed_s": progress["elapsed_s"],
                 "time_to_first_token_ms": progress["time_to_first_token_ms"],
@@ -200,6 +227,28 @@ class IntelSyclBackend:
         if strong:
             self.gpu_offload_confirmed = True
 
+    def _record_native_failure(self, text, phase=None):
+        failure = classify_native_failure(text)
+        if failure is None:
+            return None
+        with self._native_failure_lock:
+            if self._native_failure is None:
+                timestamp = datetime.now(timezone.utc).isoformat()
+                self._native_failure = {**failure, "timestamp": timestamp,
+                                        "phase": phase or self._progress.get("phase", "unknown")}
+                self.device_loss_count += 1; self.last_device_loss_at = timestamp
+                self.last_device_loss_code = DEVICE_LOST_CODE; self._session_result = "device_lost"
+                # Make health truthful as soon as the reader observes the fatal marker;
+                # generation performs the full teardown on its error path.
+                self._model_state = "unloaded"; self.gpu_offload_confirmed = False
+                LOGGER.error("Intel DEVICE_LOST detected session_id=%s device_id=%s model_id=%s failure_code=%s",
+                             self.session_id, self.sycl_device_id, self.model_path.stem, DEVICE_LOST_CODE)
+            return dict(self._native_failure)
+
+    def _native_failure_snapshot(self):
+        with self._native_failure_lock:
+            return dict(self._native_failure) if self._native_failure else None
+
     def _endpoint(self, path): return f"http://{LOOPBACK}:{self._port}{path}"
 
     @staticmethod
@@ -235,9 +284,12 @@ class IntelSyclBackend:
                 if phase:
                     with self._load_progress_lock: self._load_progress["phase"] = phase
                 self._record_native_evidence(line)
+                recent = "".join(self._diagnostic[-20:])
+                self._record_native_failure(recent, phase)
         finally:
             footer = ("=== AXP INTEL SESSION END ===\n"
                 f"timestamp={datetime.now(timezone.utc).isoformat()}\nresult={self._session_result}\n"
+                f"startup_result={self._startup_result}\nterminal_result={self._session_result}\n"
                 f"offloaded_layers={self.offloaded_layers}\ngpu_buffer_bytes={self.gpu_buffer_bytes}\n"
                 f"cpu_buffer_bytes={self.cpu_buffer_bytes}\n"
                 f"native_lines_seen={self._load_progress.get('native_lines_seen', 0)}\n")
@@ -253,11 +305,15 @@ class IntelSyclBackend:
             handle.write(self._api_key); handle.flush(); os.fsync(handle.fileno())
 
     def _sidecar_command(self):
-        """Build the pinned runtime command without ever embedding key material."""
+        """Build the pinned runtime command without ever embedding key material.
+
+        Disabling the RAM prompt cache is a targeted mitigation for the field
+        failure observed during ``prompt_save``; it is not an upstream fix.
+        """
         return [str(self.server_path), "--model", str(self.model_path), "--host", LOOPBACK,
                 "--port", str(self._port), "--ctx-size", str(self.config.context_size),
                 "--parallel", "1", "--device", self.sycl_device_id, "--split-mode", "none",
-                "--n-gpu-layers", "all", "--api-key-file", str(self._auth_file),
+                "--n-gpu-layers", "all", "--cache-ram", "0", "--api-key-file", str(self._auth_file),
                 "-lv", str(self.verbosity)]
 
     def _request(self, path, payload=None, timeout=None):
@@ -299,7 +355,8 @@ class IntelSyclBackend:
             self.offloaded_layers = self.total_layers = None
             self.gpu_buffer_bytes = self.cpu_buffer_bytes = None
             self.native_gpu_markers = []
-            self.session_id = uuid.uuid4().hex; self._session_result = "starting"
+            with self._native_failure_lock: self._native_failure = None
+            self.session_id = uuid.uuid4().hex; self._session_result = "starting"; self._startup_result = "starting"
             self._load_cancel.clear(); self._create_auth(); self._load_progress = self._new_load_progress()
             with self._load_progress_lock:
                 self._load_progress.update(active=True, phase="spawning", started_monotonic=started,
@@ -323,8 +380,9 @@ class IntelSyclBackend:
                     if self._load_cancel.is_set(): raise IntelSyclError("intel_gpu_model_load_cancelled")
                     if self._process.poll() is not None:
                         text = "".join(self._diagnostic).lower()
+                        native = self._native_failure_snapshot() or classify_native_failure(text)
                         code = ("intel_gpu_out_of_memory" if re.search(r"out of memory|bad_alloc|allocation failed", text)
-                                else "intel_gpu_device_lost" if "device lost" in text
+                                else DEVICE_LOST_TYPE if native
                                 else "intel_gpu_model_unsupported" if "unsupported model" in text
                                 else "intel_gpu_process_exited")
                         raise IntelSyclError(code)
@@ -349,19 +407,25 @@ class IntelSyclBackend:
                     raise IntelSyclError("intel_gpu_offload_not_confirmed")
                 self._model_state = "loaded"; self._load_ms = (self._monotonic() - started) * 1000; self._failure = {}
                 self._session_result = "offload_confirmed"
+                self._startup_result = "offload_confirmed"
                 LOGGER.info("Intel offload confirmed session_id=%s pid=%s load_ms=%.1f offloaded_layers=%s total_layers=%s gpu_buffer_bytes=%s cpu_buffer_bytes=%s",
                             self.session_id, self._process.pid, self._load_ms, self.offloaded_layers,
                             self.total_layers, self.gpu_buffer_bytes, self.cpu_buffer_bytes)
                 with self._load_progress_lock: self._load_progress.update(active=False, phase="ready")
             except Exception as exc:
-                self._failure = {"failure_type": str(exc) if isinstance(exc, IntelSyclError) else "intel_gpu_backend_failed",
-                                 "failure_reason": "Intel GPU inference could not be started.", "retryable": True}
+                native = self._native_failure_snapshot()
+                self._failure = (native or
+                    {"failure_type": str(exc) if isinstance(exc, IntelSyclError) else "intel_gpu_backend_failed",
+                     "failure_reason": "Intel GPU inference could not be started.", "retryable": True})
                 code = self._failure["failure_type"]
-                self._model_state = "unloaded" if code == "intel_gpu_model_load_cancelled" else "failed"
+                self._model_state = "unloaded" if code in ("intel_gpu_model_load_cancelled", DEVICE_LOST_TYPE) else "failed"
                 with self._load_progress_lock:
                     self._load_progress.update(active=False, phase="cancelled" if code.endswith("cancelled") else
                         "timed_out" if code.endswith("timeout") else "failed", failure_type=code,
                         failure_reason=self._failure["failure_reason"])
+                if code == DEVICE_LOST_TYPE:
+                    self._invalidate_device_lost()
+                    raise IntelSyclError(DEVICE_LOST_TYPE) from exc
                 self.close(failed=True); raise
         return self
 
@@ -388,8 +452,12 @@ class IntelSyclBackend:
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
                    "stream": True, "max_tokens": self.config.max_answer_tokens if max_tokens is None else max_tokens,
                    "return_progress": True,
+                   "temperature": self.config.temperature,
                    "top_p": self.config.top_p, "top_k": self.config.top_k,
                    "repeat_penalty": self.config.repeat_penalty}
+        LOGGER.info("Intel generation sampler session_id=%s temperature=%s top_p=%s top_k=%s repeat_penalty=%s",
+                    self.session_id, self.config.temperature, self.config.top_p, self.config.top_k,
+                    self.config.repeat_penalty)
         with self._progress_lock:
             self._progress = self._new_progress(); self._progress.update(active=True, phase="waiting_first_token",
                                                                           started_monotonic=started)
@@ -422,6 +490,8 @@ class IntelSyclBackend:
                                 generated_characters=self._progress["generated_characters"] + len(content),
                                 time_to_first_token_ms=(first-started)*1000, last_fragment_monotonic=now)
             ended = time.perf_counter(); answer = THINK_RE.sub("", "".join(fragments)).strip()
+            if self._native_failure_snapshot():
+                raise IntelSyclError(DEVICE_LOST_TYPE)
             completion = self.count_tokens(answer) if answer else 0; generation_ms = (ended-started)*1000
             decode_ms = (ended-first)*1000 if first else None
             timing = native_timings or {}
@@ -450,6 +520,10 @@ class IntelSyclBackend:
             raise
         except Exception as exc:
             with self._progress_lock: self._progress.update(active=False, phase="failed")
+            native = self._native_failure_snapshot()
+            if native:
+                self._invalidate_device_lost()
+                raise IntelSyclError(DEVICE_LOST_TYPE) from exc
             if isinstance(exc, IntelSyclError): raise
             chain, current = [], exc
             while current is not None and current not in chain:
@@ -465,6 +539,14 @@ class IntelSyclBackend:
                 self._model_state = "unloaded"
                 raise IntelSyclError("intel_gpu_generation_connection_lost") from exc
             raise IntelSyclError("intel_gpu_generation_failed") from exc
+
+    def _invalidate_device_lost(self):
+        """DEVICE_LOST invalidates the complete live SYCL context."""
+        self._session_result = "device_lost"
+        self._failure = {"failure_type": DEVICE_LOST_TYPE, "failure_code": DEVICE_LOST_CODE,
+                         "failure_reason": DEVICE_LOST_REASON, "retryable": True}
+        self.close(failed=True)
+        self._model_state = "unloaded"; self.gpu_offload_confirmed = False
 
     def close(self, failed=False):
         process, self._process = self._process, None

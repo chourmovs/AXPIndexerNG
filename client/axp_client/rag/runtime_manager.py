@@ -1,11 +1,12 @@
 """Hot-switchable local inference runtime."""
 import logging
 import threading
+import time
 
 from .hardware import detect_hardware
 from .accelerator_manager import AcceleratorManager
-from .intel_sycl_backend import IntelSyclBackend
-from .llama_cpp_backend import GenerationConfig, LlamaCppBackend
+from .intel_sycl_backend import DEVICE_LOST_TYPE, IntelSyclBackend, IntelSyclError
+from .llama_cpp_backend import GenerationCancelled, GenerationConfig, LlamaCppBackend
 from .model_catalog import catalog_model
 
 ALLOWED_DEVICES = {"auto", "cpu", "intel_gpu"}
@@ -44,6 +45,8 @@ class InferenceRuntimeManager:
         self._intel_factory = intel_backend_factory
         self._hardware_probe = hardware_probe or detect_hardware
         self.settings = dict(settings)
+        self._device_loss_count = 0; self._last_device_loss_at = None
+        self._device_recovery_attempted = False; self._device_recovery_succeeded = False
         self.accelerators = accelerator_manager or AcceleratorManager(__import__("axp_core.runtime", fromlist=["data_dir"]).data_dir())
         server = self.accelerators.server_path()
         self.hardware = hardware or detect_hardware(server, self.accelerators.runtime_root)
@@ -149,6 +152,46 @@ class InferenceRuntimeManager:
         self._qualify_intel()
         return self.backend.count_tokens(text)
 
+    def generate(self, *, system_prompt, user_prompt, max_tokens=None):
+        """Generate with at most one fresh, Intel-only recovery after DEVICE_LOST."""
+        self._qualify_intel()
+        with self._lock:
+            backend = self.backend; model_id = self.settings.get("chat_active_model_id")
+        try:
+            return backend.generate(system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=max_tokens)
+        except GenerationCancelled:
+            raise
+        except IntelSyclError as exc:
+            if str(exc) != DEVICE_LOST_TYPE or not isinstance(backend, IntelSyclBackend):
+                raise
+            self._device_loss_count += 1
+            self._last_device_loss_at = backend.last_device_loss_at
+            self._device_recovery_attempted = True; self._device_recovery_succeeded = False
+            LOGGER.warning("Intel DEVICE_LOST recovery attempt=1 model_id=%s device_id=%s",
+                           model_id, backend.sycl_device_id)
+            time.sleep(0.1)
+            with self._lock:
+                if self.backend is not backend or self.settings.get("chat_active_model_id") != model_id:
+                    LOGGER.warning("Intel DEVICE_LOST recovery failed failure_type=model_runtime_changed")
+                    raise IntelSyclError("intel_gpu_recovery_model_changed") from exc
+                recovery_settings = dict(self.settings); recovery_settings["chat_inference_device"] = "intel_gpu"
+                replacement = self._make_backend(recovery_settings, catalog_model(model_id))
+                self.backend = replacement
+            backend.close()
+            try:
+                replacement.ensure_loaded()
+                answer = replacement.generate(system_prompt=system_prompt, user_prompt=user_prompt,
+                                              max_tokens=max_tokens)
+            except GenerationCancelled:
+                raise
+            except IntelSyclError as recovery_error:
+                LOGGER.warning("Intel DEVICE_LOST recovery failed failure_type=%s", recovery_error)
+                raise
+            self._device_recovery_succeeded = True
+            LOGGER.info("Intel DEVICE_LOST recovery succeeded new_session_id=%s offloaded_layers=%s",
+                        replacement.session_id, replacement.offloaded_layers)
+            return answer
+
     def health(self):
         value = self.backend.health()
         requested = self.settings.get("chat_inference_device", "auto")
@@ -184,4 +227,9 @@ class InferenceRuntimeManager:
                      intel_gpu_available=self.hardware.intel_gpu_available,
                      accelerator_available=self.hardware.intel_gpu_available,
                      accelerator_reason=accelerator_reason)
+        value.update(device_loss_count=self._device_loss_count,
+                     last_device_loss_at=self._last_device_loss_at,
+                     last_device_loss_code=("UR_RESULT_ERROR_DEVICE_LOST" if self._last_device_loss_at else None),
+                     device_recovery_attempted=self._device_recovery_attempted,
+                     device_recovery_succeeded=self._device_recovery_succeeded)
         return value
