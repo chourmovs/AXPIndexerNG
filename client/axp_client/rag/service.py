@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 import time
 import uuid
@@ -17,6 +18,9 @@ from .retrieval import rank_documents, retrieve_document_passages, retrieve_rag_
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
+CITATION_REPAIR_MAX_TOKENS = 64
+CITATION_REPAIR_MAX_ANSWER_CHARACTERS = 800
+CITATION_REPAIR_MAX_SOURCES = 3
 
 
 def select_supporting_documents(content, maximum=2):
@@ -351,6 +355,17 @@ class RagService:
                     context.diagnostics["selected_chunk_ranges"], depth.target_evidence_tokens,
                     context.diagnostics["evidence_budget_tokens"], depth.target_answer_tokens,
                     context_telemetry["context_limited"], reduced)
+        primary_by_document = {}
+        for block in context.blocks:
+            primary_by_document.setdefault(block.document_id, block)
+        LOGGER.info("RAG final evidence request_id=%s documents=%s context_documents=%s context_blocks=%s "
+                    "evidence_tokens=%s", request_id, [{"rank": block.document_rank,
+                        "document_id": block.document_id, "filename": block.filename,
+                        "primary_seed_chunk": block.seed_chunk_no, "primary_page": block.page_no,
+                        "passage_score": block.relevance_score,
+                        "scoped_lexical_rank": block.relevance_signals.get("scoped_lexical_rank")}
+                    for block in primary_by_document.values()], context.diagnostics["selected_documents"],
+                    context.diagnostics["selected_blocks"], evidence_tokens)
         generation_start = time.perf_counter()
         try:
             try:
@@ -413,19 +428,28 @@ class RagService:
                 validation_reason, cited = classify_citations(answer, supplied_ids)
                 citation_validation_ms = (time.perf_counter() - validation_start) * 1000
                 citation_repair_ms = 0.0
+                citation_repair_attempted = False
+                citation_repair_reason = "not_needed"
                 LOGGER.info("RAG citation validation request_id=%s validation_reason=%s cited_ids=%s "
                             "supplied_ids=%s", request_id, validation_reason, sorted(cited), supplied_ids)
-                if validation_reason != "valid" and (answer or "").strip():
+                meaningful_prose = len(re.findall(r"\w+", (answer or "").strip())) >= 4
+                repair_allowed = (validation_reason == "missing_citation" and meaningful_prose and
+                                  1 <= len(supplied_ids) <= CITATION_REPAIR_MAX_SOURCES and
+                                  len(answer) <= CITATION_REPAIR_MAX_ANSWER_CHARACTERS)
+                if repair_allowed:
                     repair_start = time.perf_counter()
-                    repair_prompt = ("Rewrite the answer using ONLY the supplied evidence below. Remove every "
-                        "unsupported claim. Every factual claim must cite one of these allowed citation IDs: "
-                        f"{supplied_ids}. If it cannot be grounded, output exactly INSUFFICIENT_EVIDENCE.\n\n"
+                    citation_repair_attempted = True
+                    citation_repair_reason = "missing_citation_short_grounded_prose"
+                    repair_prompt = ("Return the same factual answer ONLY if every claim is supported by the "
+                        f"supplied sources {supplied_ids}. Add only allowed citations. Otherwise output exactly "
+                        "INSUFFICIENT_EVIDENCE. Do not add claims.\n\n"
                         f"Original answer:\n{answer}\n\n{context.prompt_text}")
                     if not self._generation_lock.acquire(blocking=False):
                         raise ChatBusyError
                     try:
                         answer = self.backend.generate(system_prompt=SYSTEM_PROMPT, user_prompt=repair_prompt,
-                                                       max_tokens=min(256, effective_answer_tokens))
+                                                       max_tokens=min(CITATION_REPAIR_MAX_TOKENS,
+                                                                      effective_answer_tokens))
                     finally:
                         self._generation_lock.release()
                     citation_repair_ms = (time.perf_counter() - repair_start) * 1000
@@ -435,6 +459,13 @@ class RagService:
                         validation_reason, cited = classify_citations(answer, supplied_ids)
                     LOGGER.info("RAG citation repair request_id=%s validation_reason=%s cited_ids=%s "
                                 "supplied_ids=%s", request_id, validation_reason, sorted(cited), supplied_ids)
+                elif validation_reason != "valid":
+                    citation_repair_reason = validation_reason
+                LOGGER.info("RAG citation repair telemetry request_id=%s citation_repair_attempted=%s "
+                            "citation_repair_reason=%s citation_repair_max_tokens=%s citation_repair_ms=%.1f",
+                            request_id, citation_repair_attempted, citation_repair_reason,
+                            CITATION_REPAIR_MAX_TOKENS if citation_repair_attempted else 0,
+                            citation_repair_ms)
                 if validation_reason == "valid":
                     base.update(status="answered", answerable=True, answer=answer,
                                 sources=[block.source() for block in context.blocks if block.id in cited])
@@ -476,6 +507,11 @@ class RagService:
                     telemetry.get("generation_ms"), POLICY.preferred_seconds, reduced)
         LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s generation_ms=%.1f", request_id,
                     base["decision"]["reason"], len(candidates), decision.content_documents, generation_ms)
+        LOGGER.info("RAG latency request_id=%s global_retrieval_ms=%.1f drilldown_ms=%.1f model_load_ms=%.1f "
+                    "context_ms=%.1f generation_ms=%.1f citation_repair_ms=%.1f total_ms=%.1f", request_id,
+                    base["timings"]["global_retrieval_ms"], drill_timings.get("drilldown_total_ms", 0.0),
+                    model_load_ms, context_ms, generation_ms, base["timings"]["citation_repair_ms"],
+                    base["timings"]["total_ms"])
         return base
 
     @staticmethod

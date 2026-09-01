@@ -16,6 +16,10 @@ class EvidenceBlock:
     relevance_score: float
     text: str
     relevance_signals: dict = field(default_factory=dict)
+    seed_chunk_id: int | None = None
+    seed_chunk_no: int | None = None
+    document_rank: int | None = None
+    passage_rank: int | None = None
 
     def source(self):
         value = asdict(self)

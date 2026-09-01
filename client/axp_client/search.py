@@ -20,11 +20,10 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     documents = rank_documents(result["results"])[:2]
     drilldown = retrieve_document_passages(con, embedder, query,
         [document["document_id"] for document in documents], query_vector=vector, config=active_config)
-    merged = {int(row["chunk_id"]): row for row in result["results"]}
-    # Scoped copies intentionally win because they carry complete passage diagnostics.
-    merged.update({int(row["chunk_id"]): row for row in drilldown.passages})
-    ranked = sorted(merged.values(), key=lambda row: (-float(row.get("passage_score") or 0),
-                                                       int(row["chunk_id"])))
+    # The drill-down result is already grouped by authoritative document rank.
+    ranked = list(drilldown.passages)
+    seen = {int(row["chunk_id"]) for row in ranked}
+    ranked.extend(row for row in result["results"] if int(row["chunk_id"]) not in seen)
     result["results"] = diversify(ranked, limit, active_config.max_chunks_per_document)
     for rank, row in enumerate(result["results"], 1):
         row["final_rank"] = rank

@@ -451,6 +451,19 @@ class IntelSyclBackend:
         except Exception as exc:
             with self._progress_lock: self._progress.update(active=False, phase="failed")
             if isinstance(exc, IntelSyclError): raise
+            chain, current = [], exc
+            while current is not None and current not in chain:
+                chain.append(current)
+                current = current.__cause__ or current.__context__
+            reset = any(isinstance(error, (ConnectionResetError, BrokenPipeError)) or
+                        getattr(error, "winerror", None) == 10054 for error in chain)
+            process_exited = self._process is not None and self._process.poll() is not None
+            if reset or process_exited:
+                self._failure = {"failure_type": "intel_gpu_generation_connection_lost",
+                    "failure_reason": "The Intel generation sidecar connection was lost.", "retryable": True}
+                self.close(failed=True)
+                self._model_state = "unloaded"
+                raise IntelSyclError("intel_gpu_generation_connection_lost") from exc
             raise IntelSyclError("intel_gpu_generation_failed") from exc
 
     def close(self, failed=False):
