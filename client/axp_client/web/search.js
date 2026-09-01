@@ -7,10 +7,13 @@ function queryTerms(query) { const phrases = [...query.matchAll(/"([^"]+)"/gu)].
 const percent = value => Math.round(Math.max(0, Math.min(1, Number.isFinite(Number(value)) ? Number(value) : 0)) * 100);
 function renderResult(row, terms) { const article = element('article', 'result-card'); const header = element('div', 'result-header');
   const title = element('h3'); appendHighlighted(title, row.title || row.filename || row.path, terms);
-  const score = element('span', 'relevance', `Relevance ${percent(row.relevance_score)}%`); const details = [];
+  const score = element('span', 'relevance', `Match ${percent(row.passage_score)}%`); const details = [];
+  if (row.passage_score != null) details.push(`Passage score: ${percent(row.passage_score)}%`);
   if (row.vector_similarity != null) details.push(`Vector similarity: ${percent(row.vector_similarity)}%`);
   if (row.content_lexical_coverage != null) details.push(`Content lexical coverage: ${percent(row.content_lexical_coverage)}%`);
   if (row.title_coverage != null) details.push(`Title coverage: ${percent(row.title_coverage)}%`);
+  if (row.filename_coverage != null) details.push(`Filename coverage: ${percent(row.filename_coverage)}%`);
+  if (row.document_score != null) details.push(`Document score: ${percent(row.document_score)}%`);
   if (row.convergence_score != null) details.push(`Convergence: ${percent(row.convergence_score)}%`);
   score.title = details.join('\n'); header.append(title, score);
   const path = element('div', 'path', row.path); const source = element('small', '', `Source: ${row.source_label || row.source_path || '—'}`);

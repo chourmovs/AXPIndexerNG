@@ -50,7 +50,7 @@ def windows_display_adapters():
     return devices
 
 
-def detect_hardware(accelerator_executable=None, accelerator_runtime_root=None):
+def detect_hardware(accelerator_executable=None, accelerator_runtime_root=None, *, probe_timeout=15):
     if platform.system() != "Windows":
         return HardwareCapabilities(platform.processor() or platform.machine() or "Unknown CPU",
                                     accelerator_reason="unsupported_platform")
@@ -63,7 +63,7 @@ def detect_hardware(accelerator_executable=None, accelerator_runtime_root=None):
                        or re.search(r"VEN_8086", item["DeviceID"], re.I))), None)
     available = False
     reason = "accelerator_not_installed" if intel else "no_intel_gpu"
-    probe = probe_sycl(accelerator_executable, accelerator_runtime_root) if accelerator_executable else None
+    probe = probe_sycl(accelerator_executable, accelerator_runtime_root, probe_timeout) if accelerator_executable else None
     available = bool(probe and probe["ok"])
     if probe:
         reason = None if available else probe["error_code"]

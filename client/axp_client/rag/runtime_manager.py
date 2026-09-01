@@ -16,12 +16,33 @@ class InferenceDeviceError(ValueError):
     pass
 
 
+class _PendingIntelBackend:
+    """Non-CPU placeholder used until bounded, on-demand qualification."""
+    def __init__(self, profile, reason):
+        self.config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
+            max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
+            max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
+            max_context_documents=getattr(profile, "max_context_documents", 6),
+            max_context_blocks=getattr(profile, "max_context_blocks", 12),
+            max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3))
+        self.reason = reason
+
+    def health(self):
+        return {"available": True, "backend": "intel_sycl", "model_state": "unloaded",
+                "accelerator_state": "probe_timeout" if self.reason == "intel_sycl_probe_timeout" else "unverified",
+                "failure_type": self.reason, "retryable": True, "gpu_offload_confirmed": False}
+
+    def close(self):
+        return None
+
+
 class InferenceRuntimeManager:
     def __init__(self, settings, backend_factory=None, hardware=None, intel_backend_factory=None,
-                 accelerator_manager=None):
+                 accelerator_manager=None, hardware_probe=None):
         self._lock = threading.RLock()
         self._factory = backend_factory or self._cpu_backend
         self._intel_factory = intel_backend_factory
+        self._hardware_probe = hardware_probe or detect_hardware
         self.settings = dict(settings)
         self.accelerators = accelerator_manager or AcceleratorManager(__import__("axp_core.runtime", fromlist=["data_dir"]).data_dir())
         server = self.accelerators.server_path()
@@ -34,7 +55,9 @@ class InferenceRuntimeManager:
 
     def _make_backend(self, settings, profile):
         requested = settings.get("chat_inference_device", "auto")
-        if requested == "intel_gpu" and self.hardware.intel_gpu_available:
+        if requested == "intel_gpu" and not self.hardware.intel_gpu_available:
+            return _PendingIntelBackend(profile, self.hardware.sycl_probe_error or self.hardware.accelerator_reason)
+        if requested in {"intel_gpu", "auto"} and self.hardware.intel_gpu_available:
             if self._intel_factory:
                 return self._intel_factory(settings, profile)
             config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
@@ -89,8 +112,8 @@ class InferenceRuntimeManager:
     def _validate_device(self, device):
         if device not in ALLOWED_DEVICES:
             raise InferenceDeviceError("invalid_inference_device")
-        if device == "intel_gpu" and not self.hardware.intel_gpu_available:
-            raise InferenceDeviceError("intel_gpu_unavailable")
+        # Explicit Intel selection is retained even while qualification is
+        # inconclusive; generation will either qualify Intel or fail explicitly.
 
     def set_device(self, device):
         self._validate_device(device)
@@ -107,6 +130,25 @@ class InferenceRuntimeManager:
     def __getattr__(self, name):
         return getattr(self.backend, name)
 
+    def _qualify_intel(self):
+        with self._lock:
+            if not isinstance(self.backend, _PendingIntelBackend):
+                return
+            self.hardware = self._hardware_probe(self.accelerators.server_path(), self.accelerators.runtime_root,
+                                                 probe_timeout=30)
+            if not self.hardware.intel_gpu_available:
+                reason = self.hardware.sycl_probe_error or self.hardware.accelerator_reason or "intel_gpu_unavailable"
+                raise InferenceDeviceError(reason)
+            self.backend = self._make_backend(self.settings, catalog_model(self.settings.get("chat_active_model_id")))
+
+    def ensure_loaded(self):
+        self._qualify_intel()
+        return self.backend.ensure_loaded()
+
+    def count_tokens(self, text):
+        self._qualify_intel()
+        return self.backend.count_tokens(text)
+
     def health(self):
         value = self.backend.health()
         requested = self.settings.get("chat_inference_device", "auto")
@@ -115,13 +157,16 @@ class InferenceRuntimeManager:
         fallback = accelerator_reason if requested != "cpu" else None
         if requested == "intel_gpu":
             effective = ("intel_gpu" if value.get("gpu_offload_confirmed") else
-                         "none" if value.get("backend") == "intel_sycl" else "cpu")
+                         "intel_gpu" if value.get("backend") == "intel_sycl" else "none")
+        elif requested == "auto" and value.get("backend") == "intel_sycl":
+            effective = "intel_gpu" if value.get("gpu_offload_confirmed") else "intel_gpu"
         else:
             effective = "cpu"
         value.update(active_model_id=self.settings.get("chat_active_model_id"),
                      active_model_name=profile.name if profile else value.get("model_name"),
                      inference_device_requested=requested,
-                     inference_device_effective=effective, fallback_reason=(None if effective == "intel_gpu" else fallback),
+                     inference_device_effective=effective,
+                     fallback_reason=(fallback if requested == "auto" and effective == "cpu" else None),
                      intel_gpu_detected=self.hardware.intel_gpu_detected,
                      intel_gpu_name=self.hardware.intel_gpu_name,
                      intel_gpu_vendor_id=self.hardware.intel_gpu_vendor_id,

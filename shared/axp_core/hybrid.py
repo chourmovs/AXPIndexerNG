@@ -83,9 +83,14 @@ def _relevance(item, query_terms, config):
     )
     v = max(0.0, min(1.0, similarity or 0.0))
     convergence = min(v, content_coverage)
+    # Passage relevance is deliberately content-only.  Metadata remains useful to
+    # the separate RAG document ranker, but must not make every chunk in a well
+    # named document look like equally good evidence.
+    passage_score = (0.58 * v + 0.24 * content_coverage + 0.18 * convergence)
     score = (0.50 * v + 0.20 * content_coverage + 0.15 * convergence + 0.10 * title_coverage
              + 0.03 * filename_coverage + 0.02 * heading_coverage)
     if accepted:
+        passage_score += 0.10 * item["exact_identifier_match"] + 0.08 * item["exact_phrase_match"]
         score += 0.10 * item["exact_identifier_match"] + 0.08 * item["exact_phrase_match"]
         score += 0.05 * item["exact_filename_match"]
     item["vector_similarity"] = similarity
@@ -95,6 +100,7 @@ def _relevance(item, query_terms, config):
     item["filename_coverage"] = float(filename_coverage)
     item["heading_coverage"] = float(heading_coverage)
     item["convergence_score"] = float(convergence)
+    item["passage_score"] = float(max(0.0, min(1.0, passage_score)))
     item["evidence_score"] = float(max(0.0, min(1.0, score)))
     item["relevance_score"] = item["evidence_score"]
     item["meaningful_exact_priority"] = int(meaningful_exact and accepted)
@@ -165,12 +171,15 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
                                    -x["evidence_score"], -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
     else:
         # Preserve the PR40 hybrid ordering exactly; reranking is quality-only.
-        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["evidence_score"],
+        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["passage_score"],
                                    -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
     final = diversify(ranked, limit, config.max_chunks_per_document)
     for rank, item in enumerate(final, 1):
         item["final_rank"] = rank
     timings["total_ms"] = (time.perf_counter() - started) * 1000
+    timings["fusion_ms"] = timings.pop("rrf_ms")
+    timings["passage_scoring_ms"] = max(0.0, timings["total_ms"] - sum(
+        timings.get(key, 0.0) for key in ("fts_retrieval_ms", "vector_retrieval_ms", "fusion_ms", "rerank_ms")))
     diagnostics = {
         "timings": timings,
         "candidate_counts": {

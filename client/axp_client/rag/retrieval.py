@@ -31,9 +31,10 @@ def rank_documents(hits):
         grouped.setdefault(int(hit["document_id"]), []).append(hit)
     ranked = []
     for document_id, rows in grouped.items():
-        rows.sort(key=lambda row: (-float(row.get("evidence_score", row.get("relevance_score")) or 0),
+        rows.sort(key=lambda row: (-float(row.get("passage_score", row.get("evidence_score", row.get("relevance_score"))) or 0),
                                    int(row.get("chunk_id") or 0)))
-        scores = [float(row.get("evidence_score", row.get("relevance_score")) or 0) for row in rows[:3]]
+        scores = [float(row.get("passage_score", row.get("evidence_score", row.get("relevance_score"))) or 0)
+                  for row in rows[:3]]
         scores += [0.0] * (3 - len(scores))
         strong = sum(bool(float(row.get("evidence_score", row.get("relevance_score")) or 0) >= .55 or
                           row.get("exact_content_identifier_match") or row.get("exact_content_phrase_match"))
@@ -44,7 +45,10 @@ def rank_documents(hits):
             "strong_hit_count": strong, "title_coverage": max(float(r.get("title_coverage") or 0) for r in rows),
             "exact_identifier_present": any(r.get("exact_content_identifier_match") for r in rows),
             "exact_phrase_present": any(r.get("exact_content_phrase_match") for r in rows),
-            "document_score": scores[0] + .20*scores[1] + .10*scores[2] + .05*min(strong, 3),
+            # Passage density and document metadata are combined only here.
+            "document_score": scores[0] + .20*scores[1] + .10*scores[2] + .05*min(strong, 3)
+                              + .10*max(float(r.get("title_coverage") or 0) for r in rows)
+                              + .03*max(float(r.get("filename_coverage") or 0) for r in rows),
             "ranked_hits": rows})
     ranked.sort(key=lambda doc: (-doc["document_score"], -int(doc["exact_identifier_present"]),
                                  -int(doc["exact_phrase_present"]), doc["document_id"]))

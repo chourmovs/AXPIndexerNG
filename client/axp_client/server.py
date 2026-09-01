@@ -145,18 +145,17 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if profile == "quality" and quality_reranker is None:
                     quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
                 with connect(db, readonly=True) as con:
-                    return self.send_json(
-                        search(
+                    result = search(
                             con,
                             embedder,
                             q,
                             profile=profile,
-                            explain=explain,
+                            explain=True,
                             reranker=quality_reranker if profile == "quality" else None,
-                        )
-                        if q
-                        else []
-                    )
+                        ) if q else {"results": [], "timings": {}, "candidate_counts": {}}
+                    LOGGER.info("Search complete query_length=%s timings=%s candidate_counts=%s",
+                                len(q), result.get("timings"), result.get("candidate_counts"))
+                    return self.send_json(result if explain else result["results"])
             if url.path == "/api/ask/health":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "ask is only available locally"}, 403)

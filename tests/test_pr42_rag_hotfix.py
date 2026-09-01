@@ -82,7 +82,7 @@ def test_service_pipeline_builds_context_from_24_sub_point_55_hits(tmp_path):
 
 def test_search_more_status_and_depth_contract_is_explicit():
     source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text(encoding="utf-8")
-    assert "['answered','insufficient_evidence','ungrounded_generation'].includes(response.status)" in source
+    assert "['answered','insufficient_evidence','ungrounded_generation','local_generation_skipped_latency_budget'].includes(response.status)" in source
     assert "response.context?.search_depth !== 1" in source
     assert "await askStream(question," in source and "},1);" in source
     assert "const question=article?.dataset.question" in source
