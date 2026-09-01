@@ -1,4 +1,5 @@
 import time
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,11 +52,12 @@ def diversify(rows, limit, maximum=3):
 
 
 def _meaningful_terms(value):
-    return {
-        match.group(0).casefold()
-        for match in TOKEN_RE.finditer(value or "")
-        if len(match.group(0)) >= 3 and match.group(0).casefold() not in QUERY_STOPWORDS
-    }
+    terms = set()
+    for match in TOKEN_RE.finditer(value or ""):
+        token = match.group(0).casefold()
+        variants = (token, *re.split(r"[-._/]", token))
+        terms.update(part for part in variants if len(part) >= 3 and part not in QUERY_STOPWORDS)
+    return terms
 
 
 def _coverage(query_terms, value):

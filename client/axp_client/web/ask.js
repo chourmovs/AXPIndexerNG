@@ -52,6 +52,8 @@ function renderResponse(article, response, turn) {
   if (response.status === 'answered' && response.answerable) renderAnswerText(answer, response.answer, turn);
   else if (response.status === 'local_generation_skipped_latency_budget') answer.textContent = 'Local answer skipped because estimated generation latency exceeds the interactive budget. Relevant evidence is shown instead.';
   else if (response.status === 'ungrounded_generation') answer.textContent = 'AXP found related evidence but could not produce a sufficiently grounded answer. Try rephrasing the question.';
+  else if (response.status === 'insufficient_evidence' && response.context?.search_depth !== 1)
+    answer.textContent = "I couldn't find enough information in the first search pass to answer this reliably. You can try Search more to inspect a broader evidence set.";
   else answer.textContent = "I couldn't find enough information in the indexed documents to answer this reliably.";
   article.append(answer);
   const documents = ['answered','local_generation_skipped_latency_budget'].includes(response.status) ? renderDocuments(turn, 'Sources', response.sources, true) :
@@ -66,7 +68,8 @@ function renderResponse(article, response, turn) {
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     article.append(meta); }
-  if (response.status === 'answered' && response.context?.search_depth !== 1) {
+  if (['answered','insufficient_evidence','ungrounded_generation'].includes(response.status) &&
+      response.context?.search_depth !== 1) {
     const more=element('button','secondary compact search-more','Search more'); more.type='button';
     more.addEventListener('click',()=>article.dispatchEvent(new CustomEvent('search-more',{bubbles:true})));
     article.append(more);

@@ -54,6 +54,17 @@ def _lexical(row):
     return float(row.get("content_lexical_coverage", row.get("lexical_coverage")) or 0)
 
 
+def is_supporting_evidence(row, config=None):
+    """Return whether a content row satisfies the answerability support boundary."""
+    config = config or AnswerabilityConfig()
+    vector_supported = _vector(row) >= config.support_vector_similarity
+    return bool(vector_supported and (
+        _lexical(row) >= config.support_lexical_coverage
+        or row.get("exact_content_identifier_match")
+        or row.get("exact_content_phrase_match")
+    ))
+
+
 def decide_answerability(results, config=None):
     config = config or AnswerabilityConfig()
     if not results:
@@ -62,8 +73,7 @@ def decide_answerability(results, config=None):
         return AnswerabilityDecision(False, "low", DecisionReason.NO_CONTENT_EVIDENCE, signals)
     strong = [r for r in results if _vector(r) >= config.strong_vector_similarity
               and _lexical(r) >= config.support_lexical_coverage]
-    support = [r for r in results if _vector(r) >= config.support_vector_similarity
-               and _lexical(r) >= config.support_lexical_coverage]
+    support = [r for r in results if is_supporting_evidence(r, config)]
     exact = [r for r in results if (r.get("exact_content_identifier_match") or r.get("exact_content_phrase_match"))
              and _vector(r) >= config.support_vector_similarity]
     signals = {"best_vector_similarity": max(map(_vector, results)),
