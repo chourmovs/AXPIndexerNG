@@ -1,8 +1,11 @@
 import time
 
 from axp_core.hybrid import SearchConfig
+from axp_core.hybrid import diversify
 from axp_core.hybrid import search as hybrid_search
 from axp_core.metadata import validate_index_signature
+
+from .rag.retrieval import rank_documents, retrieve_document_passages
 
 
 def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, reranker=None, config=None):
@@ -10,10 +13,22 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     started = time.perf_counter()
     vector = embedder.embed_query(query)
     embedding_ms = (time.perf_counter() - started) * 1000
+    active_config = config or SearchConfig()
     result = hybrid_search(
-        con, query, vector, limit, config=config or SearchConfig(), profile=profile, reranker=reranker, explain=explain
+        con, query, vector, limit, config=active_config, profile=profile, reranker=reranker, explain=True
     )
-    if explain:
-        result["timings"]["query_embedding_ms"] = embedding_ms
-        result["timings"]["total_ms"] += embedding_ms
-    return result
+    documents = rank_documents(result["results"])[:2]
+    drilldown = retrieve_document_passages(con, embedder, query,
+        [document["document_id"] for document in documents], query_vector=vector, config=active_config)
+    merged = {int(row["chunk_id"]): row for row in result["results"]}
+    # Scoped copies intentionally win because they carry complete passage diagnostics.
+    merged.update({int(row["chunk_id"]): row for row in drilldown.passages})
+    ranked = sorted(merged.values(), key=lambda row: (-float(row.get("passage_score") or 0),
+                                                       int(row["chunk_id"])))
+    result["results"] = diversify(ranked, limit, active_config.max_chunks_per_document)
+    for rank, row in enumerate(result["results"], 1):
+        row["final_rank"] = rank
+    result["timings"].update(drilldown.timings)
+    result["timings"]["query_embedding_ms"] = embedding_ms
+    result["timings"]["total_ms"] += embedding_ms + drilldown.timings["drilldown_total_ms"]
+    return result if explain else result["results"]

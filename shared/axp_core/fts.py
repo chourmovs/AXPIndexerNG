@@ -36,3 +36,22 @@ def search(con, query, limit=20):
         (*BM25_WEIGHTS, match, limit),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def search_documents(con, query, document_ids):
+    """Return every lexical match in the selected documents (no global cap)."""
+    ids = sorted({int(value) for value in document_ids})
+    match = build_query(query)
+    if not ids or not match:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    rows = con.execute(
+        f"""SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,
+ d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers,
+ bm25(chunks_fts,?,?,?,?,?) bm25_score
+ FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN documents d ON d.id=c.document_id
+ JOIN sources s ON s.id=d.source_id
+ WHERE chunks_fts MATCH ? AND c.document_id IN ({placeholders}) ORDER BY bm25_score,c.id""",
+        (*BM25_WEIGHTS, match, *ids),
+    ).fetchall()
+    return [dict(row) for row in rows]

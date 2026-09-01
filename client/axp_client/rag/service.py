@@ -6,14 +6,14 @@ import uuid
 from axp_core.hybrid import SearchConfig
 
 from .answerability import decide_answerability, is_supporting_evidence
-from .citations import validate_citations
+from .citations import classify_citations
 from .context import build_context
 from .depth import depth_policy
 from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
-from .retrieval import rank_documents, retrieve_rag_candidates
+from .retrieval import rank_documents, retrieve_document_passages, retrieve_rag_candidates
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
@@ -128,6 +128,7 @@ class RagService:
                 progress({"event": event, **details})
 
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
+        model_load_ms = 0.0
         generation_config = getattr(self.backend, "config", GenerationConfig())
         depth = depth_policy(search_depth, evidence_tokens=generation_config.max_evidence_tokens,
                              answer_tokens=generation_config.max_answer_tokens)
@@ -144,7 +145,8 @@ class RagService:
                                            vector_candidates=depth.candidate_depth)
             )
             candidates, all_content = retrieval.candidates, retrieval.content_evidence
-            supporting_content, eligible_documents = select_supporting_documents(all_content)
+            selected_limit = 2 if search_depth == 0 else 3
+            supporting_content, eligible_documents = select_supporting_documents(all_content, selected_limit)
             decision = decide_answerability(all_content)
             if decision.answerable and supporting_content and not eligible_documents:
                 LOGGER.error("RAG invariant violation request_id=%s answerable=true supporting_chunks=%s "
@@ -155,7 +157,17 @@ class RagService:
                                  if int(doc["document_id"]) in supporting_ids), None)
                 if fallback is not None:
                     eligible_documents = [fallback]
-            content = [hit for doc in eligible_documents for hit in doc["ranked_hits"]]
+            ranking_finished = time.perf_counter()
+            eligible_documents = eligible_documents[:selected_limit]
+            drilldown = retrieve_document_passages(
+                con, self.embedder, question, [doc["document_id"] for doc in eligible_documents],
+                search_depth=search_depth,
+                config=SearchConfig(lexical_candidates=depth.candidate_depth,
+                                    vector_candidates=depth.candidate_depth),
+            ) if eligible_documents else None
+            content = (drilldown.passages if drilldown else
+                       [hit for doc in eligible_documents for hit in doc["ranked_hits"]])
+            drilldown_decision = decide_answerability(content) if content else decision
             LOGGER.info("RAG retrieval request_id=%s search_depth=%s query_length=%s candidates=%s "
                         "relevant_chunks=%s relevant_documents=%s", request_id, search_depth, len(question),
                         len(candidates), len(all_content), len(retrieval.ranked_documents))
@@ -170,6 +182,20 @@ class RagService:
                             "document_score": doc["document_score"],
                             "support_chunk_count": len(doc["ranked_hits"]),
                         } for doc in eligible_documents[:2]])
+            if drilldown:
+                LOGGER.info("RAG drilldown request_id=%s search_depth=%s global_candidates=%s "
+                            "drilldown_documents=%s drilldown_chunks_examined=%s "
+                            "drilldown_passages_ranked=%s documents=%s", request_id, search_depth,
+                            len(candidates), len(drilldown.documents),
+                            sum(doc["chunks_examined"] for doc in drilldown.documents), len(content),
+                            drilldown.documents)
+                drill_signals = drilldown_decision.signals
+                LOGGER.info("RAG drilldown answerability request_id=%s initial_answerability=%s "
+                            "drilldown_supporting_chunks=%s drilldown_best_vector=%.4f "
+                            "drilldown_best_lexical=%.4f drilldown_best_passage_score=%.4f",
+                            request_id, decision.answerable, drill_signals["support_chunks"],
+                            drill_signals["best_vector_similarity"], drill_signals["best_lexical_coverage"],
+                            max((float(row.get("passage_score") or 0) for row in content), default=0.0))
             related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
             self._log_gate(request_id, decision, len(candidates))
@@ -210,6 +236,7 @@ class RagService:
                                          type(exc).__name__, self.health().get("model_name", "configured model"))
                         raise ModelLoadFailedError from exc
                     emit("model_load_complete", elapsed_s=round(time.perf_counter() - load_start, 1))
+                    model_load_ms = (time.perf_counter() - load_start) * 1000
                 emit("context_preparation_started")
                 context_start = time.perf_counter()
                 try:
@@ -221,7 +248,7 @@ class RagService:
                     context = build_context(con, content, token_counter=self.backend.count_tokens,
                                             context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
                                             config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
-                                                max_documents=2,
+                                                max_documents=selected_limit,
                                                 max_seeds_per_document=depth.seed_limit,
                                                 neighbor_radius=depth.neighbor_radius,
                                                 max_blocks=generation_config.max_context_blocks,
@@ -248,7 +275,7 @@ class RagService:
                             candidate = build_context(con, content, token_counter=self.backend.count_tokens,
                                 context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
                                 config=__import__("axp_client.rag.context", fromlist=["ContextConfig"]).ContextConfig(
-                                    max_documents=2, max_seeds_per_document=depth.seed_limit,
+                                    max_documents=selected_limit, max_seeds_per_document=depth.seed_limit,
                                     neighbor_radius=depth.neighbor_radius,
                                     max_blocks=generation_config.max_context_blocks,
                                     answer_reserve_tokens=effective_answer_tokens,
@@ -381,17 +408,52 @@ class RagService:
             if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
                 base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
             else:
-                valid, cited = validate_citations(answer, [block.id for block in context.blocks])
-                if valid:
+                supplied_ids = [block.id for block in context.blocks]
+                validation_start = time.perf_counter()
+                validation_reason, cited = classify_citations(answer, supplied_ids)
+                citation_validation_ms = (time.perf_counter() - validation_start) * 1000
+                citation_repair_ms = 0.0
+                LOGGER.info("RAG citation validation request_id=%s validation_reason=%s cited_ids=%s "
+                            "supplied_ids=%s", request_id, validation_reason, sorted(cited), supplied_ids)
+                if validation_reason != "valid" and (answer or "").strip():
+                    repair_start = time.perf_counter()
+                    repair_prompt = ("Rewrite the answer using ONLY the supplied evidence below. Remove every "
+                        "unsupported claim. Every factual claim must cite one of these allowed citation IDs: "
+                        f"{supplied_ids}. If it cannot be grounded, output exactly INSUFFICIENT_EVIDENCE.\n\n"
+                        f"Original answer:\n{answer}\n\n{context.prompt_text}")
+                    if not self._generation_lock.acquire(blocking=False):
+                        raise ChatBusyError
+                    try:
+                        answer = self.backend.generate(system_prompt=SYSTEM_PROMPT, user_prompt=repair_prompt,
+                                                       max_tokens=min(256, effective_answer_tokens))
+                    finally:
+                        self._generation_lock.release()
+                    citation_repair_ms = (time.perf_counter() - repair_start) * 1000
+                    if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
+                        validation_reason, cited = "model_declined", set()
+                    else:
+                        validation_reason, cited = classify_citations(answer, supplied_ids)
+                    LOGGER.info("RAG citation repair request_id=%s validation_reason=%s cited_ids=%s "
+                                "supplied_ids=%s", request_id, validation_reason, sorted(cited), supplied_ids)
+                if validation_reason == "valid":
                     base.update(status="answered", answerable=True, answer=answer,
                                 sources=[block.source() for block in context.blocks if block.id in cited])
+                elif validation_reason == "model_declined":
+                    base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
                 else:
                     base["status"] = "ungrounded_generation"
-                    base["decision"] = {"reason": "invalid_citations", "best_relevance": decision.best_relevance}
+                    base["decision"] = {"reason": "invalid_citations", "validation_reason": validation_reason,
+                                        "best_relevance": decision.best_relevance}
         except Exception as exc:
             LOGGER.exception("Validation failed request id=%s type=%s", request_id, type(exc).__name__)
             raise ValidationFailedError from exc
-        base["timings"] = {"retrieval_ms": retrieval_ms, "context_ms": context_ms, "generation_ms": generation_ms,
+        drill_timings = drilldown.timings if drilldown else {}
+        base["timings"] = {"retrieval_ms": retrieval_ms, "global_retrieval_ms": retrieval_ms,
+                           "document_ranking_ms": max(0.0, (ranking_finished - started) * 1000 - retrieval_ms),
+                           **drill_timings, "context_ms": context_ms, "model_load_ms": model_load_ms,
+                           "generation_ms": generation_ms,
+                           "citation_validation_ms": locals().get("citation_validation_ms", 0.0),
+                           "citation_repair_ms": locals().get("citation_repair_ms", 0.0),
                            "total_ms": (time.perf_counter() - started) * 1000}
         if telemetry:
             base["generation"] = telemetry
@@ -402,10 +464,12 @@ class RagService:
                 "evidence_tokens": context.diagnostics["evidence_tokens"],
                 "reserved_answer_tokens": effective_answer_tokens,
                 "total_prompt_tokens": fixed_tokens + context.diagnostics["evidence_tokens"]}
-        LOGGER.info("RAG generation request_id=%s model=%s device=%s evidence_tokens=%s prompt_tokens=%s "
+        LOGGER.info("RAG generation request_id=%s active_model_id=%s active_model_name=%s device=%s "
+                    "evidence_tokens=%s prompt_tokens=%s "
                     "prompt_eval_ms=%s prompt_eval_tps=%s ttft_ms=%s completion_tokens=%s decode_tps=%s "
                     "generation_ms=%s latency_budget_s=%s context_reduced=%s", request_id,
-                    self.health().get("model_name"), effective_device, evidence_tokens,
+                    self.health().get("active_model_id"), self.health().get("model_name"), effective_device,
+                    evidence_tokens,
                     fixed_tokens + evidence_tokens, telemetry.get("prompt_eval_ms"),
                     telemetry.get("prompt_eval_tokens_per_second"), telemetry.get("time_to_first_token_ms"),
                     telemetry.get("completion_tokens"), telemetry.get("decode_tokens_per_second"),
