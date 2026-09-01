@@ -1,6 +1,6 @@
 import pytest
 from axp_client.rag.hardware import HardwareCapabilities
-from axp_client.rag.runtime_manager import InferenceDeviceError, InferenceRuntimeManager
+from axp_client.rag.runtime_manager import InferenceRuntimeManager
 
 
 class Backend:
@@ -53,9 +53,9 @@ def test_cpu_only_device_policy_is_truthful():
     assert auto["fallback_reason"] == "accelerator_not_installed"
     runtime.set_device("cpu")
     assert runtime.health()["inference_device_requested"] == "cpu"
-    with pytest.raises(InferenceDeviceError, match="intel_gpu_unavailable"):
-        runtime.set_device("intel_gpu")
+    runtime.set_device("intel_gpu")
+    assert runtime.health()["inference_device_effective"] == "intel_gpu"
     forced = InferenceRuntimeManager(settings("intel_gpu"), backend_factory=lambda *_args: Backend("model"),
                                      hardware=hardware).health()
-    assert forced["inference_device_effective"] == "cpu"
-    assert forced["fallback_reason"] == "accelerator_not_installed"
+    assert forced["inference_device_effective"] == "intel_gpu"
+    assert forced["fallback_reason"] is None

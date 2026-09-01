@@ -68,7 +68,7 @@ function renderResponse(article, response, turn) {
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     article.append(meta); }
-  if (['answered','insufficient_evidence','ungrounded_generation'].includes(response.status) &&
+  if (['answered','insufficient_evidence','ungrounded_generation','local_generation_skipped_latency_budget'].includes(response.status) &&
       response.context?.search_depth !== 1) {
     const more=element('button','secondary compact search-more','Search more'); more.type='button';
     more.addEventListener('click',()=>article.dispatchEvent(new CustomEvent('search-more',{bubbles:true})));

@@ -18,7 +18,7 @@ class ContextConfig:
 def select_distinct_seeds(hits, maximum):
     """Choose dense, spatially distinct passages; neighbors arrive through expansion."""
     selected = []
-    for hit in sorted(hits, key=lambda row: (-float(row.get("evidence_score", row.get("relevance_score")) or 0),
+    for hit in sorted(hits, key=lambda row: (-float(row.get("passage_score", row.get("evidence_score", row.get("relevance_score"))) or 0),
                                               int(row.get("chunk_id") or 0))):
         number = int(hit["chunk_no"])
         if any(abs(number - int(existing["chunk_no"])) <= 1 for existing in selected):
@@ -110,12 +110,18 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
                               - fixed_prompt_tokens)
         token_budget = (physical_budget if config.max_evidence_tokens is None else
                         min(physical_budget, config.max_evidence_tokens))
+    token_cache = {}
+    def count(value):
+        if value not in token_cache:
+            token_cache[value] = token_counter(value)
+        return token_cache[value]
+
     for raw in blocks[: config.max_blocks]:
         block = EvidenceBlock(**{**raw.__dict__, "id": f"S{len(accepted) + 1}"})
         value = _format(block)
         separator = 2 if rendered else 0
         remaining = (config.character_budget - used - separator) if config.character_budget is not None else None
-        if token_budget is not None and token_counter("\n\n".join([*rendered, value])) > token_budget:
+        if token_budget is not None and count("\n\n".join([*rendered, value])) > token_budget:
             # Prefer complete evidence blocks. Only truncate if this is the first/only block.
             if rendered:
                 break
@@ -123,11 +129,11 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
             # A merged neighbor block retains chunk order: try complete chunks before text truncation.
             chunk_texts = block.text.split("\n\n")
             whole = None
-            for count in range(1, len(chunk_texts) + 1):
-                candidate_block = EvidenceBlock(**{**block.__dict__, "chunk_ids": block.chunk_ids[:count],
-                    "chunk_nos": block.chunk_nos[:count], "text": "\n\n".join(chunk_texts[:count])})
+            for chunk_count in range(1, len(chunk_texts) + 1):
+                candidate_block = EvidenceBlock(**{**block.__dict__, "chunk_ids": block.chunk_ids[:chunk_count],
+                    "chunk_nos": block.chunk_nos[:chunk_count], "text": "\n\n".join(chunk_texts[:chunk_count])})
                 candidate = _format(candidate_block)
-                if token_counter(candidate) <= token_budget:
+                if count(candidate) <= token_budget:
                     whole = (candidate_block, candidate)
                 else:
                     break
@@ -142,7 +148,7 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
             while low <= high:
                 middle = (low + high) // 2
                 candidate = header + " ".join(words[:middle])
-                if token_counter(candidate) <= token_budget:
+                if count(candidate) <= token_budget:
                     best, low = candidate, middle + 1
                 else:
                     high = middle - 1
@@ -165,7 +171,7 @@ def build_context(con, hits, config=None, *, token_counter=None, context_window=
         rendered.append(value)
         used += len(value) + separator
     prompt = "\n\n".join(rendered)
-    evidence_tokens = token_counter(prompt) if token_counter else None
+    evidence_tokens = count(prompt) if token_counter else None
     return ContextResult(prompt, accepted, {"evidence_tokens": evidence_tokens, "evidence_budget_tokens": token_budget,
         "physical_context_budget_tokens": physical_budget, "max_evidence_tokens": config.max_evidence_tokens,
         "selected_documents": len({block.document_id for block in accepted}), "selected_blocks": len(accepted),
