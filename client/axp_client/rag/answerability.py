@@ -57,6 +57,8 @@ def _lexical(row):
 def is_supporting_evidence(row, config=None):
     """Return whether a content row satisfies the answerability support boundary."""
     config = config or AnswerabilityConfig()
+    if row.get("evidence_tier") == "DIRECT_ANSWER":
+        return True
     vector_supported = _vector(row) >= config.support_vector_similarity
     return bool(vector_supported and (
         _lexical(row) >= config.support_lexical_coverage
@@ -76,10 +78,13 @@ def decide_answerability(results, config=None):
     support = [r for r in results if is_supporting_evidence(r, config)]
     exact = [r for r in results if (r.get("exact_content_identifier_match") or r.get("exact_content_phrase_match"))
              and _vector(r) >= config.support_vector_similarity]
+    direct = [r for r in results if r.get("evidence_tier") == "DIRECT_ANSWER"]
     signals = {"best_vector_similarity": max(map(_vector, results)),
                "best_lexical_coverage": max(_lexical(r) for r in results),
                "strong_chunks": len(strong), "support_chunks": len(support),
                "documents": len({r["document_id"] for r in results}), "exact_content_matches": len(exact)}
+    if direct:
+        return AnswerabilityDecision(True, "high", DecisionReason.STRONG_EVIDENCE, signals)
     if exact:
         return AnswerabilityDecision(True, "high", DecisionReason.EXACT_SUPPORTED, signals)
     if len(support) >= config.minimum_supporting_chunks:

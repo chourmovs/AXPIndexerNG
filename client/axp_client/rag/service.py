@@ -14,13 +14,15 @@ from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
-from .retrieval import rank_documents, retrieve_document_passages, retrieve_rag_candidates
+from .retrieval import (classify_query_evidence_intent, rank_documents,
+                        retrieve_document_passages, retrieve_rag_candidates)
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
 CITATION_REPAIR_MAX_TOKENS = 64
 CITATION_REPAIR_MAX_ANSWER_CHARACTERS = 800
 CITATION_REPAIR_MAX_SOURCES = 3
+CITATION_REPAIR_PREFILL_BUDGET_SECONDS = 2.0
 
 
 def select_supporting_documents(content, maximum=2):
@@ -149,8 +151,14 @@ class RagService:
                                            vector_candidates=depth.candidate_depth)
             )
             candidates, all_content = retrieval.candidates, retrieval.content_evidence
+            intent = classify_query_evidence_intent(question)
+            LOGGER.info("RAG raw retrieval request_id=%s raw_candidates=%s query_intent=%s",
+                        request_id, len(candidates), intent.kind)
             selected_limit = 2 if search_depth == 0 else 3
             supporting_content, eligible_documents = select_supporting_documents(all_content, selected_limit)
+            if intent.kind == "scalar_fact":
+                # Recall first: document identity may lead us to an answer that was outside the seed snippet.
+                eligible_documents = retrieval.ranked_documents[:selected_limit]
             decision = decide_answerability(all_content)
             if decision.answerable and supporting_content and not eligible_documents:
                 LOGGER.error("RAG invariant violation request_id=%s answerable=true supporting_chunks=%s "
@@ -168,10 +176,16 @@ class RagService:
                 search_depth=search_depth,
                 config=SearchConfig(lexical_candidates=depth.candidate_depth,
                                     vector_candidates=depth.candidate_depth),
+                intent=intent,
             ) if eligible_documents else None
             content = (drilldown.passages if drilldown else
                        [hit for doc in eligible_documents for hit in doc["ranked_hits"]])
+            if intent.kind == "scalar_fact":
+                content = [row for row in content if row.get("evidence_tier") in
+                           {"DIRECT_ANSWER", "STRONG_SUPPORT"}]
             drilldown_decision = decide_answerability(content) if content else decision
+            if intent.kind == "scalar_fact":
+                decision = drilldown_decision
             LOGGER.info("RAG retrieval request_id=%s search_depth=%s query_length=%s candidates=%s "
                         "relevant_chunks=%s relevant_documents=%s", request_id, search_depth, len(question),
                         len(candidates), len(all_content), len(retrieval.ranked_documents))
@@ -188,10 +202,11 @@ class RagService:
                         } for doc in eligible_documents[:2]])
             if drilldown:
                 LOGGER.info("RAG drilldown request_id=%s search_depth=%s global_candidates=%s "
-                            "drilldown_documents=%s drilldown_chunks_examined=%s "
+                            "drilldown_documents=%s drilldown_chunks_examined=%s factual_vector_query=%s "
                             "drilldown_passages_ranked=%s documents=%s", request_id, search_depth,
                             len(candidates), len(drilldown.documents),
-                            sum(doc["chunks_examined"] for doc in drilldown.documents), len(content),
+                            sum(doc["chunks_examined"] for doc in drilldown.documents),
+                            sorted({doc["scoped_passage_query"] for doc in drilldown.documents}), len(content),
                             drilldown.documents)
                 drill_signals = drilldown_decision.signals
                 LOGGER.info("RAG drilldown answerability request_id=%s initial_answerability=%s "
@@ -436,6 +451,12 @@ class RagService:
                 repair_allowed = (validation_reason == "missing_citation" and meaningful_prose and
                                   1 <= len(supplied_ids) <= CITATION_REPAIR_MAX_SOURCES and
                                   len(answer) <= CITATION_REPAIR_MAX_ANSWER_CHARACTERS)
+                if repair_allowed:
+                    repair_tokens = self.backend.count_tokens(answer) + context.diagnostics["evidence_tokens"]
+                    repair_estimate = estimate_prefill_seconds(repair_tokens, prompt_tps)
+                    if repair_estimate is None or repair_estimate > CITATION_REPAIR_PREFILL_BUDGET_SECONDS:
+                        repair_allowed = False
+                        citation_repair_reason = "prefill_latency_budget"
                 if repair_allowed:
                     repair_start = time.perf_counter()
                     citation_repair_attempted = True
