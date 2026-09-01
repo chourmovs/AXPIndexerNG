@@ -90,6 +90,6 @@ def test_stable_cap_preserves_global_passage_order():
 
 
 def test_search_more_includes_latency_skip_and_depth_guard():
-    source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text()
+    source = (Path(__file__).parents[1] / "client/axp_client/web/ask.js").read_text(encoding="utf-8")
     assert "local_generation_skipped_latency_budget'].includes(response.status)" in source
     assert "response.context?.search_depth !== 1" in source
