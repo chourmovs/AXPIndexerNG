@@ -5,7 +5,7 @@ import uuid
 
 from axp_core.hybrid import SearchConfig
 
-from .answerability import decide_answerability
+from .answerability import decide_answerability, is_supporting_evidence
 from .citations import validate_citations
 from .context import build_context
 from .depth import depth_policy
@@ -13,10 +13,16 @@ from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, user_prompt
-from .retrieval import retrieve_rag_candidates
+from .retrieval import rank_documents, retrieve_rag_candidates
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
+
+
+def select_supporting_documents(content, maximum=2):
+    """Rank only documents that contain evidence accepted by the answerability boundary."""
+    supporting = [row for row in content if is_supporting_evidence(row)]
+    return supporting, rank_documents(supporting)[:maximum]
 
 
 class ChatBusyError(Exception):
@@ -138,11 +144,17 @@ class RagService:
                                            vector_candidates=depth.candidate_depth)
             )
             candidates, all_content = retrieval.candidates, retrieval.content_evidence
-            eligible_documents = [doc for doc in retrieval.ranked_documents if
-                                  doc["best_evidence_score"] >= .55 or
-                                  ((doc["exact_identifier_present"] or doc["exact_phrase_present"])
-                                   and max(float(hit.get("vector_similarity") or 0)
-                                           for hit in doc["ranked_hits"]) >= .45)][:2]
+            supporting_content, eligible_documents = select_supporting_documents(all_content)
+            decision = decide_answerability(all_content)
+            if decision.answerable and supporting_content and not eligible_documents:
+                LOGGER.error("RAG invariant violation request_id=%s answerable=true supporting_chunks=%s "
+                             "ranked_documents=%s", request_id, len(supporting_content),
+                             len(retrieval.ranked_documents))
+                supporting_ids = {int(row["document_id"]) for row in supporting_content}
+                fallback = next((doc for doc in retrieval.ranked_documents
+                                 if int(doc["document_id"]) in supporting_ids), None)
+                if fallback is not None:
+                    eligible_documents = [fallback]
             content = [hit for doc in eligible_documents for hit in doc["ranked_hits"]]
             LOGGER.info("RAG retrieval request_id=%s search_depth=%s query_length=%s candidates=%s "
                         "relevant_chunks=%s relevant_documents=%s", request_id, search_depth, len(question),
@@ -150,13 +162,21 @@ class RagService:
             LOGGER.info("RAG document ranking request_id=%s top=%s", request_id, [{key: doc[key] for key in
                 ("document_id", "filename", "document_score", "best_evidence_score", "second_evidence_score",
                  "strong_hit_count", "title_coverage")} for doc in retrieval.ranked_documents[:5]])
+            LOGGER.info("RAG evidence selection request_id=%s answerable=%s supporting_chunks=%s "
+                        "ranked_documents=%s selected_documents=%s", request_id, decision.answerable,
+                        len(supporting_content), len(retrieval.ranked_documents), [{
+                            "document_id": doc["document_id"],
+                            "best_evidence_score": doc["best_evidence_score"],
+                            "document_score": doc["document_score"],
+                            "support_chunk_count": len(doc["ranked_hits"]),
+                        } for doc in eligible_documents[:2]])
             related, retrieval_ms = retrieval.metadata_related, retrieval.timings["retrieval_ms"]
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
-            decision = decide_answerability(all_content)
             self._log_gate(request_id, decision, len(candidates))
             emit("gate_complete", answerable=decision.answerable)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
-                    "related_documents": related, "decision": decision.public()}
+                    "related_documents": related, "decision": decision.public(),
+                    "context": {"search_depth": search_depth}}
             if not decision.answerable:
                 base["timings"] = {"retrieval_ms": retrieval_ms, "total_ms": (time.perf_counter() - started) * 1000}
                 if debug:
