@@ -27,13 +27,17 @@ def raw_search(con, embedder, query, limit=20, *, profile="hybrid", explain=Fals
 
 
 def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, reranker=None, config=None):
+    search_started = time.perf_counter()
     active_config = config or SearchConfig()
     result = raw_search(con, embedder, query, limit, profile=profile, reranker=reranker,
                         config=active_config, explain=True)
     raw_candidate_count = len(result["results"])
+    presentation_started = time.perf_counter()
     intent = classify_query_evidence_intent(query)
     classify_passages(result["results"], intent)
+    ranking_started = time.perf_counter()
     ranked_documents = rank_documents(result["results"], intent=intent)
+    document_ranking_ms = (time.perf_counter() - ranking_started) * 1000
     documents = ranked_documents[:2]
     drilldown = retrieve_document_passages(con, embedder, query,
         [document["document_id"] for document in documents], config=active_config, intent=intent)
@@ -64,6 +68,7 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     for rank, row in enumerate(result["results"], 1):
         row["final_rank"] = rank
     result["timings"].update(drilldown.timings)
+    result["timings"]["document_ranking_ms"] = document_ranking_ms
     result["query_intent"] = intent.kind
     result["identity_terms"] = sorted(intent.identity_terms)
     result["target_terms"] = sorted(intent.target_terms)
@@ -73,7 +78,10 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
                     intent.kind, sorted(intent.identity_terms), sorted(intent.target_terms),
                     raw_candidate_count, tier_counts["DIRECT_ANSWER"], tier_counts["STRONG_SUPPORT"],
                     tier_counts["TOPICAL_ONLY"], len(result["results"]))
-    result["timings"]["total_ms"] += drilldown.timings["drilldown_total_ms"]
+    result["timings"]["presentation_ms"] = (time.perf_counter() - presentation_started) * 1000
+    result["timings"]["search_total_ms"] = (time.perf_counter() - search_started) * 1000
+    # Preserve the historical aggregate while adding unambiguous end-to-end naming.
+    result["timings"]["total_ms"] = result["timings"]["search_total_ms"]
     return result if explain else result["results"]
 
 
