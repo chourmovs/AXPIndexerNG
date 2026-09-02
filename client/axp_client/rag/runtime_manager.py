@@ -71,7 +71,12 @@ class InferenceRuntimeManager:
                 max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
                 temperature=getattr(profile, "temperature", .2),
                 top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
-                repeat_penalty=getattr(profile, "repeat_penalty", 1.0))
+                repeat_penalty=getattr(profile, "repeat_penalty", 1.0),
+                model_id=getattr(profile, "id", None),
+                reasoning_enabled=getattr(profile, "reasoning_enabled", False),
+                reasoning_budget_tokens=getattr(profile, "reasoning_budget_tokens", None),
+                reasoning_format=getattr(profile, "reasoning_format", None),
+                min_visible_answer_tokens=getattr(profile, "min_visible_answer_tokens", 0))
             return IntelSyclBackend(settings["chat_model_path"], config, self.accelerators.runtime_root,
                 self.accelerators.server_path(), getattr(profile, "chat_template_kwargs", None),
                 sycl_device_id=self.hardware.sycl_device_id,

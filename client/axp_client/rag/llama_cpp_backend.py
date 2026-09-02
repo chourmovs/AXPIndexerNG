@@ -88,6 +88,11 @@ class GenerationConfig:
     top_k: int = 20
     repeat_penalty: float = 1.0
     n_gpu_layers: int = 0
+    model_id: str | None = None
+    reasoning_enabled: bool = False
+    reasoning_budget_tokens: int | None = None
+    reasoning_format: str | None = None
+    min_visible_answer_tokens: int = 0
 
 
 class LlamaCppBackend:

@@ -447,21 +447,33 @@ class IntelSyclBackend:
 
     def generate(self, *, system_prompt, user_prompt, max_tokens=None):
         self.ensure_loaded(); self._cancel_event.clear(); started = time.perf_counter()
+        resolved_max_tokens = self.config.max_answer_tokens if max_tokens is None else max_tokens
         system = (NO_THINK_DIRECTIVE + system_prompt if self.chat_template_kwargs.get("enable_thinking") is False
                   else system_prompt)
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-                   "stream": True, "max_tokens": self.config.max_answer_tokens if max_tokens is None else max_tokens,
+                   "stream": True, "max_tokens": resolved_max_tokens,
                    "return_progress": True,
                    "temperature": self.config.temperature,
                    "top_p": self.config.top_p, "top_k": self.config.top_k,
                    "repeat_penalty": self.config.repeat_penalty}
+        effective_reasoning_budget = None
+        if self.config.reasoning_enabled and self.config.reasoning_budget_tokens is not None:
+            effective_reasoning_budget = min(
+                self.config.reasoning_budget_tokens,
+                max(0, resolved_max_tokens - self.config.min_visible_answer_tokens),
+            )
+            payload["reasoning_budget_tokens"] = effective_reasoning_budget
+            if self.config.reasoning_format:
+                payload["reasoning_format"] = self.config.reasoning_format
         LOGGER.info("Intel generation sampler session_id=%s temperature=%s top_p=%s top_k=%s repeat_penalty=%s",
                     self.session_id, self.config.temperature, self.config.top_p, self.config.top_k,
                     self.config.repeat_penalty)
         with self._progress_lock:
             self._progress = self._new_progress(); self._progress.update(active=True, phase="waiting_first_token",
                                                                           started_monotonic=started)
-        fragments, first, finish, native_timings = [], None, None, None
+        answer_fragments, reasoning_fragments = [], []
+        first_visible = first_reasoning = None
+        finish, native_timings = None, None
         try:
             with self._post("/v1/chat/completions", payload) as response:
                 for data in parse_sse(response):
@@ -481,38 +493,75 @@ class IntelSyclBackend:
                     if isinstance(chunk.get("timings"), dict): native_timings = chunk["timings"]
                     choice = (chunk.get("choices") or [{}])[0]; delta = choice.get("delta") or {}
                     finish = choice.get("finish_reason") or finish
-                    content = delta.get("content")  # reasoning_content is intentionally ignored
+                    reasoning = delta.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning:
+                        now = time.perf_counter()
+                        first_reasoning = first_reasoning or now
+                        reasoning_fragments.append(reasoning)
+                    content = delta.get("content")
                     if isinstance(content, str) and content:
-                        now = time.perf_counter(); first = first or now; fragments.append(content)
+                        now = time.perf_counter(); first_visible = first_visible or now
+                        answer_fragments.append(content)
                         with self._progress_lock:
                             self._progress.update(phase="generating", sequence=self._progress["sequence"] + 1,
                                 generated_fragments=self._progress["generated_fragments"] + 1,
                                 generated_characters=self._progress["generated_characters"] + len(content),
-                                time_to_first_token_ms=(first-started)*1000, last_fragment_monotonic=now)
-            ended = time.perf_counter(); answer = THINK_RE.sub("", "".join(fragments)).strip()
+                                time_to_first_token_ms=(first_visible-started)*1000, last_fragment_monotonic=now)
+            ended = time.perf_counter(); answer = THINK_RE.sub("", "".join(answer_fragments)).strip()
             if self._native_failure_snapshot():
                 raise IntelSyclError(DEVICE_LOST_TYPE)
-            completion = self.count_tokens(answer) if answer else 0; generation_ms = (ended-started)*1000
-            decode_ms = (ended-first)*1000 if first else None
+            reasoning_text = "".join(reasoning_fragments)
+            reasoning_tokens = self.count_tokens(reasoning_text) if reasoning_text else 0
+            answer_tokens = self.count_tokens(answer) if answer else 0
+            generation_ms = (ended-started)*1000
+            decode_ms = (ended-first_visible)*1000 if first_visible else None
             timing = native_timings or {}
             prompt_ms = timing.get("prompt_ms", timing.get("prompt_eval_ms"))
             prompt_n = timing.get("prompt_n", timing.get("prompt_tokens"))
             predicted_ms = timing.get("predicted_ms", timing.get("decode_ms"))
             predicted_n = timing.get("predicted_n", timing.get("completion_tokens"))
-            self.last_telemetry = {"time_to_first_token_ms": (first-started)*1000 if first else None,
+            completion_total = predicted_n if predicted_n is not None else reasoning_tokens + answer_tokens
+            if finish == "length":
+                generation_result = ("output_limit_after_visible_answer" if answer_tokens else
+                                     "output_limit_before_visible_answer")
+            elif not answer_tokens and effective_reasoning_budget is not None and reasoning_tokens >= effective_reasoning_budget:
+                generation_result = "reasoning_budget_exhausted"
+            else:
+                generation_result = "normal_answer"
+            reasoning_ttft_ms = (first_reasoning-started)*1000 if first_reasoning else None
+            visible_ttft_ms = (first_visible-started)*1000 if first_visible else None
+            reasoning_phase_ms = ((first_visible-first_reasoning)*1000
+                                  if first_reasoning and first_visible else None)
+            self.last_telemetry = {"time_to_first_token_ms": visible_ttft_ms, "ttft_ms": visible_ttft_ms,
+                "visible_ttft_ms": visible_ttft_ms, "reasoning_ttft_ms": reasoning_ttft_ms,
+                "reasoning_phase_ms": reasoning_phase_ms,
+                "visible_answer_ms": (ended-first_visible)*1000 if first_visible else None,
                 "generation_ms": generation_ms, "prompt_tokens": prompt_n, "prompt_eval_ms": prompt_ms,
                 "prompt_eval_tokens_per_second": timing.get("prompt_per_second") or
                     (prompt_n/(prompt_ms/1000) if prompt_n is not None and prompt_ms else None),
                 "prompt_eval_timing_derived": prompt_ms is None,
-                "decode_ms": predicted_ms or decode_ms, "completion_tokens": predicted_n or completion,
+                "decode_ms": predicted_ms or decode_ms, "completion_tokens": completion_total,
+                "completion_tokens_total": completion_total, "reasoning_tokens": reasoning_tokens,
+                "answer_tokens": answer_tokens, "unattributed_tokens": max(
+                    0, completion_total - reasoning_tokens - answer_tokens),
+                "reasoning_budget_tokens": effective_reasoning_budget,
+                "generation_result": generation_result,
                 "decode_tokens_per_second": timing.get("predicted_per_second") or
-                    ((predicted_n or completion)/((predicted_ms or decode_ms)/1000) if (predicted_ms or decode_ms) else None),
-                "generated_characters": sum(map(len, fragments)), "generated_fragments": len(fragments),
+                    (completion_total/((predicted_ms or decode_ms)/1000) if (predicted_ms or decode_ms) else None),
+                "generated_characters": sum(map(len, answer_fragments)),
+                "generated_fragments": len(answer_fragments),
                 "finish_reason": finish, "backend": "intel_sycl", "runtime": INTEL_SYCL.tag,
                 "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
                 "offloaded_layers": self.offloaded_layers, "total_layers": self.total_layers,
                 "inference_device_requested": "intel_gpu", "inference_device_effective": "intel_gpu",
                 "gpu_buffer_bytes": self.gpu_buffer_bytes}
+            if self.config.reasoning_enabled:
+                LOGGER.info("Intel reasoning telemetry model_id=%s reasoning_budget=%s reasoning_tokens=%s "
+                            "answer_tokens=%s completion_tokens_total=%s reasoning_ttft_ms=%s "
+                            "visible_ttft_ms=%s reasoning_phase_ms=%s finish_reason=%s generation_result=%s",
+                            self.config.model_id, effective_reasoning_budget, reasoning_tokens, answer_tokens,
+                            completion_total, reasoning_ttft_ms, visible_ttft_ms, reasoning_phase_ms, finish,
+                            generation_result)
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)
             return answer
         except GenerationCancelled:

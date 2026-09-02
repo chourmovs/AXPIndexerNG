@@ -519,13 +519,18 @@ class RagService:
         LOGGER.info("RAG generation request_id=%s active_model_id=%s active_model_name=%s device=%s "
                     "evidence_tokens=%s prompt_tokens=%s "
                     "prompt_eval_ms=%s prompt_eval_tps=%s ttft_ms=%s completion_tokens=%s decode_tps=%s "
-                    "generation_ms=%s latency_budget_s=%s context_reduced=%s", request_id,
+                    "generation_ms=%s reasoning_tokens=%s answer_tokens=%s completion_tokens_total=%s "
+                    "reasoning_budget_tokens=%s reasoning_ms=%s generation_result=%s "
+                    "latency_budget_s=%s context_reduced=%s", request_id,
                     self.health().get("active_model_id"), self.health().get("model_name"), effective_device,
                     evidence_tokens,
                     fixed_tokens + evidence_tokens, telemetry.get("prompt_eval_ms"),
                     telemetry.get("prompt_eval_tokens_per_second"), telemetry.get("time_to_first_token_ms"),
                     telemetry.get("completion_tokens"), telemetry.get("decode_tokens_per_second"),
-                    telemetry.get("generation_ms"), POLICY.preferred_seconds, reduced)
+                    telemetry.get("generation_ms"), telemetry.get("reasoning_tokens", 0),
+                    telemetry.get("answer_tokens"), telemetry.get("completion_tokens_total"),
+                    telemetry.get("reasoning_budget_tokens"), telemetry.get("reasoning_phase_ms"),
+                    telemetry.get("generation_result"), POLICY.preferred_seconds, reduced)
         LOGGER.info("RAG request id=%s decision=%s results=%s documents=%s generation_ms=%.1f", request_id,
                     base["decision"]["reason"], len(candidates), decision.content_documents, generation_ms)
         LOGGER.info("RAG latency request_id=%s global_retrieval_ms=%.1f drilldown_ms=%.1f model_load_ms=%.1f "
