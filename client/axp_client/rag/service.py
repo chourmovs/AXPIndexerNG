@@ -13,7 +13,8 @@ from .depth import depth_policy
 from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
-from .prompts import SYSTEM_PROMPT, user_prompt
+from .prompts import SYSTEM_PROMPT, system_prompt, user_prompt
+from .response_policy import classify_response_plan
 from .retrieval import (classify_query_evidence_intent, rank_documents,
                         retrieve_document_passages, retrieve_rag_candidates)
 
@@ -136,8 +137,15 @@ class RagService:
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
         model_load_ms = 0.0
         generation_config = getattr(self.backend, "config", GenerationConfig())
+        intent = classify_query_evidence_intent(question)
+        response_plan = classify_response_plan(question, intent)
+        reasoning_enabled = generation_config.reasoning_enabled
         depth = depth_policy(search_depth, evidence_tokens=generation_config.max_evidence_tokens,
                              answer_tokens=generation_config.max_answer_tokens)
+        requested_answer_tokens = (response_plan.answer_tokens if reasoning_enabled
+                                   else depth.target_answer_tokens)
+        active_system_prompt = system_prompt(reasoning_enabled)
+        response_instruction = response_plan.instruction if reasoning_enabled else None
         if self.operations.busy or not self._generation_lock.acquire(blocking=False):
             raise ChatBusyError
         self._generation_lock.release()
@@ -151,7 +159,6 @@ class RagService:
                                            vector_candidates=depth.candidate_depth)
             )
             candidates, all_content = retrieval.candidates, retrieval.content_evidence
-            intent = classify_query_evidence_intent(question)
             LOGGER.info("RAG raw retrieval request_id=%s raw_candidates=%s query_intent=%s",
                         request_id, len(candidates), intent.kind)
             selected_limit = 2 if search_depth == 0 else 3
@@ -259,10 +266,11 @@ class RagService:
                 emit("context_preparation_started")
                 context_start = time.perf_counter()
                 try:
-                    system_tokens = self.backend.count_tokens(SYSTEM_PROMPT)
-                    question_tokens = self.backend.count_tokens(user_prompt(question, ""))
+                    system_tokens = self.backend.count_tokens(active_system_prompt)
+                    question_tokens = self.backend.count_tokens(
+                        user_prompt(question, "", response_instruction))
                     fixed_tokens = system_tokens + question_tokens
-                    effective_answer_tokens = min(depth.target_answer_tokens, max(0,
+                    effective_answer_tokens = min(requested_answer_tokens, max(0,
                         self.backend.context_window() - fixed_tokens - generation_config.safety_tokens))
                     context = build_context(con, content, token_counter=self.backend.count_tokens,
                                             context_window=self.backend.context_window(), fixed_prompt_tokens=fixed_tokens,
@@ -328,6 +336,11 @@ class RagService:
             "target_evidence_tokens": depth.target_evidence_tokens,
             "target_answer_tokens": depth.target_answer_tokens,
             "effective_answer_tokens": effective_answer_tokens,
+            "response_mode": response_plan.mode,
+            "response_target_words": response_plan.target_words,
+            "response_requested_answer_tokens": requested_answer_tokens,
+            "response_effective_answer_tokens": effective_answer_tokens,
+            "search_depth_expanded_output": False if reasoning_enabled else search_depth > 0,
             "retrieved_results": len(candidates),
             "selected_documents": context.diagnostics["selected_documents"],
             "selected_blocks": context.diagnostics["selected_blocks"],
@@ -400,8 +413,10 @@ class RagService:
                         last_waiting_second = int(elapsed)
                         emit("generation_waiting_first_token", elapsed_s=elapsed)
                 answer = self._run_blocking(
-                    lambda: self.backend.generate(system_prompt=SYSTEM_PROMPT,
-                                                  user_prompt=user_prompt(question, context.prompt_text),
+                    lambda: self.backend.generate(system_prompt=active_system_prompt,
+                                                  user_prompt=user_prompt(
+                                                      question, context.prompt_text,
+                                                      response_instruction),
                                                   max_tokens=effective_answer_tokens),
                     generation_poll, interval=.25)
             except GenerationCancelled:
@@ -416,9 +431,26 @@ class RagService:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
         telemetry = getattr(self.backend, "last_telemetry", None) or {}
+        answer_word_count = len(re.findall(r"\w+", answer or ""))
+        citation_match = re.search(r"\[S\d+\]", answer or "")
         telemetry.update({"inference_device_requested": health.get("inference_device_requested"),
                           "inference_device_effective": effective_device,
-                          "prompt_tokens": fixed_tokens + evidence_tokens})
+                          "prompt_tokens": fixed_tokens + evidence_tokens,
+                          "response_mode": response_plan.mode,
+                          "response_target_words": response_plan.target_words,
+                          "response_requested_answer_tokens": requested_answer_tokens,
+                          "response_effective_answer_tokens": effective_answer_tokens,
+                          "search_depth": search_depth,
+                          "search_depth_expanded_output": False if reasoning_enabled else search_depth > 0,
+                          "answer_word_count": answer_word_count,
+                          "first_citation_char_index": citation_match.start() if citation_match else None,
+                          "response_over_target_words": answer_word_count > response_plan.target_words,
+                          "response_finished_by_length": telemetry.get("finish_reason") == "length"})
+        LOGGER.info("RAG response policy request_id=%s model_id=%s response_mode=%s target_words=%s "
+                    "requested_answer_tokens=%s effective_answer_tokens=%s search_depth=%s "
+                    "search_depth_expanded_output=%s", request_id, model_id, response_plan.mode,
+                    response_plan.target_words, requested_answer_tokens, effective_answer_tokens,
+                    search_depth, telemetry["search_depth_expanded_output"])
         ttft = telemetry.get("time_to_first_token_ms")
         if telemetry.get("prompt_eval_ms") is None and ttft:
             telemetry["prompt_eval_ms"] = ttft
@@ -447,6 +479,11 @@ class RagService:
                 citation_repair_reason = "not_needed"
                 LOGGER.info("RAG citation validation request_id=%s validation_reason=%s cited_ids=%s "
                             "supplied_ids=%s", request_id, validation_reason, sorted(cited), supplied_ids)
+                if validation_reason == "missing_citation":
+                    LOGGER.info("RAG missing citation request_id=%s response_mode=%s answer_tokens=%s "
+                                "answer_word_count=%s finish_reason=%s first_citation_char_index=None",
+                                request_id, response_plan.mode, effective_answer_tokens,
+                                answer_word_count, telemetry.get("finish_reason"))
                 meaningful_prose = len(re.findall(r"\w+", (answer or "").strip())) >= 4
                 repair_allowed = (validation_reason == "missing_citation" and meaningful_prose and
                                   1 <= len(supplied_ids) <= CITATION_REPAIR_MAX_SOURCES and
