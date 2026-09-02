@@ -38,6 +38,9 @@ LOGGER = logging.getLogger("axp_client")
 DEVICE_LOST_TYPE = "intel_gpu_device_lost"
 DEVICE_LOST_CODE = "UR_RESULT_ERROR_DEVICE_LOST"
 DEVICE_LOST_REASON = "The Intel GPU inference device was reset during generation."
+REASONING_CONTROL_HEADROOM_TOKENS = 4
+THINK_CLOSE_RE = re.compile(r"\\?</think>", re.IGNORECASE)
+THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
 
 
 class IntelSyclError(RuntimeError):
@@ -72,6 +75,25 @@ def parse_sse(lines):
             event.clear()
     if event:
         yield "\n".join(event)
+
+
+def sanitize_reasoning_leak(text, reasoning_enabled):
+    """Remove reasoning markup from visible content for reasoning-enabled models only."""
+    if not reasoning_enabled:
+        return text, False, None
+
+    sanitized, complete_blocks = THINK_RE.subn("", text)
+    closing_markers = list(THINK_CLOSE_RE.finditer(sanitized))
+    if closing_markers:
+        sanitized = sanitized[closing_markers[-1].end():]
+        return sanitized.strip(), True, "orphan_closing"
+
+    opening = THINK_OPEN_RE.search(sanitized)
+    if opening:
+        # Only text before the unterminated block can be visible safely.
+        return sanitized[:opening.start()].strip(), True, "unterminated"
+
+    return sanitized.strip(), bool(complete_blocks), "complete_block" if complete_blocks else None
 
 
 class IntelSyclBackend:
@@ -448,21 +470,27 @@ class IntelSyclBackend:
     def generate(self, *, system_prompt, user_prompt, max_tokens=None):
         self.ensure_loaded(); self._cancel_event.clear(); started = time.perf_counter()
         resolved_max_tokens = self.config.max_answer_tokens if max_tokens is None else max_tokens
+        visible_answer_budget = resolved_max_tokens
         system = (NO_THINK_DIRECTIVE + system_prompt if self.chat_template_kwargs.get("enable_thinking") is False
                   else system_prompt)
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-                   "stream": True, "max_tokens": resolved_max_tokens,
+                   "stream": True, "max_tokens": visible_answer_budget,
                    "return_progress": True,
                    "temperature": self.config.temperature,
                    "top_p": self.config.top_p, "top_k": self.config.top_k,
                    "repeat_penalty": self.config.repeat_penalty}
         effective_reasoning_budget = None
+        reasoning_control_headroom = 0
         if self.config.reasoning_enabled and self.config.reasoning_budget_tokens is not None:
             effective_reasoning_budget = min(
                 self.config.reasoning_budget_tokens,
-                max(0, resolved_max_tokens - self.config.min_visible_answer_tokens),
+                max(0, visible_answer_budget - self.config.min_visible_answer_tokens),
             )
             payload["reasoning_budget_tokens"] = effective_reasoning_budget
+            if effective_reasoning_budget:
+                reasoning_control_headroom = REASONING_CONTROL_HEADROOM_TOKENS
+            payload["max_tokens"] = (visible_answer_budget + effective_reasoning_budget +
+                                     reasoning_control_headroom)
             if self.config.reasoning_format:
                 payload["reasoning_format"] = self.config.reasoning_format
         LOGGER.info("Intel generation sampler session_id=%s temperature=%s top_p=%s top_k=%s repeat_penalty=%s",
@@ -507,7 +535,10 @@ class IntelSyclBackend:
                                 generated_fragments=self._progress["generated_fragments"] + 1,
                                 generated_characters=self._progress["generated_characters"] + len(content),
                                 time_to_first_token_ms=(first_visible-started)*1000, last_fragment_monotonic=now)
-            ended = time.perf_counter(); answer = THINK_RE.sub("", "".join(answer_fragments)).strip()
+            ended = time.perf_counter()
+            answer, reasoning_leak_detected, reasoning_leak_type = sanitize_reasoning_leak(
+                "".join(answer_fragments), self.config.reasoning_enabled,
+            )
             if self._native_failure_snapshot():
                 raise IntelSyclError(DEVICE_LOST_TYPE)
             reasoning_text = "".join(reasoning_fragments)
@@ -521,7 +552,9 @@ class IntelSyclBackend:
             predicted_ms = timing.get("predicted_ms", timing.get("decode_ms"))
             predicted_n = timing.get("predicted_n", timing.get("completion_tokens"))
             completion_total = predicted_n if predicted_n is not None else reasoning_tokens + answer_tokens
-            if finish == "length":
+            if reasoning_leak_type == "unterminated" and not answer:
+                generation_result = "reasoning_leak_unterminated"
+            elif finish == "length":
                 generation_result = ("output_limit_after_visible_answer" if answer_tokens else
                                      "output_limit_before_visible_answer")
             elif not answer_tokens and effective_reasoning_budget is not None and reasoning_tokens >= effective_reasoning_budget:
@@ -545,10 +578,15 @@ class IntelSyclBackend:
                 "answer_tokens": answer_tokens, "unattributed_tokens": max(
                     0, completion_total - reasoning_tokens - answer_tokens),
                 "reasoning_budget_tokens": effective_reasoning_budget,
+                "visible_answer_budget_tokens": visible_answer_budget,
+                "native_max_tokens": payload["max_tokens"],
+                "reasoning_control_headroom_tokens": reasoning_control_headroom,
+                "reasoning_leak_detected": reasoning_leak_detected,
+                "reasoning_leak_type": reasoning_leak_type,
                 "generation_result": generation_result,
                 "decode_tokens_per_second": timing.get("predicted_per_second") or
                     (completion_total/((predicted_ms or decode_ms)/1000) if (predicted_ms or decode_ms) else None),
-                "generated_characters": sum(map(len, answer_fragments)),
+                "generated_characters": len(answer),
                 "generated_fragments": len(answer_fragments),
                 "finish_reason": finish, "backend": "intel_sycl", "runtime": INTEL_SYCL.tag,
                 "model_load_ms": self._load_ms, "gpu_offload_confirmed": self.gpu_offload_confirmed,
@@ -556,12 +594,16 @@ class IntelSyclBackend:
                 "inference_device_requested": "intel_gpu", "inference_device_effective": "intel_gpu",
                 "gpu_buffer_bytes": self.gpu_buffer_bytes}
             if self.config.reasoning_enabled:
-                LOGGER.info("Intel reasoning telemetry model_id=%s reasoning_budget=%s reasoning_tokens=%s "
-                            "answer_tokens=%s completion_tokens_total=%s reasoning_ttft_ms=%s "
-                            "visible_ttft_ms=%s reasoning_phase_ms=%s finish_reason=%s generation_result=%s",
-                            self.config.model_id, effective_reasoning_budget, reasoning_tokens, answer_tokens,
-                            completion_total, reasoning_ttft_ms, visible_ttft_ms, reasoning_phase_ms, finish,
-                            generation_result)
+                LOGGER.info("Intel reasoning telemetry model_id=%s reasoning_budget=%s "
+                            "visible_answer_budget=%s native_max_tokens=%s "
+                            "reasoning_control_headroom_tokens=%s reasoning_tokens=%s answer_tokens=%s "
+                            "completion_tokens_total=%s reasoning_leak_detected=%s reasoning_leak_type=%s "
+                            "reasoning_ttft_ms=%s visible_ttft_ms=%s reasoning_phase_ms=%s "
+                            "finish_reason=%s generation_result=%s",
+                            self.config.model_id, effective_reasoning_budget, visible_answer_budget,
+                            payload["max_tokens"], reasoning_control_headroom, reasoning_tokens, answer_tokens,
+                            completion_total, reasoning_leak_detected, reasoning_leak_type,
+                            reasoning_ttft_ms, visible_ttft_ms, reasoning_phase_ms, finish, generation_result)
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)
             return answer
         except GenerationCancelled:

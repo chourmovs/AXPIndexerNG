@@ -2,7 +2,6 @@ import logging
 import time
 
 from axp_core.hybrid import SearchConfig
-from axp_core.hybrid import diversify
 from axp_core.hybrid import search as hybrid_search
 from axp_core.metadata import validate_index_signature
 
@@ -34,7 +33,8 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     raw_candidate_count = len(result["results"])
     intent = classify_query_evidence_intent(query)
     classify_passages(result["results"], intent)
-    documents = rank_documents(result["results"], intent=intent)[:2]
+    ranked_documents = rank_documents(result["results"], intent=intent)
+    documents = ranked_documents[:2]
     drilldown = retrieve_document_passages(con, embedder, query,
         [document["document_id"] for document in documents], config=active_config, intent=intent)
     # The drill-down result is already grouped by authoritative document rank.
@@ -48,7 +48,19 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
         ranked = [row for row in ranked if row["evidence_tier"] != "TOPICAL_ONLY"]
         ranked.sort(key=lambda row: ({"DIRECT_ANSWER": 0, "STRONG_SUPPORT": 1}[row["evidence_tier"]],
                                      -float(row.get("passage_score") or 0), row["chunk_id"]))
-    result["results"] = diversify(ranked, limit, active_config.max_chunks_per_document)
+    # Standalone Search represents documents, unlike RAG's multi-passage evidence path.
+    representatives = []
+    for document in ranked_documents:
+        representative = next((row for row in ranked
+                               if int(row["document_id"]) == document["document_id"]), None)
+        if representative is None:
+            continue
+        representative.update({key: document[key] for key in (
+            "document_score", "document_query_coverage", "document_metadata_coverage",
+            "complete_query_match",
+        )})
+        representatives.append(representative)
+    result["results"] = representatives[:limit]
     for rank, row in enumerate(result["results"], 1):
         row["final_rank"] = rank
     result["timings"].update(drilldown.timings)
