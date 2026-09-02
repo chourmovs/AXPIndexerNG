@@ -1,5 +1,6 @@
 import time
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,10 +54,17 @@ def diversify(rows, limit, maximum=3):
     return result
 
 
+def fold_search_text(value):
+    """Fold human-language search text without changing stored/displayed text."""
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(character for character in decomposed
+                   if not unicodedata.combining(character)).casefold()
+
+
 def _meaningful_terms(value):
     terms = set()
     for match in TOKEN_RE.finditer(value or ""):
-        token = match.group(0).casefold()
+        token = fold_search_text(match.group(0))
         variants = (token, *re.split(r"[-._/]", token))
         terms.update(part for part in variants if len(part) >= 3 and part not in QUERY_STOPWORDS)
     return terms

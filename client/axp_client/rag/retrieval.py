@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass
 
 from axp_core.fts import search_documents as lexical_search_documents
-from axp_core.hybrid import SearchConfig, _meaningful_terms, _relevance
+from axp_core.fts import TOKEN_RE
+from axp_core.hybrid import SearchConfig, _meaningful_terms, _relevance, fold_search_text
 from axp_core.identifiers import extract_identifiers
 from axp_core.vectors import search_documents as vector_search_documents
 
@@ -114,8 +115,16 @@ def build_scoped_passage_query(query, document_name=""):
         components = {part for part in re.split(r"[-._/]", term) if len(part) >= 3}
         return term in identity or bool(components and components <= identity)
     factual = {term for term in meaningful if not identity_satisfied(term)}
+    original_terms = {}
+    for match in TOKEN_RE.finditer(query or ""):
+        token = match.group(0)
+        folded = fold_search_text(token)
+        variants = [(folded, token.casefold())]
+        variants.extend(zip(re.split(r"[-._/]", folded), re.split(r"[-._/]", token.casefold())))
+        for variant, original in variants:
+            original_terms.setdefault(variant, original)
     # Never issue an empty MATCH expression. This fallback remains stopword-filtered.
-    return " ".join(sorted(factual or meaningful))
+    return " ".join(original_terms.get(term, term) for term in sorted(factual or meaningful))
 
 
 @dataclass(frozen=True)
@@ -283,19 +292,37 @@ def rank_documents(hits, *, intent=None):
         first = rows[0]
         identity_strength = first.get("document_identity_strength", "none")
         identity_bonus = {"none": 0, "weak": .01, "strong": .14, "exact": .22}[identity_strength]
+        query_terms = set(intent.identity_terms) if intent and intent.kind == "general_semantic" else set()
+        def coverage(fields):
+            if not query_terms:
+                return 0.0
+            terms = _meaningful_terms(" ".join(str(row.get(field) or "") for field in fields for row in rows))
+            return len(query_terms & terms) / len(query_terms)
+        document_query_coverage = coverage(("title", "filename", "heading", "snippet", "text", "identifiers"))
+        document_metadata_coverage = coverage(("title", "filename", "heading"))
+        complete_query_match = bool(2 <= len(query_terms) <= 4 and document_query_coverage == 1.0
+                                    and document_metadata_coverage > 0)
         ranked.append({"document_id": document_id, "filename": first.get("filename"), "title": first.get("title"),
             "best_evidence_score": scores[0], "second_evidence_score": scores[1], "third_evidence_score": scores[2],
             "strong_hit_count": strong, "title_coverage": max(float(r.get("title_coverage") or 0) for r in rows),
             "exact_identifier_present": any(r.get("exact_content_identifier_match") for r in rows),
             "exact_phrase_present": any(r.get("exact_content_phrase_match") for r in rows),
             "document_identity_strength": identity_strength,
+            "document_query_coverage": document_query_coverage,
+            "document_metadata_coverage": document_metadata_coverage,
+            "complete_query_match": complete_query_match,
             # Passage density and document metadata are combined only here.
             "document_score": scores[0] + .20*scores[1] + .10*scores[2] + .05*min(strong, 3)
                               + .10*max(float(r.get("title_coverage") or 0) for r in rows)
                               + .03*max(float(r.get("filename_coverage") or 0) for r in rows) + identity_bonus,
             "ranked_hits": rows})
-    ranked.sort(key=lambda doc: (-doc["document_score"], -int(doc["exact_identifier_present"]),
-                                 -int(doc["exact_phrase_present"]), doc["document_id"]))
+    if intent and intent.kind == "general_semantic" and 2 <= len(intent.identity_terms) <= 4:
+        ranked.sort(key=lambda doc: (-int(doc["complete_query_match"]), -doc["document_score"],
+                                     -int(doc["exact_identifier_present"]),
+                                     -int(doc["exact_phrase_present"]), doc["document_id"]))
+    else:
+        ranked.sort(key=lambda doc: (-doc["document_score"], -int(doc["exact_identifier_present"]),
+                                     -int(doc["exact_phrase_present"]), doc["document_id"]))
     return ranked
 
 
