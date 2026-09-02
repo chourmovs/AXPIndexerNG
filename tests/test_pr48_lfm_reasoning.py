@@ -60,11 +60,11 @@ def test_profiles_enable_reasoning_only_for_lfm26():
 
 def test_native_budget_is_fixed_for_normal_and_extended_and_zero_for_tiny(tmp_path, monkeypatch):
     event = '{"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}'
-    for max_tokens, expected in ((256, 48), (384, 48), (64, 0)):
+    for max_tokens, expected_budget, expected_native in ((256, 48, 308), (384, 48, 436), (64, 0, 64)):
         backend, payloads = reasoning_backend(tmp_path, monkeypatch, [event])
         assert backend.generate(system_prompt="system", user_prompt="user", max_tokens=max_tokens) == "answer"
-        assert payloads[0]["max_tokens"] == max_tokens
-        assert payloads[0]["reasoning_budget_tokens"] == expected
+        assert payloads[0]["max_tokens"] == expected_native
+        assert payloads[0]["reasoning_budget_tokens"] == expected_budget
         assert payloads[0]["reasoning_format"] == "deepseek"
 
 
