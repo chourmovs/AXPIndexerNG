@@ -1,5 +1,7 @@
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from .metadata import IndexRebuildRequired, upgrade_v3_index_signature
@@ -21,10 +23,11 @@ def open_catalog_reader(path: str | Path, *, busy_timeout_ms: int = 1000):
     return con
 
 
-def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = False):
+def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = False,
+            check_same_thread: bool = True):
     db_path = Path(path).resolve()
     target = f"file:{db_path}?mode=ro" if readonly else str(db_path)
-    con = sqlite3.connect(target, uri=readonly)
+    con = sqlite3.connect(target, uri=readonly, check_same_thread=check_same_thread)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=5000")
@@ -60,6 +63,121 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
         con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
     con.commit()
     return con
+
+
+SEARCH_CACHE_KIB = 65_536
+SEARCH_MMAP_BYTES = 268_435_456
+
+
+def configure_search_reader(con):
+    """Apply bounded, read-intensive settings without affecting writer connections."""
+    con.execute("PRAGMA query_only=ON")
+    con.execute(f"PRAGMA cache_size=-{SEARCH_CACHE_KIB}")
+    con.execute("PRAGMA temp_store=MEMORY")
+    try:
+        con.execute(f"PRAGMA mmap_size={SEARCH_MMAP_BYTES}")
+    except sqlite3.Error:
+        # mmap is an optional SQLite/platform facility; the page cache remains usable.
+        pass
+    return search_reader_diagnostics(con)
+
+
+def fts_structural_diagnostics(con):
+    """Return best-effort FTS5 segment/page counts across SQLite versions."""
+    try:
+        row = con.execute(
+            "SELECT count(DISTINCT segid), count(DISTINCT segid || ':' || pgno) FROM chunks_fts_idx"
+        ).fetchone()
+        return {"fts_segment_count": int(row[0]), "fts_index_pages": int(row[1])}
+    except sqlite3.Error:
+        return {"fts_segment_count": None, "fts_index_pages": None}
+
+
+def search_reader_diagnostics(con):
+    """Collect safe settings and index-size diagnostics for field telemetry."""
+    def pragma(name, default=None):
+        try:
+            row = con.execute(f"PRAGMA {name}").fetchone()
+            return row[0] if row else default
+        except sqlite3.Error:
+            return default
+
+    def count(table):
+        try:
+            return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+        except sqlite3.Error:
+            return None
+
+    return {
+        "sqlite_cache_size": pragma("cache_size"),
+        "sqlite_mmap_size": pragma("mmap_size", 0),
+        "sqlite_temp_store": pragma("temp_store"),
+        "total_chunks": count("chunks"),
+        "total_vectors": count("chunk_vectors"),
+        **fts_structural_diagnostics(con),
+    }
+
+
+class SearchReaderPool:
+    """Lazy bounded pool whose SQLite readers are exclusively borrowed."""
+
+    def __init__(self, path: str | Path, size: int = 2):
+        if int(size) < 1:
+            raise ValueError("Search reader pool size must be positive")
+        self.path = Path(path)
+        self.size = int(size)
+        self._available = []
+        self._created = 0
+        self._closed = False
+        self._condition = threading.Condition()
+
+    @contextmanager
+    def acquire(self):
+        con = None
+        reused = False
+        with self._condition:
+            while not self._closed and not self._available and self._created >= self.size:
+                self._condition.wait()
+            if self._closed:
+                raise RuntimeError("Search reader pool is closed")
+            if self._available:
+                con = self._available.pop()
+                reused = True
+            else:
+                # Reserve the slot before opening so concurrent initialization stays bounded.
+                self._created += 1
+        if con is None:
+            try:
+                con = connect(self.path, readonly=True, check_same_thread=False)
+                configure_search_reader(con)
+            except Exception:
+                with self._condition:
+                    self._created -= 1
+                    self._condition.notify()
+                raise
+        try:
+            yield con, reused
+        finally:
+            # End any accidental snapshot before another request borrows this reader.
+            if con.in_transaction:
+                con.rollback()
+            with self._condition:
+                if self._closed:
+                    con.close()
+                    self._created -= 1
+                else:
+                    self._available.append(con)
+                self._condition.notify()
+
+    def close(self):
+        """Reject new borrowers and close idle readers (borrowed readers close on return)."""
+        with self._condition:
+            self._closed = True
+            readers, self._available = self._available, []
+            self._created -= len(readers)
+            self._condition.notify_all()
+        for con in readers:
+            con.close()
 
 
 def _check_version(con):

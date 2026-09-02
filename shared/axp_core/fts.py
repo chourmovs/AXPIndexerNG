@@ -27,12 +27,16 @@ def search(con, query, limit=20):
         return []
     limit = min(int(limit), 500)
     rows = con.execute(
-        """SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,
+        """WITH ranked AS (
+ SELECT rowid chunk_id,bm25(chunks_fts,?,?,?,?,?) bm25_score
+ FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25_score,rowid LIMIT ?
+ )
+ SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,
  d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers,
- bm25(chunks_fts,?,?,?,?,?) bm25_score
- FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN documents d ON d.id=c.document_id
+ ranked.bm25_score
+ FROM ranked JOIN chunks c ON c.id=ranked.chunk_id JOIN documents d ON d.id=c.document_id
  JOIN sources s ON s.id=d.source_id
- WHERE chunks_fts MATCH ? ORDER BY bm25_score, c.id LIMIT ?""",
+ ORDER BY ranked.bm25_score,ranked.chunk_id""",
         (*BM25_WEIGHTS, match, limit),
     ).fetchall()
     return [dict(r) for r in rows]

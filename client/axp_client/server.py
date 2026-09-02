@@ -2,12 +2,13 @@ import ipaddress
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from axp_core.background import access_path_for
-from axp_core.database import connect
+from axp_core.database import SearchReaderPool, connect, search_reader_diagnostics
 from axp_core.runtime import configure_logging, load_settings, validate_loopback_host
 
 from .rag.model_manager import ModelManager, ModelManagerError
@@ -72,8 +73,10 @@ def resolve_document_access_path(db, document_id, *, directory=False):
     return next((path for path in candidates if path.exists()), None)
 
 
-def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None, model_manager=None):
+def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None, model_manager=None,
+                 search_readers=None):
     quality_reranker = None
+    search_readers = search_readers or SearchReaderPool(db)
 
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self):
@@ -138,13 +141,16 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             if url.path == "/health":
                 return self.send_json({"status": "ok", "pid": os.getpid()})
             if url.path == "/api/search":
+                http_started = time.perf_counter()
                 nonlocal quality_reranker
                 q = parse_qs(url.query).get("q", [""])[0]
                 explain = parse_qs(url.query).get("explain", ["0"])[0] == "1"
                 profile = parse_qs(url.query).get("profile", ["hybrid"])[0]
                 if profile == "quality" and quality_reranker is None:
                     quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
-                with connect(db, readonly=True) as con:
+                acquire_started = time.perf_counter()
+                with search_readers.acquire() as (con, reader_reused):
+                    db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
                     result = search(
                             con,
                             embedder,
@@ -153,8 +159,15 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                             explain=True,
                             reranker=quality_reranker if profile == "quality" else None,
                         ) if q else {"results": [], "timings": {}, "candidate_counts": {}}
-                    LOGGER.info("Search complete query_length=%s timings=%s candidate_counts=%s",
-                                len(q), result.get("timings"), result.get("candidate_counts"))
+                    result["timings"]["db_acquire_ms"] = db_acquire_ms
+                    result["diagnostics"] = {
+                        "reader_reused": reader_reused,
+                        **search_reader_diagnostics(con),
+                    }
+                    LOGGER.info("Search complete query_length=%s timings=%s candidate_counts=%s diagnostics=%s",
+                                len(q), result.get("timings"), result.get("candidate_counts"),
+                                result.get("diagnostics"))
+                    result["timings"]["http_search_total_ms"] = (time.perf_counter() - http_started) * 1000
                     return self.send_json(result if explain else result["results"])
             if url.path == "/api/ask/health":
                 if not _is_loopback(self.client_address[0]):
@@ -426,13 +439,17 @@ def serve(db, embedder, host="127.0.0.1", port=8765):
     backend = InferenceRuntimeManager(settings)
     rag_service = RagService(backend=backend, search_fn=search, connect_fn=connect, db=db, embedder=embedder)
     model_manager = ModelManager(settings["model_cache"], runtime=rag_service)
-    server = ThreadingHTTPServer((host, port), make_handler(db, embedder, rag_service=rag_service,
-                                                            model_manager=model_manager))
+    search_readers = SearchReaderPool(db)
+    server = ThreadingHTTPServer((host, port), make_handler(
+        db, embedder, rag_service=rag_service, model_manager=model_manager,
+        search_readers=search_readers,
+    ))
     LOGGER.info("Startup context component=client pid=%s host=%s port=%s db_path=%s",
                 os.getpid(), host, port, db)
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        search_readers.close()
         rag_service.close()
         LOGGER.info("Web client stopped")
