@@ -41,16 +41,23 @@ def system_prompt(reasoning_enabled=False):
     return f"{SYSTEM_PROMPT}\n\n{LFM_FINAL_RESPONSE_DISCIPLINE}"
 
 
-def user_prompt(question, evidence, response_instruction=None):
+def user_prompt(question, evidence, response_instruction=None, allowed_citation_ids=None):
     prefix = (f"QUESTION\n{question}\n\nEVIDENCE\n--- BEGIN EVIDENCE ---\n{evidence}"
               "\n--- END EVIDENCE ---")
     if response_instruction is None:
         return (f"{prefix}\n\nAnswer in 1–3 sentences. Every answer MUST contain [Sx]. "
                 "If no supported answer exists, output INSUFFICIENT_EVIDENCE.")
+    citation_contract = ""
+    if allowed_citation_ids is not None:
+        citations = [f"[{source_id}]" for source_id in allowed_citation_ids]
+        citation_contract = ("\n\nALLOWED CITATIONS\n" + " ".join(citations) +
+                             "\n\nYou may use ONLY:\n" + "\n".join(citations) +
+                             "\nAny other [S<number>] is invalid.")
     return f"""{prefix}
 
 FINAL RESPONSE CONTRACT
 {response_instruction}
+{citation_contract}
 
 Every supported answer MUST contain at least one supplied [Sx].
 The first substantive factual sentence MUST contain a valid supplied citation [Sx].

@@ -75,6 +75,7 @@ class InferenceRuntimeManager:
                 model_id=getattr(profile, "id", None),
                 reasoning_enabled=getattr(profile, "reasoning_enabled", False),
                 reasoning_budget_tokens=getattr(profile, "reasoning_budget_tokens", None),
+                reasoning_budget_message=getattr(profile, "reasoning_budget_message", None),
                 reasoning_format=getattr(profile, "reasoning_format", None),
                 min_visible_answer_tokens=getattr(profile, "min_visible_answer_tokens", 0))
             return IntelSyclBackend(settings["chat_model_path"], config, self.accelerators.runtime_root,
