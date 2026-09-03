@@ -210,17 +210,29 @@ export function initAsk() {
         element('p','',`${qualification.model_index} / ${qualification.model_total} · ${qualification.current_model || 'Preparing'}`),
         element('p','muted',`${qualification.phase || 'Preparing'} · ${qualification.backend || 'Intel GPU'} · ${qualification.completed_tests} / ${qualification.total_tests} tests · ${qualification.elapsed_seconds.toFixed(1)} s elapsed`),bar);
     } else if(qualification.report?.models){ const table=element('table','qualification-table');
-      const head=element('tr'); ['Model','Status','Protocol','Prompt','Decode','TTFT','Offload','Stability'].forEach(v=>head.append(element('th','',v)));
-      const body=element('tbody'); for(const result of qualification.report.models){ const row=element('tr'); const warm=result.performance?.quick_warm || {};
-        const status=element('span',`chip ${result.status === 'qualified' ? 'success' : result.status === 'warning' ? 'warning' : 'danger'}`,String(result.status || 'failed').replaceAll('_',' ').toUpperCase());
-        const values=[result.name,status,result.dimensions?.protocol || '—',warm.prompt_eval_tokens_per_second ? `${warm.prompt_eval_tokens_per_second.toFixed(1)} tok/s` : '—',warm.decode_tps ? `${warm.decode_tps.toFixed(1)} tok/s` : '—',warm.ttft_ms ? `${(warm.ttft_ms/1000).toFixed(1)} s` : '—',result.runtime?.offloaded_layers != null ? `${result.runtime.offloaded_layers}/${result.runtime.total_layers || '?'}` : '—',result.dimensions?.stability || '—'];
-        values.forEach(v=>{ const cell=element('td'); if(v instanceof Node)cell.append(v); else cell.textContent=v; row.append(cell); }); body.append(row); }
-      table.append(head,body); qualificationProgress.append(element('strong','', 'Model qualification results'),table); }
+      const legacy=qualification.report.qualification_schema_version !== 2;
+      const head=element('tr'); ['Model','Status','AXP Protocol','RAG Prompt','RAG Decode','RAG TTFT','RAG Time','Offload','Stability'].forEach(v=>head.append(element('th','',v)));
+      const body=element('tbody'); for(const result of qualification.report.models){ const row=element('tr'); const rag=result.performance?.rag || {};
+        const normalized=String(result.status || 'failed').toUpperCase();
+        const status=element('span',`chip ${normalized === 'QUALIFIED' ? 'success' : normalized.includes('WARNING') || normalized.includes('PARTIAL') ? 'warning' : 'danger'}`,normalized.replaceAll('_',' '));
+        const protocol=result.axp_protocol;
+        const values=[result.name,status,protocol ? `${protocol.passed}/${protocol.total}` : 'Legacy',rag.prompt_eval_tokens_per_second ? `${rag.prompt_eval_tokens_per_second.toFixed(1)} tok/s` : '—',rag.decode_tps ? `${rag.decode_tps.toFixed(1)} tok/s` : '—',rag.ttft_ms ? `${(rag.ttft_ms/1000).toFixed(1)} s` : '—',rag.generation_ms ? `${(rag.generation_ms/1000).toFixed(1)} s` : '—',result.runtime?.offloaded_layers != null ? `${result.runtime.offloaded_layers}/${result.runtime.total_layers || '?'}` : '—',result.dimensions?.stability || '—'];
+        values.forEach(v=>{ const cell=element('td'); if(v instanceof Node)cell.append(v); else cell.textContent=v; row.append(cell); }); body.append(row);
+        if(protocol){ const detailRow=element('tr','qualification-detail-row'); const cell=element('td'); cell.colSpan=9;
+          const details=element('details'); const summary=element('summary','',`AXP protocol details · Load ${result.runtime?.model_load_ms ? (result.runtime.model_load_ms/1000).toFixed(1)+' s' : '—'}`); details.append(summary);
+          for(const test of protocol.tests || []){ const item=element('div',`qualification-test ${test.passed ? 'pass' : 'fail'}`); item.append(element('strong','',`${test.passed ? '✓' : '✗'} ${test.id.replaceAll('_',' ')}`));
+            if(!test.passed)item.append(element('p','',`Reason: ${(test.reasons || []).join(', ') || 'validation failed'}`),element('p','',`Model answer: ${test.answer || ''}`),element('p','muted',`Expected: ${test.expected_rule || ''}`)); details.append(item); }
+          cell.append(details); detailRow.append(cell); body.append(detailRow); }}
+      table.append(head,body); qualificationProgress.append(element('strong','', legacy ? 'Legacy qualification report' : 'Model qualification results'),table); }
     document.querySelector('#remove-intel-runtime').hidden=!installed;
     document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
       installed ? `${catalog.hardware.intel_gpu_name} · Intel GPU runtime installed · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : probeErrorMessage(catalog.hardware.sycl_probe_error)}` :
       `${catalog.hardware.intel_gpu_name} detected · SYCL runtime not installed · approximately 120 MB · Official llama.cpp Windows SYCL runtime · Experimental`;
-    if ((downloading || benchmarkActive || qualificationActive) && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
+    if ((downloading || benchmarkActive || qualificationActive) && !manager.hidden) {
+      // Qualification uses a quieter cadence; existing download/benchmark
+      // controls retain their established responsive polling contract.
+      downloadTimer=qualificationActive ? setTimeout(renderManager,1500) : setTimeout(renderManager,750);
+    }
   }
   document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
   document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }

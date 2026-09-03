@@ -156,15 +156,10 @@ class ModelManager:
         original = dict(load_settings())
         original_profile = catalog_model(original.get("chat_active_model_id"))
 
-        def configured(model, max_tokens):
-            values = {key: getattr(model, key) for key in model.__dataclass_fields__}
-            values["max_answer_tokens"] = max_tokens
-            return type(model)(**values)
-
-        def factory(model, device, max_tokens):
+        def factory(model, device, _benchmark_max_tokens=None):
             settings = {**original, "chat_active_model_id": model.id,
                         "chat_model_path": str(self.model_path(model.id)), "chat_inference_device": device}
-            return controller._make_backend(settings, configured(model, max_tokens))
+            return controller._make_backend(settings, model)
 
         def restore():
             # Settings were never modified; re-create precisely the runtime the user had.
