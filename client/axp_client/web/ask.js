@@ -228,7 +228,11 @@ export function initAsk() {
     document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
       installed ? `${catalog.hardware.intel_gpu_name} · Intel GPU runtime installed · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : probeErrorMessage(catalog.hardware.sycl_probe_error)}` :
       `${catalog.hardware.intel_gpu_name} detected · SYCL runtime not installed · approximately 120 MB · Official llama.cpp Windows SYCL runtime · Experimental`;
-    if ((downloading || benchmarkActive || qualificationActive) && !manager.hidden) downloadTimer=setTimeout(renderManager,qualificationActive ? 1500 : 750);
+    if ((downloading || benchmarkActive || qualificationActive) && !manager.hidden) {
+      // Qualification uses a quieter cadence; existing download/benchmark
+      // controls retain their established responsive polling contract.
+      downloadTimer=qualificationActive ? setTimeout(renderManager,1500) : setTimeout(renderManager,750);
+    }
   }
   document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
   document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }
