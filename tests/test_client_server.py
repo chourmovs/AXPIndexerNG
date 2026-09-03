@@ -150,6 +150,19 @@ def test_shutdown_endpoint_accepts_loopback(tmp_path):
     assert status == 200
 
 
+def test_version_endpoint_exposes_safe_packaged_identity(tmp_path, monkeypatch):
+    expected = {"version": "v0.3.4-alpha5", "commit": "abcdef1", "release": True}
+    monkeypatch.setattr(server, "build_info", lambda: expected)
+    with running_server(tmp_path / "unused.db", lambda _: None) as httpd:
+        connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=2)
+        connection.request("GET", "/api/version")
+        response = connection.getresponse()
+        body = response.read()
+        connection.close()
+    assert response.status == 200
+    assert json.loads(body) == expected
+
+
 def test_ask_request_limits_and_health_do_not_generate(tmp_path):
     class Rag:
         def __init__(self):

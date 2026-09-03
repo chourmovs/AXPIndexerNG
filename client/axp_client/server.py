@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from axp_core.background import access_path_for
+from axp_core.build_info import build_info
 from axp_core.database import SearchReaderPool, connect, search_reader_diagnostics
 from axp_core.runtime import configure_logging, load_settings, validate_loopback_host
 
@@ -28,6 +29,9 @@ from .search import search
 
 WEB = Path(__file__).parent / "web"
 LOGGER = configure_logging("axp_client", "client.log")
+_BUILD = build_info()
+LOGGER.info("AXP build version=%s commit=%s release=%s", _BUILD["version"],
+            _BUILD["commit"] or "unknown", _BUILD["release"])
 
 
 def open_with_default_application(path):
@@ -140,6 +144,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             url = urlparse(self.path)
             if url.path == "/health":
                 return self.send_json({"status": "ok", "pid": os.getpid()})
+            if url.path == "/api/version":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                return self.send_json(build_info())
             if url.path == "/api/search":
                 http_started = time.perf_counter()
                 nonlocal quality_reranker

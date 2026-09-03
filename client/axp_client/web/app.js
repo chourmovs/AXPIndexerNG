@@ -1,5 +1,6 @@
 import {initSearch} from './search.js';
 import {initAsk} from './ask.js';
+import {getBuildInfo} from './api.js';
 
 const searchTab = document.querySelector('#search-tab');
 const askTab = document.querySelector('#ask-tab');
@@ -17,3 +18,9 @@ function selectMode(mode) {
 searchTab.addEventListener('click', () => selectMode('search'));
 askTab.addEventListener('click', () => selectMode('ask'));
 initSearch();
+
+getBuildInfo().then(info => {
+  document.querySelectorAll('[data-build-version]').forEach(node => { node.textContent = info.version; });
+  const badge = document.querySelector('#build-version');
+  if (info.commit) badge.title = `Build ${info.commit}`;
+}).catch(() => { /* The server-side fallback normally makes this unreachable. */ });

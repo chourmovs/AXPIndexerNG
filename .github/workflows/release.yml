@@ -37,6 +37,15 @@ jobs:
           & stage/AXPIndexerNG/python/python.exe -B -m pip install --no-binary llama-cpp-python -r requirements-runtime.txt
           if ($LASTEXITCODE -ne 0) { throw 'Controlled portable llama-cpp-python source build failed' }
           Copy-Item daemon,client,shared,tray,scripts,README.md,AXPIndexerTray.pyw,AXPIndexerTray.vbs,AXPIndexerDaemon.pyw,config.example.json stage/AXPIndexerNG -Recurse
+          $isRelease = $env:GITHUB_REF_TYPE -eq 'tag'
+          $buildVersion = if ($isRelease) { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          @{ version=$buildVersion; commit=$env:GITHUB_SHA; release=$isRelease } |
+            ConvertTo-Json | Set-Content stage/AXPIndexerNG/BUILD_INFO.json -Encoding utf8
+          $buildInfo = Get-Content stage/AXPIndexerNG/BUILD_INFO.json -Raw | ConvertFrom-Json
+          if ($buildInfo.commit -ne $env:GITHUB_SHA) { throw 'BUILD_INFO commit does not match GITHUB_SHA' }
+          if ($isRelease -and $buildInfo.version -ne $env:GITHUB_REF_NAME) {
+            throw 'BUILD_INFO version does not match release tag'
+          }
           New-Item -ItemType Directory stage/AXPIndexerNG/data,stage/AXPIndexerNG/data/logs,stage/AXPIndexerNG/data/runtime -Force | Out-Null
           @(
             '@echo off'
