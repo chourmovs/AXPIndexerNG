@@ -58,22 +58,77 @@ def validate_scalar(answer):
 
 def validate_grounding(answer):
     lower = normalize_validation_text(answer)
-    refusal = "insufficient_evidence" in lower or any(value in lower for value in (
-        "liquid density is not", "liquid density was not", "liquid density cannot", "liquid density cannot be",
-        "does not provide liquid density", "only gives relative vapor density"))
-    assertion = bool(re.search(r"(?:liquid\s+)?density\s*(?:is|=|:|of)?\s*3\.4", lower))
-    ok = refusal and not assertion and (_valid_citations(answer) or lower == "insufficient_evidence")
-    return ok, [] if ok else ["unsupported_liquid_density"]
+    property_term = r"(?:liquid\s+)?density"
+    missing_term = (r"(?:not\s+(?:explicitly\s+)?(?:provided|specified|stated|given|available|defined)"
+                    r"|unavailable|cannot\s+(?:be\s+)?(?:determined|inferred))")
+    refusal = lower == "insufficient_evidence" or bool(re.search(
+        rf"(?:{property_term}.{{0,45}}{missing_term}|"
+        rf"(?:evidence|information|details|data).{{0,45}}(?:does|do)\s+not\s+"
+        rf"(?:provide|specify|state|give|contain).{{0,45}}{property_term}|"
+        rf"no\s+(?:specific\s+)?{property_term}\s+(?:is\s+)?(?:provided|specified|stated|given|available)|"
+        rf"only\s+(?:the\s+)?relative\s+vapou?r\s+density\s+(?:is\s+)?(?:provided|given)|"
+        rf"(?:available\s+)?(?:data|details|information).{{0,45}}vapou?r\s+density.{{0,30}}not\s+(?:the\s+)?liquid(?:'s)?\s+density|"
+        r"insufficient\s+evidence)", lower))
+
+    liquid_value = bool(re.search(
+        r"(?:liquid\s+density(?:\s+of\s+test-heptane)?|density\s+of\s+test-heptane)"
+        r"\s*(?:is|=|:|would\s+be|is\s+approximately|≈|~)\s*(?:approximately\s+)?(?:3\.4|4\.19)\b",
+        lower))
+    calculation = bool(re.search(
+        r"(?:3\.4\s*(?:\*|×|x)\s*1\.225|(?:infer|calculat|would\s+be|gives?).{0,55}"
+        r"(?:density\s+of\s+test-heptane|4\.19\s*kg\s*/?\s*m3)|"
+        r"density\s+of\s+test-heptane.{0,35}4\.19\s*kg\s*/?\s*m3)", lower))
+    citation_valid = _valid_citations(answer) or lower == "insufficient_evidence"
+    reasons = []
+    if liquid_value or calculation:
+        # Keep the PR56 umbrella reason for report/API compatibility; the next
+        # item identifies which deterministic relation check fired.
+        reasons.append("unsupported_liquid_density")
+    if liquid_value:
+        reasons.append("unsupported_liquid_density_asserted")
+    if calculation:
+        reasons.append("unsupported_density_calculation")
+    if not refusal:
+        reasons.append("missing_grounding_refusal")
+    if not citation_valid:
+        reasons.append("invalid_citation")
+    return not reasons, reasons
+
+
+def _has_unnegated_concept(text, concept):
+    """Return whether a concept is asserted rather than mentioned as unavailable."""
+    for match in re.finditer(concept, text):
+        prefix = text[max(0, match.start() - 55):match.start()]
+        if re.search(r"(?:\bno\b|\bnot\b|\bwithout\b|\bneither\b).{0,35}$", prefix):
+            continue
+        suffix = text[match.end():match.end() + 45]
+        if re.match(r".{0,25}\b(?:not|unavailable|unspecified)\b", suffix):
+            continue
+        return True
+    return False
 
 
 def validate_packaging(answer):
     lower = normalize_validation_text(answer)
-    refusal = any(value in lower for value in ("not specify", "not provided", "not stated", "no packaging",
-                                                "cannot be determined", "cannot determine", "insufficient_evidence",
-                                                "only states packing group iii"))
-    invented = bool(re.search(r"\b(?:type\s*(?:iii|3)\s*(?:container|packag)|ibc|drum|barrel|bottle)\b", lower))
-    ok = refusal and not invented and (_valid_citations(answer) or lower == "insufficient_evidence")
-    return ok, [] if ok else ["invented_packaging"]
+    refusal = lower == "insufficient_evidence" or bool(re.search(
+        r"(?:no\s+(?:(?:specific|ibc|type\s*(?:iii|3))\s+)?(?:packaging(?:\s+type)?|container(?:\s+specification)?)|"
+        r"(?:packaging(?:\s+type)?|container\s+specification).{0,35}"
+        r"(?:not\s+(?:explicitly\s+)?(?:provided|specified|stated|given|defined)|cannot\s+be\s+determined)|"
+        r"(?:no|there\s+are\s+no)\s+(?:specific\s+)?details.{0,20}(?:actual\s+)?packaging|"
+        r"permitted\s+packaging.{0,20}cannot\s+be\s+determined|"
+        r"only\s+(?:the\s+)?adr\s+packing\s+group\s+(?:is\s+)?(?:provided|given|stated)|"
+        r"does\s+not\s+specify.{0,25}(?:packaging|container)|insufficient_evidence)", lower))
+    concept = r"\b(?:type\s*(?:iii|3)\s*(?:container|packag\w*)|ibc|drums?|barrels?|bottles?)\b"
+    invented = _has_unnegated_concept(lower, concept)
+    citation_valid = _valid_citations(answer) or lower == "insufficient_evidence"
+    reasons = []
+    if invented:
+        reasons.append("invented_packaging")
+    if not refusal:
+        reasons.append("missing_packaging_refusal")
+    if not citation_valid:
+        reasons.append("invalid_citation")
+    return not reasons, reasons
 
 
 def validate_citation(answer):
@@ -85,11 +140,18 @@ def validate_summary(answer):
     lower = normalize_validation_text(answer)
     required = ("colorless liquid", "0.72", "98", "-4", "negligible")
     forbidden = ("viscosity", "odor", "vapour pressure", "vapor pressure", "melting point")
-    complete = bool(re.search(r"(?:[.!?]|\[S1\])$", lower)) and not lower.endswith(("and", ",", ":", "-"))
-    invented = any(re.search(rf"\b{re.escape(value)}\b(?!\s+(?:is|was|are|were)?\s*(?:not|unavailable))", lower)
-                   for value in forbidden)
-    ok = all(value in lower for value in required) and _valid_citations(answer) and complete and not invented
-    return ok, [] if ok else ["incomplete_incorrect_or_invented_summary"]
+    complete = not bool(re.search(r"(?:\b(?:and|or|with|including|such\s+as)|[,;:\-])$", lower))
+    invented = any(_has_unnegated_concept(lower, rf"\b{re.escape(value)}\b") for value in forbidden)
+    reasons = []
+    if not all(value in lower for value in required):
+        reasons.append("missing_required_property")
+    if invented:
+        reasons.append("invented_property")
+    if not _valid_citations(answer):
+        reasons.append("invalid_citation")
+    if not complete:
+        reasons.append("truncated_answer")
+    return not reasons, reasons
 
 
 def validate_materials(answer):
