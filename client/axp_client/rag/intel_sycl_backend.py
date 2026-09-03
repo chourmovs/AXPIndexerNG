@@ -38,7 +38,9 @@ LOGGER = logging.getLogger("axp_client")
 DEVICE_LOST_TYPE = "intel_gpu_device_lost"
 DEVICE_LOST_CODE = "UR_RESULT_ERROR_DEVICE_LOST"
 DEVICE_LOST_REASON = "The Intel GPU inference device was reset during generation."
-REASONING_CONTROL_HEADROOM_TOKENS = 4
+BASE_REASONING_CONTROL_HEADROOM_TOKENS = 4
+# Compatibility name retained for callers/tests from PR49.
+REASONING_CONTROL_HEADROOM_TOKENS = BASE_REASONING_CONTROL_HEADROOM_TOKENS
 THINK_CLOSE_RE = re.compile(r"\\?</think>", re.IGNORECASE)
 THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
 
@@ -481,6 +483,7 @@ class IntelSyclBackend:
                    "repeat_penalty": self.config.repeat_penalty}
         effective_reasoning_budget = None
         reasoning_control_headroom = 0
+        reasoning_budget_message_tokens = 0
         if self.config.reasoning_enabled and self.config.reasoning_budget_tokens is not None:
             effective_reasoning_budget = min(
                 self.config.reasoning_budget_tokens,
@@ -488,7 +491,11 @@ class IntelSyclBackend:
             )
             payload["reasoning_budget_tokens"] = effective_reasoning_budget
             if effective_reasoning_budget:
-                reasoning_control_headroom = REASONING_CONTROL_HEADROOM_TOKENS
+                if self.config.reasoning_budget_message:
+                    payload["reasoning_budget_message"] = self.config.reasoning_budget_message
+                    reasoning_budget_message_tokens = self.count_tokens(self.config.reasoning_budget_message)
+                reasoning_control_headroom = (BASE_REASONING_CONTROL_HEADROOM_TOKENS +
+                                              reasoning_budget_message_tokens)
             payload["max_tokens"] = (visible_answer_budget + effective_reasoning_budget +
                                      reasoning_control_headroom)
             if self.config.reasoning_format:
@@ -536,14 +543,17 @@ class IntelSyclBackend:
                                 generated_characters=self._progress["generated_characters"] + len(content),
                                 time_to_first_token_ms=(first_visible-started)*1000, last_fragment_monotonic=now)
             ended = time.perf_counter()
+            raw_content = "".join(answer_fragments)
+            raw_content_tokens = self.count_tokens(raw_content) if raw_content else 0
             answer, reasoning_leak_detected, reasoning_leak_type = sanitize_reasoning_leak(
-                "".join(answer_fragments), self.config.reasoning_enabled,
+                raw_content, self.config.reasoning_enabled,
             )
             if self._native_failure_snapshot():
                 raise IntelSyclError(DEVICE_LOST_TYPE)
             reasoning_text = "".join(reasoning_fragments)
             reasoning_tokens = self.count_tokens(reasoning_text) if reasoning_text else 0
             answer_tokens = self.count_tokens(answer) if answer else 0
+            discarded_content_tokens = max(0, raw_content_tokens - answer_tokens)
             generation_ms = (ended-started)*1000
             decode_ms = (ended-first_visible)*1000 if first_visible else None
             timing = native_timings or {}
@@ -551,7 +561,7 @@ class IntelSyclBackend:
             prompt_n = timing.get("prompt_n", timing.get("prompt_tokens"))
             predicted_ms = timing.get("predicted_ms", timing.get("decode_ms"))
             predicted_n = timing.get("predicted_n", timing.get("completion_tokens"))
-            completion_total = predicted_n if predicted_n is not None else reasoning_tokens + answer_tokens
+            completion_total = predicted_n if predicted_n is not None else reasoning_tokens + raw_content_tokens
             if reasoning_leak_type == "unterminated" and not answer:
                 generation_result = "reasoning_leak_unterminated"
             elif finish == "length":
@@ -575,12 +585,20 @@ class IntelSyclBackend:
                 "prompt_eval_timing_derived": prompt_ms is None,
                 "decode_ms": predicted_ms or decode_ms, "completion_tokens": completion_total,
                 "completion_tokens_total": completion_total, "reasoning_tokens": reasoning_tokens,
-                "answer_tokens": answer_tokens, "unattributed_tokens": max(
-                    0, completion_total - reasoning_tokens - answer_tokens),
+                "reasoning_channel_tokens": reasoning_tokens, "raw_content_tokens": raw_content_tokens,
+                "answer_tokens": answer_tokens, "sanitized_answer_tokens": answer_tokens,
+                "discarded_content_tokens": discarded_content_tokens,
+                "native_completion_tokens": completion_total,
+                "native_unattributed_tokens": max(0, completion_total - reasoning_tokens - raw_content_tokens),
+                "unattributed_tokens": max(0, completion_total - reasoning_tokens - raw_content_tokens),
+                "reasoning_spillover_detected": discarded_content_tokens > 0,
+                "reasoning_spillover_ratio": (discarded_content_tokens / completion_total
+                                              if completion_total > 0 else 0.0),
                 "reasoning_budget_tokens": effective_reasoning_budget,
                 "visible_answer_budget_tokens": visible_answer_budget,
                 "native_max_tokens": payload["max_tokens"],
                 "reasoning_control_headroom_tokens": reasoning_control_headroom,
+                "reasoning_budget_message_tokens": reasoning_budget_message_tokens,
                 "reasoning_leak_detected": reasoning_leak_detected,
                 "reasoning_leak_type": reasoning_leak_type,
                 "generation_result": generation_result,
@@ -596,12 +614,16 @@ class IntelSyclBackend:
             if self.config.reasoning_enabled:
                 LOGGER.info("Intel reasoning telemetry model_id=%s reasoning_budget=%s "
                             "visible_answer_budget=%s native_max_tokens=%s "
-                            "reasoning_control_headroom_tokens=%s reasoning_tokens=%s answer_tokens=%s "
+                            "reasoning_control_headroom_tokens=%s reasoning_budget_message_tokens=%s "
+                            "reasoning_tokens=%s raw_content_tokens=%s answer_tokens=%s "
+                            "discarded_content_tokens=%s reasoning_spillover_detected=%s "
                             "completion_tokens_total=%s reasoning_leak_detected=%s reasoning_leak_type=%s "
                             "reasoning_ttft_ms=%s visible_ttft_ms=%s reasoning_phase_ms=%s "
                             "finish_reason=%s generation_result=%s",
                             self.config.model_id, effective_reasoning_budget, visible_answer_budget,
-                            payload["max_tokens"], reasoning_control_headroom, reasoning_tokens, answer_tokens,
+                            payload["max_tokens"], reasoning_control_headroom, reasoning_budget_message_tokens,
+                            reasoning_tokens, raw_content_tokens, answer_tokens, discarded_content_tokens,
+                            discarded_content_tokens > 0,
                             completion_total, reasoning_leak_detected, reasoning_leak_type,
                             reasoning_ttft_ms, visible_ttft_ms, reasoning_phase_ms, finish, generation_result)
             with self._progress_lock: self._progress.update(active=False, phase="completed", finish_reason=finish)

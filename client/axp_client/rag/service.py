@@ -14,7 +14,8 @@ from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, system_prompt, user_prompt
-from .response_policy import classify_response_plan
+from .response_policy import (canonicalize_scalar_response, classify_response_plan,
+                              cleanup_truncated_tail)
 from .retrieval import (classify_query_evidence_intent, rank_documents,
                         retrieve_document_passages, retrieve_rag_candidates)
 
@@ -267,8 +268,10 @@ class RagService:
                 context_start = time.perf_counter()
                 try:
                     system_tokens = self.backend.count_tokens(active_system_prompt)
+                    reserved_ids = ([f"S{i}" for i in range(1, generation_config.max_context_blocks + 1)]
+                                    if reasoning_enabled else None)
                     question_tokens = self.backend.count_tokens(
-                        user_prompt(question, "", response_instruction))
+                        user_prompt(question, "", response_instruction, reserved_ids))
                     fixed_tokens = system_tokens + question_tokens
                     effective_answer_tokens = min(requested_answer_tokens, max(0,
                         self.backend.context_window() - fixed_tokens - generation_config.safety_tokens))
@@ -416,7 +419,9 @@ class RagService:
                     lambda: self.backend.generate(system_prompt=active_system_prompt,
                                                   user_prompt=user_prompt(
                                                       question, context.prompt_text,
-                                                      response_instruction),
+                                                      response_instruction,
+                                                      [block.id for block in context.blocks]
+                                                      if reasoning_enabled else None),
                                                   max_tokens=effective_answer_tokens),
                     generation_poll, interval=.25)
             except GenerationCancelled:
@@ -431,6 +436,28 @@ class RagService:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
         telemetry = getattr(self.backend, "last_telemetry", None) or {}
+        supplied_ids = [block.id for block in context.blocks]
+        pre_canonical_tokens = self.backend.count_tokens(answer) if answer else 0
+        canonicalized = False
+        canonicalization_reason = None
+        tail_cleanup = False
+        if reasoning_enabled and response_plan.mode == "scalar_lookup":
+            answer, canonicalized, canonicalization_reason = canonicalize_scalar_response(answer, supplied_ids)
+        elif (reasoning_enabled and telemetry.get("finish_reason") == "length" and
+              response_plan.mode in {"summary", "analytical", "direct_lookup"}):
+            answer, tail_cleanup = cleanup_truncated_tail(answer, supplied_ids)
+        post_canonical_tokens = self.backend.count_tokens(answer) if answer else 0
+        telemetry.update(response_canonicalized=canonicalized,
+                         response_canonicalization_reason=canonicalization_reason,
+                         pre_canonical_answer_tokens=pre_canonical_tokens,
+                         post_canonical_answer_tokens=post_canonical_tokens,
+                         truncated_tail_cleanup_applied=tail_cleanup)
+        if canonicalized:
+            telemetry["generation_result"] = "normal_answer_after_scalar_canonicalization"
+        elif tail_cleanup:
+            telemetry["generation_result"] = "normal_answer_after_tail_cleanup"
+        elif telemetry.get("reasoning_spillover_detected") and telemetry.get("generation_result") == "normal_answer":
+            telemetry["generation_result"] = "reasoning_spillover_cleaned"
         answer_word_count = len(re.findall(r"\w+", answer or ""))
         citation_match = re.search(r"\[S\d+\]", answer or "")
         telemetry.update({"inference_device_requested": health.get("inference_device_requested"),
@@ -470,7 +497,6 @@ class RagService:
             if (answer or "").strip().upper().startswith("INSUFFICIENT_EVIDENCE"):
                 base["decision"] = {"reason": "model_declined", "best_relevance": decision.best_relevance}
             else:
-                supplied_ids = [block.id for block in context.blocks]
                 validation_start = time.perf_counter()
                 validation_reason, cited = classify_citations(answer, supplied_ids)
                 citation_validation_ms = (time.perf_counter() - validation_start) * 1000

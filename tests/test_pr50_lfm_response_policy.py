@@ -10,7 +10,7 @@ def plan(question):
 
 def test_scalar_lookup():
     response = plan("What is the density of MTBE?")
-    assert (response.mode, response.answer_tokens, response.target_words) == ("scalar_lookup", 224, 60)
+    assert (response.mode, response.answer_tokens, response.target_words) == ("scalar_lookup", 128, 40)
 
 
 def test_french_scalar_uses_existing_intent_without_expanding_it():
@@ -23,7 +23,7 @@ def test_french_scalar_uses_existing_intent_without_expanding_it():
 def test_direct_lookups():
     assert plan("What is the DOMINO reaction sequence?").mode == "direct_lookup"
     packaging = plan("What packaging is possible for ammonia 20.5%?")
-    assert (packaging.mode, packaging.answer_tokens) == ("direct_lookup", 224)
+    assert (packaging.mode, packaging.answer_tokens) == ("direct_lookup", 192)
 
 
 def test_english_and_french_summaries():
@@ -32,7 +32,7 @@ def test_english_and_french_summaries():
         "Résume les principales propriétés physiques du n-heptane 99%.",
     ):
         response = plan(question)
-        assert (response.mode, response.answer_tokens, response.target_words) == ("summary", 320, 220)
+        assert (response.mode, response.answer_tokens, response.target_words) == ("summary", 288, 160)
 
 
 def test_analytical_request():
@@ -42,8 +42,8 @@ def test_analytical_request():
 
 def test_lfm_budget_does_not_follow_depth_output_multiplier():
     for question, expected in (
-        ("What is the DOMINO reaction sequence?", 224),
-        ("Summarize the main properties.", 320),
+        ("What is the DOMINO reaction sequence?", 192),
+        ("Summarize the main properties.", 288),
     ):
         response = plan(question)
         assert [response.answer_tokens for _ in (0, 1)] == [expected, expected]

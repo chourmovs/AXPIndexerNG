@@ -64,13 +64,15 @@ def test_generate_sanitizes_before_answer_accounting(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "_post", lambda _path, _payload: SseResponse(content))
 
     assert backend.generate(system_prompt="system", user_prompt="user") == "Actual answer [S1]"
-    assert tokenized == ["Actual answer [S1]"]
+    assert tokenized == [content, "Actual answer [S1]"]
     assert backend.last_telemetry["answer_tokens"] == 3
     assert backend.last_telemetry["reasoning_leak_detected"] is True
     assert backend.last_telemetry["reasoning_leak_type"] == "orphan_closing"
     assert backend.last_telemetry["visible_answer_budget_tokens"] == 256
     assert backend.last_telemetry["native_max_tokens"] == 308
     assert backend.last_telemetry["reasoning_control_headroom_tokens"] == 4
+    assert backend.last_telemetry["discarded_content_tokens"] > 0
+    assert backend.last_telemetry["reasoning_spillover_detected"] is True
 
 
 def test_generate_reports_unterminated_leak_as_empty_answer(tmp_path, monkeypatch):

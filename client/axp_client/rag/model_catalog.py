@@ -36,6 +36,7 @@ class ModelProfile:
     chat_template_kwargs: dict = field(default_factory=dict)
     reasoning_enabled: bool = False
     reasoning_budget_tokens: int | None = None
+    reasoning_budget_message: str | None = None
     reasoning_format: str | None = None
     min_visible_answer_tokens: int = 0
 
@@ -85,6 +86,7 @@ MODELS = (
                  max_context_documents=4, max_context_blocks=8, max_seeds_per_document=2,
                  temperature=0.1, top_p=1.0, top_k=50, repeat_penalty=1.1,
                  reasoning_enabled=True, reasoning_budget_tokens=48,
+                 reasoning_budget_message="Now produce the final answer only.",
                  reasoning_format="deepseek", min_visible_answer_tokens=96),
 )
 

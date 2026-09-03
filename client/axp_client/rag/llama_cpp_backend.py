@@ -91,6 +91,7 @@ class GenerationConfig:
     model_id: str | None = None
     reasoning_enabled: bool = False
     reasoning_budget_tokens: int | None = None
+    reasoning_budget_message: str | None = None
     reasoning_format: str | None = None
     min_visible_answer_tokens: int = 0
 
