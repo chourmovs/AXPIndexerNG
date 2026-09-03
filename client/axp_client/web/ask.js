@@ -149,9 +149,14 @@ export function initAsk() {
         model.model_state === 'loading' ? ' · SELECTED · LOADING' : model.model_state === 'failed' ?
           ` · SELECTED · LOAD FAILED${model.failure_type === 'model_template_incompatible' ? ' — INCOMPATIBLE CHAT TEMPLATE' : ''}` : ' · SELECTED';
       const badge = model.experimental ? 'EXPERIMENTAL' : model.recommended ? 'RECOMMENDED' : model.profile === 'balanced' ? 'BALANCED' : '';
-      card.append(element('strong','',`${model.name}${badge ? ` · ${badge}` : ''}${stateLabel}`),
-        element('p','muted',`${model.profile === 'fast' ? 'Fast' : 'Balanced'} · ${model.display_size} · ${model.license}`),
-        element('small','',`${model.repository} · ${model.quantization}`));
+      const title=element('div','model-title'); title.append(element('strong','',model.name),
+        element('span',`chip ${model.selected ? 'primary' : model.installed ? 'success' : 'neutral'}`,model.selected ? 'SELECTED' : model.installed ? 'INSTALLED' : 'AVAILABLE'));
+      const chips=element('div','model-chips');
+      chips.append(element('span','chip neutral',(model.profile === 'fast' ? 'FAST' : 'BALANCED')));
+      if(badge) chips.append(element('span',`chip ${model.experimental ? 'warning' : 'neutral'}`,badge));
+      card.append(title,chips,
+        element('p','muted',`${model.quantization} · ${model.display_size}`),
+        element('small','',`${model.repository} · ${model.license}${stateLabel}`));
       if (model.experimental) card.append(element('p','muted','Optimized for fast local inference / RAG. Review model license terms before organizational deployment.'));
       const job=model.download;
       if (job && activeDownloadStates.has(job.state)) { downloading=true; const bar=element('progress'); bar.max=100; bar.value=job.percentage;
@@ -178,6 +183,9 @@ export function initAsk() {
     downloading=downloading || acceleratorDownloadActive;
     document.querySelector('#download-intel-runtime').hidden=installed || !catalog.hardware.intel_gpu_detected || acceleratorDownloadActive;
     document.querySelector('#retry-intel-probe').hidden=!installed || catalog.hardware.sycl_probe_ok || acceleratorDownloadActive;
+    const runtimeBadge=document.querySelector('#intel-runtime-badge');
+    runtimeBadge.textContent=catalog.hardware.sycl_probe_ok ? 'READY' : installed ? 'DETECTION PENDING' : 'NOT INSTALLED';
+    runtimeBadge.className=`chip ${catalog.hardware.sycl_probe_ok ? 'success' : 'neutral'}`;
     const cancelRuntime=document.querySelector('#cancel-intel-runtime');
     cancelRuntime.hidden=!['queued','connecting','downloading'].includes(acceleratorJob?.state);
     const runtimeProgress=document.querySelector('#intel-runtime-progress'); runtimeProgress.replaceChildren();
@@ -191,19 +199,22 @@ export function initAsk() {
     const qualificationActive=!['idle','complete','complete_with_errors','failed','cancelled'].includes(qualification.state);
     document.querySelector('#benchmark-intel').disabled=benchmarkActive || qualificationActive;
     document.querySelector('#cancel-benchmark').hidden=!benchmarkActive;
-    const qualify=document.querySelector('#qualify-models'); qualify.hidden=!catalog.hardware.accelerator_available;
+    const installedModels=catalog.models.some(model=>model.installed) || Boolean(catalog.custom_model?.installed);
+    const qualify=document.querySelector('#qualify-models'); qualify.hidden=!(catalog.hardware.qualification_supported && installedModels);
     qualify.disabled=benchmarkActive || qualificationActive || downloading;
     document.querySelector('#cancel-qualification').hidden=!qualificationActive;
     const qualificationProgress=document.querySelector('#qualification-progress'); qualificationProgress.replaceChildren();
     if(qualificationActive){ const percentage=qualification.total_tests ? qualification.completed_tests*100/qualification.total_tests : 0;
       const bar=element('progress'); bar.max=100; bar.value=percentage;
-      qualificationProgress.append(element('strong','', 'Model qualification'),
+      qualificationProgress.append(element('strong','', qualification.phase === 'probing' ? 'Checking Intel GPU runtime…' : 'Model qualification'),
         element('p','',`${qualification.model_index} / ${qualification.model_total} · ${qualification.current_model || 'Preparing'}`),
         element('p','muted',`${qualification.phase || 'Preparing'} · ${qualification.backend || 'Intel GPU'} · ${qualification.completed_tests} / ${qualification.total_tests} tests · ${qualification.elapsed_seconds.toFixed(1)} s elapsed`),bar);
     } else if(qualification.report?.models){ const table=element('table','qualification-table');
-      const head=element('tr'); ['Model','Status','Protocol','Prompt tok/s','Decode tok/s','TTFT','GPU','Stability'].forEach(v=>head.append(element('th','',v)));
+      const head=element('tr'); ['Model','Status','Protocol','Prompt','Decode','TTFT','Offload','Stability'].forEach(v=>head.append(element('th','',v)));
       const body=element('tbody'); for(const result of qualification.report.models){ const row=element('tr'); const warm=result.performance?.quick_warm || {};
-        [result.name,result.status,result.dimensions?.protocol || '—',warm.prompt_eval_tokens_per_second?.toFixed(1) || '—',warm.decode_tps?.toFixed(1) || '—',warm.ttft_ms?.toFixed(0) || '—',result.runtime?.gpu_buffer_bytes ? formatBytes(result.runtime.gpu_buffer_bytes) : '—',result.dimensions?.stability || '—'].forEach(v=>row.append(element('td','',v))); body.append(row); }
+        const status=element('span',`chip ${result.status === 'qualified' ? 'success' : result.status === 'warning' ? 'warning' : 'danger'}`,String(result.status || 'failed').replaceAll('_',' ').toUpperCase());
+        const values=[result.name,status,result.dimensions?.protocol || '—',warm.prompt_eval_tokens_per_second ? `${warm.prompt_eval_tokens_per_second.toFixed(1)} tok/s` : '—',warm.decode_tps ? `${warm.decode_tps.toFixed(1)} tok/s` : '—',warm.ttft_ms ? `${(warm.ttft_ms/1000).toFixed(1)} s` : '—',result.runtime?.offloaded_layers != null ? `${result.runtime.offloaded_layers}/${result.runtime.total_layers || '?'}` : '—',result.dimensions?.stability || '—'];
+        values.forEach(v=>{ const cell=element('td'); if(v instanceof Node)cell.append(v); else cell.textContent=v; row.append(cell); }); body.append(row); }
       table.append(head,body); qualificationProgress.append(element('strong','', 'Model qualification results'),table); }
     document.querySelector('#remove-intel-runtime').hidden=!installed;
     document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
@@ -226,8 +237,10 @@ export function initAsk() {
     catch(exception){ managerError.textContent=exception.message; } });
   document.querySelector('#cancel-benchmark').addEventListener('click',async()=>{ try { await cancelIntelBenchmark(); await renderManager(); }
     catch(exception){ managerError.textContent=exception.message; } });
-  document.querySelector('#qualify-models').addEventListener('click',async()=>{ try { await startModelQualification(); await renderManager(); }
-    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#qualify-models').addEventListener('click',async()=>{ const progress=document.querySelector('#qualification-progress');
+    progress.replaceChildren(element('strong','','Checking Intel GPU runtime…'),element('p','muted','Detecting Intel GPU…'));
+    try { await startModelQualification(); progress.replaceChildren(element('strong','','Intel GPU · SYCL ready')); await renderManager(); }
+    catch(exception){ progress.replaceChildren(element('strong','inline-error','Intel GPU qualification failed'),element('p','muted','SYCL runtime could not access the Intel GPU.')); managerError.textContent=exception.message; } });
   document.querySelector('#cancel-qualification').addEventListener('click',async()=>{ try { await cancelModelQualification(); await renderManager(); }
     catch(exception){ managerError.textContent=exception.message; } });
   function confirmDownload(model){ return confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`); }

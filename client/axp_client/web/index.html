@@ -2,7 +2,10 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AXPIndexerNG</title><link rel="stylesheet" href="/style.css"></head>
 <body><main>
-  <header class="masthead"><h1>AXPIndexerNG</h1><p>Local enterprise document intelligence</p></header>
+  <header class="masthead">
+    <!-- Official Axplora artwork is intentionally not approximated; see assets/README.md. -->
+    <div class="brand-lockup"><div><div class="product-line"><h1>AXPIndexerNG</h1><span id="build-version" data-build-version class="chip neutral">dev</span></div><p>Local enterprise document intelligence</p></div></div>
+  </header>
   <nav class="modes" aria-label="Workflows">
     <button id="search-tab" class="mode active" aria-controls="search-panel" aria-selected="true">Search documents</button>
     <button id="ask-tab" class="mode" aria-controls="ask-panel" aria-selected="false">Ask AXP</button>
@@ -16,25 +19,25 @@
     <button id="clear-chat" class="secondary" type="button">Clear</button></div>
     <div id="ask-health" class="health" aria-live="polite">Checking local AI…</div>
     <button id="manage-ai" type="button" class="secondary compact">Manage local AI</button>
-    <aside id="model-manager" class="model-manager" hidden><h3>Local AI models</h3><div id="model-list"></div>
-      <fieldset><legend>Hardware acceleration</legend><label><input type="radio" name="device" value="auto" checked> Auto — CPU in this experimental release</label>
-      <label><input type="radio" name="device" value="cpu"> CPU</label><label><input type="radio" name="device" value="intel_gpu"> Intel GPU (Experimental) <span id="intel-device-status">— unavailable</span></label></fieldset>
-      <section id="intel-runtime-actions"><p id="intel-runtime-description" class="muted"></p>
-        <button id="download-intel-runtime" type="button" class="compact">Download Intel GPU runtime</button>
-        <div id="intel-runtime-progress"></div>
-        <button id="retry-intel-probe" type="button" class="compact" hidden>Retry Intel GPU detection</button>
-        <button id="cancel-intel-runtime" type="button" class="secondary compact" hidden>Cancel</button>
-        <button id="benchmark-intel" type="button" class="compact" hidden>Benchmark CPU vs Intel GPU</button>
-        <button id="cancel-benchmark" type="button" class="secondary compact" hidden>Cancel benchmark</button>
-        <button id="qualify-models" type="button" class="compact" hidden>Qualify all installed models</button>
-        <button id="cancel-qualification" type="button" class="secondary compact" hidden>Cancel qualification</button>
-        <section id="qualification-progress" class="qualification-progress" aria-live="polite"></section>
-        <button id="remove-intel-runtime" type="button" class="secondary compact" hidden>Remove Intel GPU runtime</button></section>
-      <p id="model-manager-error" class="inline-error" aria-live="polite"></p></aside>
+    <aside id="model-manager" class="model-manager" hidden>
+      <header class="manager-heading"><span class="eyebrow">LOCAL AI</span><h3>Manage models and local inference</h3></header>
+      <div class="manager-grid"><section class="manager-column models-column" aria-labelledby="models-heading"><h4 id="models-heading">Models</h4><div id="model-list" class="model-list"></div></section>
+      <section class="manager-column runtime-column" aria-labelledby="runtime-heading"><h4 id="runtime-heading">Runtime</h4>
+        <fieldset class="runtime-card device-picker"><legend>Hardware acceleration</legend>
+          <label><input type="radio" name="device" value="intel_gpu"><span><strong>Intel GPU</strong><small id="intel-device-status">Unavailable</small></span></label>
+          <label><input type="radio" name="device" value="cpu"><span><strong>CPU</strong><small>Local processor</small></span></label>
+          <label><input type="radio" name="device" value="auto" checked><span><strong>Auto</strong><small>Choose an available runtime</small></span></label>
+        </fieldset>
+        <section id="intel-runtime-actions" class="runtime-card"><div class="card-title"><h5>Intel GPU runtime</h5><span id="intel-runtime-badge" class="chip neutral">PENDING</span></div><p id="intel-runtime-description" class="muted"></p>
+          <div class="button-row"><button id="download-intel-runtime" type="button" class="compact">Download runtime</button><button id="retry-intel-probe" type="button" class="secondary compact" hidden>Retry Intel detection</button><button id="cancel-intel-runtime" type="button" class="secondary compact" hidden>Cancel</button><button id="remove-intel-runtime" type="button" class="secondary compact" hidden>Remove runtime</button></div><div id="intel-runtime-progress"></div></section>
+        <section class="runtime-card"><h5>Performance benchmark</h5><p class="muted">Compare CPU and Intel GPU using the selected model.</p><button id="benchmark-intel" type="button" class="compact" hidden>Benchmark CPU vs Intel GPU</button><button id="cancel-benchmark" type="button" class="secondary compact" hidden>Cancel benchmark</button></section>
+        <section class="runtime-card qualification-card"><div class="card-title"><h5>Model qualification</h5><span class="chip warning">EXPERIMENTAL</span></div><p class="muted">Run the same deterministic test suite against every installed model.</p><div class="button-row"><button id="qualify-models" type="button" class="compact" hidden>Qualify all installed models</button><button id="cancel-qualification" type="button" class="secondary compact" hidden>Cancel qualification</button></div><section id="qualification-progress" class="qualification-progress" aria-live="polite"></section></section>
+      </section></div><p id="model-manager-error" class="inline-error" aria-live="polite"></p></aside>
     <div id="chat-history" class="chat-history"></div>
     <form id="ask-form" class="ask-form"><label for="ask-input">Ask a question about your indexed documents</label>
       <textarea id="ask-input" maxlength="4000" rows="3" placeholder="Why was the process changed?"></textarea>
       <div class="composer-footer"><small>Ask complete questions for the most reliable results.</small><button id="ask-submit" disabled>Ask AXP</button></div>
     </form><div id="ask-progress" class="progress" aria-live="polite"></div>
   </section>
+  <footer class="app-footer">AXPIndexerNG · <span data-build-version>dev</span> · Local processing</footer>
 </main><script type="module" src="/app.js"></script></body></html>

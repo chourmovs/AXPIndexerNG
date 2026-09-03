@@ -124,6 +124,8 @@ class ModelManager:
                     "intel_gpu_vendor_id", "intel_gpu_device_id", "accelerator_available", "accelerator_reason",
                     "sycl_runtime_installed", "sycl_probe_ok", "sycl_device_name", "sycl_device_count",
                     "sycl_probe_error", "sycl_probe_returncode", "sycl_probe_duration_ms")},
+                    "qualification_supported": bool(health.get("intel_gpu_detected") and
+                                                    health.get("sycl_runtime_installed")),
                     "accelerator": {**INTEL_SYCL.public(), "installed": bool(self.accelerators.manifest()),
                                     "download": self._accelerator_snapshot()}},
                 "benchmark": self._benchmark.job.public() if self._benchmark else {"state": "idle"},
@@ -141,7 +143,16 @@ class ModelManager:
             raise ModelManagerError("benchmark_busy")
         if self._job and self._job.state in ACTIVE_DOWNLOAD_STATES: raise ModelManagerError("model_download_busy")
         controller = getattr(self.runtime, "backend", self.runtime)
-        if not controller or not controller.hardware.intel_gpu_available: raise ModelManagerError("intel_gpu_unavailable")
+        if not controller: raise ModelManagerError("intel_gpu_unavailable")
+        hardware = controller.hardware
+        if not hardware.intel_gpu_available:
+            if not hardware.intel_gpu_detected or not hardware.sycl_runtime_installed:
+                raise ModelManagerError("intel_gpu_unavailable")
+            self._refresh_intel_hardware()
+            if not controller.hardware.intel_gpu_available:
+                raise ModelManagerError("intel_gpu_unavailable", {
+                    "probe_error": controller.hardware.sycl_probe_error,
+                })
         original = dict(load_settings())
         original_profile = catalog_model(original.get("chat_active_model_id"))
 
@@ -287,13 +298,18 @@ class ModelManager:
             return self._accelerator_job.public()
 
     def retry_accelerator_probe(self):
+        self._refresh_intel_hardware()
+        return self.catalog()
+
+    def _refresh_intel_hardware(self):
+        """Run the single bounded probe shared by retry and qualification."""
         server = self.accelerators.server_path()
         if not server:
             raise ModelManagerError("intel_sycl_runtime_missing")
         controller = getattr(self.runtime, "backend", self.runtime)
         if controller:
             controller.hardware = detect_hardware(server, self.accelerators.runtime_root)
-        return self.catalog()
+        return controller.hardware if controller else None
 
     def remove_accelerator(self):
         if self._qualification_active(): raise ModelManagerError("qualification_busy")
