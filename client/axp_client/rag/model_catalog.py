@@ -5,7 +5,7 @@ the browser can never nominate a download location.
 """
 from dataclasses import asdict, dataclass, field
 
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,17 @@ MODELS = (
                  reasoning_enabled=True, reasoning_budget_tokens=48,
                  reasoning_budget_message="Now produce the final answer only.",
                  reasoning_format="deepseek", min_visible_answer_tokens=96),
+    ModelProfile("ministral3-3b-2512-q4km", "Ministral 3 3B", "balanced",
+                 "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+                 "eb599d408350ea2bb60452cb86be7c7b2fc28227",
+                 "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+                 "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
+                 2_147_023_008, "~2.15 GB", license="Apache-2.0", quantization="Q4_K_M",
+                 experimental=True, recommended=False, context_size=6144,
+                 max_answer_tokens=256, max_evidence_tokens=3072,
+                 max_context_documents=4, max_context_blocks=8, max_seeds_per_document=2,
+                 temperature=0.2, top_p=0.8, top_k=20, repeat_penalty=1.0,
+                 reasoning_enabled=False),
 )
 
 

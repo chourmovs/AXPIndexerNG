@@ -13,19 +13,36 @@ ALLOWED_DEVICES = {"auto", "cpu", "intel_gpu"}
 LOGGER = logging.getLogger("axp_client")
 
 
+def generation_config_for_profile(profile):
+    """Return the complete, deterministic generation policy for a model profile."""
+    return GenerationConfig(
+        context_size=getattr(profile, "context_size", 6144),
+        max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
+        max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
+        max_context_documents=getattr(profile, "max_context_documents", 6),
+        max_context_blocks=getattr(profile, "max_context_blocks", 12),
+        max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
+        temperature=getattr(profile, "temperature", 0.2),
+        top_p=getattr(profile, "top_p", 0.8),
+        top_k=getattr(profile, "top_k", 20),
+        repeat_penalty=getattr(profile, "repeat_penalty", 1.0),
+        model_id=getattr(profile, "id", None),
+        reasoning_enabled=getattr(profile, "reasoning_enabled", False),
+        reasoning_budget_tokens=getattr(profile, "reasoning_budget_tokens", None),
+        reasoning_budget_message=getattr(profile, "reasoning_budget_message", None),
+        reasoning_format=getattr(profile, "reasoning_format", None),
+        min_visible_answer_tokens=getattr(profile, "min_visible_answer_tokens", 0),
+    )
+
+
 class InferenceDeviceError(ValueError):
     pass
 
 
 class _PendingIntelBackend:
     """Non-CPU placeholder used until bounded, on-demand qualification."""
-    def __init__(self, profile, reason):
-        self.config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
-            max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
-            max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
-            max_context_documents=getattr(profile, "max_context_documents", 6),
-            max_context_blocks=getattr(profile, "max_context_blocks", 12),
-            max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3))
+    def __init__(self, config, reason):
+        self.config = config
         self.reason = reason
 
     def health(self):
@@ -54,48 +71,46 @@ class InferenceRuntimeManager:
                     "b10516", self.hardware.sycl_device_id, self.hardware.sycl_device_name,
                     self.hardware.sycl_probe_returncode, self.hardware.sycl_probe_duration_ms,
                     self.hardware.sycl_probe_error)
-        self.backend = self._make_backend(self.settings, None)
+        active_profile = catalog_model(self.settings.get("chat_active_model_id"))
+        self.backend = self._make_backend(self.settings, active_profile)
+
+    @staticmethod
+    def _log_profile(config, backend, pending=False):
+        LOGGER.info(
+            "Inference profile configured model_id=%s backend=%s pending=%s context_size=%s "
+            "max_answer_tokens=%s reasoning_enabled=%s reasoning_budget_tokens=%s",
+            config.model_id, backend, pending, config.context_size, config.max_answer_tokens,
+            config.reasoning_enabled, config.reasoning_budget_tokens,
+        )
 
     def _make_backend(self, settings, profile):
+        if profile is None:
+            profile = catalog_model(settings.get("chat_active_model_id"))
+        config = generation_config_for_profile(profile)
         requested = settings.get("chat_inference_device", "auto")
         if requested == "intel_gpu" and not self.hardware.intel_gpu_available:
-            return _PendingIntelBackend(profile, self.hardware.sycl_probe_error or self.hardware.accelerator_reason)
+            self._log_profile(config, "intel_sycl", pending=True)
+            return _PendingIntelBackend(
+                config, self.hardware.sycl_probe_error or self.hardware.accelerator_reason
+            )
         if requested in {"intel_gpu", "auto"} and self.hardware.intel_gpu_available:
             if self._intel_factory:
-                return self._intel_factory(settings, profile)
-            config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
-                max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
-                max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
-                max_context_documents=getattr(profile, "max_context_documents", 6),
-                max_context_blocks=getattr(profile, "max_context_blocks", 12),
-                max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
-                temperature=getattr(profile, "temperature", .2),
-                top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
-                repeat_penalty=getattr(profile, "repeat_penalty", 1.0),
-                model_id=getattr(profile, "id", None),
-                reasoning_enabled=getattr(profile, "reasoning_enabled", False),
-                reasoning_budget_tokens=getattr(profile, "reasoning_budget_tokens", None),
-                reasoning_budget_message=getattr(profile, "reasoning_budget_message", None),
-                reasoning_format=getattr(profile, "reasoning_format", None),
-                min_visible_answer_tokens=getattr(profile, "min_visible_answer_tokens", 0))
+                backend = self._intel_factory(settings, profile)
+                self._log_profile(getattr(backend, "config", config), "intel_sycl")
+                return backend
+            self._log_profile(config, "intel_sycl")
             return IntelSyclBackend(settings["chat_model_path"], config, self.accelerators.runtime_root,
                 self.accelerators.server_path(), getattr(profile, "chat_template_kwargs", None),
                 sycl_device_id=self.hardware.sycl_device_id,
                 sycl_device_name=self.hardware.sycl_device_name,
                 diagnostic=bool(settings.get("intel_diagnostic")))
-        return self._factory(settings, profile)
+        backend = self._factory(settings, profile)
+        self._log_profile(getattr(backend, "config", config), "llama_cpp")
+        return backend
 
     @staticmethod
     def _cpu_backend(settings, profile):
-        config = GenerationConfig(context_size=getattr(profile, "context_size", 6144),
-            max_answer_tokens=getattr(profile, "max_answer_tokens", 384),
-            max_evidence_tokens=getattr(profile, "max_evidence_tokens", None),
-            max_context_documents=getattr(profile, "max_context_documents", 6),
-            max_context_blocks=getattr(profile, "max_context_blocks", 12),
-            max_seeds_per_document=getattr(profile, "max_seeds_per_document", 3),
-            temperature=getattr(profile, "temperature", .2),
-            top_p=getattr(profile, "top_p", .8), top_k=getattr(profile, "top_k", 20),
-            repeat_penalty=getattr(profile, "repeat_penalty", 1.0))
+        config = generation_config_for_profile(profile)
         return LlamaCppBackend(settings["chat_model_path"], config,
             getattr(profile, "chat_template_kwargs", None))
 
@@ -212,6 +227,11 @@ class InferenceRuntimeManager:
         else:
             effective = "cpu"
         value.update(active_model_id=self.settings.get("chat_active_model_id"),
+                     backend_profile_id=getattr(getattr(self.backend, "config", None), "model_id", None),
+                     backend_reasoning_enabled=getattr(getattr(self.backend, "config", None), "reasoning_enabled", False),
+                     backend_max_answer_tokens=getattr(getattr(self.backend, "config", None), "max_answer_tokens", None),
+                     backend_max_evidence_tokens=getattr(getattr(self.backend, "config", None), "max_evidence_tokens", None),
+                     backend_temperature=getattr(getattr(self.backend, "config", None), "temperature", None),
                      active_model_name=profile.name if profile else value.get("model_name"),
                      inference_device_requested=requested,
                      inference_device_effective=effective,
