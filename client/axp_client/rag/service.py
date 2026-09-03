@@ -10,12 +10,12 @@ from .answerability import decide_answerability, is_supporting_evidence
 from .citations import classify_citations
 from .context import build_context
 from .depth import depth_policy
+from .final_protocol import generate_final_answer
 from .llama_cpp_backend import GenerationCancelled, GenerationConfig
 from .latency import PERFORMANCE_ESTIMATES, POLICY, estimate_prefill_seconds
 from .operations import NativeOperationSupervisor
 from .prompts import SYSTEM_PROMPT, system_prompt, user_prompt
-from .response_policy import (canonicalize_scalar_response, classify_response_plan,
-                              cleanup_truncated_tail)
+from .response_policy import classify_response_plan
 from .retrieval import (classify_query_evidence_intent, rank_documents,
                         retrieve_document_passages, retrieve_rag_candidates)
 
@@ -415,15 +415,14 @@ class RagService:
                     elif sequence == 0 and int(elapsed) != last_waiting_second:
                         last_waiting_second = int(elapsed)
                         emit("generation_waiting_first_token", elapsed_s=elapsed)
-                answer = self._run_blocking(
-                    lambda: self.backend.generate(system_prompt=active_system_prompt,
-                                                  user_prompt=user_prompt(
-                                                      question, context.prompt_text,
-                                                      response_instruction,
-                                                      [block.id for block in context.blocks]
-                                                      if reasoning_enabled else None),
-                                                  max_tokens=effective_answer_tokens),
-                    generation_poll, interval=.25)
+                final_answer = generate_final_answer(
+                    backend=self.backend, question=question, evidence=context.prompt_text,
+                    allowed_citation_ids=[block.id for block in context.blocks], search_depth=search_depth,
+                    response_plan=response_plan, requested_answer_tokens=requested_answer_tokens,
+                    effective_answer_tokens=effective_answer_tokens,
+                    generate_call=lambda **kwargs: self._run_blocking(
+                        lambda: self.backend.generate(**kwargs), generation_poll, interval=.25))
+                answer = final_answer.answer
             except GenerationCancelled:
                 elapsed = (time.perf_counter() - generation_start) * 1000
                 LOGGER.info("RAG generation cancelled request_id=%s elapsed_ms=%.1f", request_id, elapsed)
@@ -435,23 +434,10 @@ class RagService:
         finally:
             self._generation_lock.release()
         generation_ms = (time.perf_counter() - generation_start) * 1000
-        telemetry = getattr(self.backend, "last_telemetry", None) or {}
+        telemetry = final_answer.generation_telemetry
         supplied_ids = [block.id for block in context.blocks]
-        pre_canonical_tokens = self.backend.count_tokens(answer) if answer else 0
-        canonicalized = False
-        canonicalization_reason = None
-        tail_cleanup = False
-        if reasoning_enabled and response_plan.mode == "scalar_lookup":
-            answer, canonicalized, canonicalization_reason = canonicalize_scalar_response(answer, supplied_ids)
-        elif (reasoning_enabled and telemetry.get("finish_reason") == "length" and
-              response_plan.mode in {"summary", "analytical", "direct_lookup"}):
-            answer, tail_cleanup = cleanup_truncated_tail(answer, supplied_ids)
-        post_canonical_tokens = self.backend.count_tokens(answer) if answer else 0
-        telemetry.update(response_canonicalized=canonicalized,
-                         response_canonicalization_reason=canonicalization_reason,
-                         pre_canonical_answer_tokens=pre_canonical_tokens,
-                         post_canonical_answer_tokens=post_canonical_tokens,
-                         truncated_tail_cleanup_applied=tail_cleanup)
+        canonicalized = final_answer.canonicalized
+        tail_cleanup = final_answer.truncated_tail_cleaned
         if canonicalized:
             telemetry["generation_result"] = "normal_answer_after_scalar_canonicalization"
         elif tail_cleanup:

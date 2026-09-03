@@ -10,16 +10,20 @@ import platform
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from axp_core.runtime import atomic_write_json
+from axp_core.build_info import build_info
 
 from .benchmark import BenchmarkRunner
+from .citations import classify_citations
+from .final_protocol import generate_final_answer
 from .model_catalog import CATALOG_VERSION, MODELS
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TERMINAL_STATES = {"complete", "complete_with_errors", "failed", "cancelled"}
 PROFILE_CONFIG = {
     "standard": {"stability_generations": 3, "request_timeout_s": 90, "load_timeout_s": 90,
@@ -34,49 +38,62 @@ def _citations(answer):
 
 
 def _valid_citations(answer):
-    found = _citations(answer)
-    return bool(found) and all(value.upper() == "S1" for value in found)
+    return classify_citations(answer, ["S1"])[0] == "valid"
+
+
+def normalize_validation_text(answer):
+    """Normalize harmless typography for validation without changing the answer."""
+    value = unicodedata.normalize("NFKC", answer or "").replace("−", "-").replace("\xa0", " ")
+    value = re.sub(r"(?<=\d),(?=\d)", ".", value.casefold())
+    value = re.sub(r"\s+", " ", value).strip()
+    return value.replace("g/cm^3", "g/cm3").replace("g·cm-3", "g/cm3").replace("g cm-3", "g/cm3")
 
 
 def validate_scalar(answer):
-    unit = re.search(r"(?:g\s*/\s*cm(?:³|\^?3)|g\s*cm[-−]?3)", answer, re.I)
-    ok = "0.74" in answer and bool(unit) and _valid_citations(answer) and len(answer.split()) <= 80
+    value = normalize_validation_text(answer)
+    unit = re.search(r"g\s*/\s*cm3", value)
+    ok = bool(re.search(r"(?<!\d)0\.74(?!\d)", value)) and bool(unit) and _valid_citations(answer) and len(value.split()) <= 80
     return ok, [] if ok else ["expected_value_unit_citation_or_concise_answer_missing"]
 
 
 def validate_grounding(answer):
-    lower = answer.lower()
-    refusal = "insufficient_evidence" in lower or ("liquid density" in lower and
-        any(word in lower for word in ("not supplied", "not provided", "does not provide", "cannot determine")))
-    ok = refusal and "3.4" not in answer
+    lower = normalize_validation_text(answer)
+    refusal = "insufficient_evidence" in lower or any(value in lower for value in (
+        "liquid density is not", "liquid density was not", "liquid density cannot", "liquid density cannot be",
+        "does not provide liquid density", "only gives relative vapor density"))
+    assertion = bool(re.search(r"(?:liquid\s+)?density\s*(?:is|=|:|of)?\s*3\.4", lower))
+    ok = refusal and not assertion and (_valid_citations(answer) or lower == "insufficient_evidence")
     return ok, [] if ok else ["unsupported_liquid_density"]
 
 
 def validate_packaging(answer):
-    lower = answer.lower()
-    refusal = any(value in lower for value in ("not specify", "not provided", "no packaging", "cannot determine"))
-    invented = bool(re.search(r"type\s*(?:iii|3)\s*(?:container|packag)", lower))
-    ok = refusal and not invented
+    lower = normalize_validation_text(answer)
+    refusal = any(value in lower for value in ("not specify", "not provided", "not stated", "no packaging",
+                                                "cannot be determined", "cannot determine", "insufficient_evidence",
+                                                "only states packing group iii"))
+    invented = bool(re.search(r"\b(?:type\s*(?:iii|3)\s*(?:container|packag)|ibc|drum|barrel|bottle)\b", lower))
+    ok = refusal and not invented and (_valid_citations(answer) or lower == "insufficient_evidence")
     return ok, [] if ok else ["invented_packaging"]
 
 
 def validate_citation(answer):
-    ok = _valid_citations(answer)
+    ok = "alpha-7" in normalize_validation_text(answer) and _valid_citations(answer)
     return ok, [] if ok else ["missing_or_unknown_citation"]
 
 
 def validate_summary(answer):
-    lower = answer.lower().strip()
-    required = ("0.72", "98", "-4", "negligible")
+    lower = normalize_validation_text(answer)
+    required = ("colorless liquid", "0.72", "98", "-4", "negligible")
     forbidden = ("viscosity", "odor", "vapour pressure", "vapor pressure", "melting point")
     complete = bool(re.search(r"(?:[.!?]|\[S1\])$", lower)) and not lower.endswith(("and", ",", ":", "-"))
-    ok = all(value in lower for value in required) and _valid_citations(answer) and complete and not any(
-        value in lower for value in forbidden)
+    invented = any(re.search(rf"\b{re.escape(value)}\b(?!\s+(?:is|was|are|were)?\s*(?:not|unavailable))", lower)
+                   for value in forbidden)
+    ok = all(value in lower for value in required) and _valid_citations(answer) and complete and not invented
     return ok, [] if ok else ["incomplete_incorrect_or_invented_summary"]
 
 
 def validate_materials(answer):
-    lower = answer.lower()
+    lower = normalize_validation_text(answer)
     required = ("stainless steel", "ptfe", "glass")
     extras = ("aluminum", "aluminium", "copper", "polyethylene", "pvc")
     ok = all(value in lower for value in required) and not any(value in lower for value in extras) and _valid_citations(answer)
@@ -168,14 +185,15 @@ class ModelQualificationRunner:
 
     @staticmethod
     def _answer(backend, evidence, question):
-        answer = backend.generate(system_prompt="Answer only from the evidence. Cite [S1]. Never invent facts.",
-                                  user_prompt=f"Evidence:\n{evidence}\n\nQuestion: {question}")
-        return answer if isinstance(answer, str) else getattr(answer, "text", str(answer or ""))
+        return generate_final_answer(backend=backend, question=question, evidence=evidence,
+                                     allowed_citation_ids=["S1"])
 
     def _model(self, model):
         result = {"model_id": model.id, "name": model.name, "quantization": model.quantization,
                   "size_bytes": model.size_bytes, "profile": model.public(), "status": "RUNTIME_FAILED"}
-        backend = self.backend_factory(model, "intel_gpu", 64); self._backend = backend
+        # The catalog object is passed through untouched. Benchmark limits are
+        # per generate() call and must never become a temporary model profile.
+        backend = self.backend_factory(model, "intel_gpu", None); self._backend = backend
         try:
             self._progress("Intel load/offload qualification")
             started = time.perf_counter(); backend.ensure_loaded(); load_ms = (time.perf_counter() - started) * 1000
@@ -187,20 +205,38 @@ class ModelQualificationRunner:
                 result["runtime"]["failure_type"] = "intel_gpu_offload_not_confirmed"; return result
             bench = BenchmarkRunner(lambda _: backend, lambda _: backend, model.id, self.hardware)
             bench.job.profile = "quick"; bench.job.started_at = time.time()
-            quick_cold = bench._measure(backend, "intel_cold"); self._progress("Quick cold", increment=1)
-            quick_warm = bench._measure(backend, "intel_warm"); self._progress("Quick warm", increment=1)
+            quick_cold = bench._measure(backend, "intel_cold", 32); self._progress("Quick cold", increment=1)
+            quick_warm = bench._measure(backend, "intel_warm", 32); self._progress("Quick warm", increment=1)
             old = bench.job.profile; bench.job.profile = "rag"
-            rag = bench._measure(backend, "intel_rag"); bench.job.profile = old
+            rag = bench._measure(backend, "intel_rag", 64); bench.job.profile = old
             self._progress("RAG-size performance", increment=1)
             result["performance"] = {"quick_cold": quick_cold, "quick_warm": quick_warm, "rag": rag}
             protocol = []
             for name, evidence, question, validator in SYNTHETIC_TESTS:
                 self._progress(name.replace("_", " ").title())
-                answer = self._answer(backend, evidence, question); passed, reasons = validator(answer)
+                final = self._answer(backend, evidence, question)
+                passed, reasons = validator(final.answer)
+                telemetry = final.generation_telemetry
                 protocol.append({"id": name, "passed": passed, "reasons": reasons,
-                                 "citations": _citations(answer), "synthetic_answer": answer})
+                    "expected_rule": {
+                        "scalar_lookup": "The density is 0.74 g/cm³ with an allowed citation.",
+                        "unsupported_liquid_density": "Do not equate relative vapor density with liquid density.",
+                        "packaging_trap": "The evidence does not specify permitted packaging.",
+                        "closed_citation": "Return ALPHA-7 and cite only S1.",
+                        "summary": "Report every supplied property without inventing properties.",
+                        "direct_lookup": "List all three approved materials and no unsupported material.",
+                    }[name],
+                    "answer": final.answer, "citations": final.citation_validation["citations"],
+                    "citation_validation": final.citation_validation["status"],
+                    "query_intent": final.query_intent, "response_mode": final.response_mode,
+                    "target_words": final.target_words,
+                    "requested_answer_tokens": final.requested_answer_tokens,
+                    "effective_answer_tokens": final.effective_answer_tokens,
+                    "reasoning_budget_tokens": telemetry.get("reasoning_budget_tokens"),
+                    "finish_reason": telemetry.get("finish_reason"),
+                    "canonicalized": final.canonicalized,
+                    "truncated_tail_cleaned": final.truncated_tail_cleaned})
                 self._progress(name, increment=1)
-            result["protocol"] = protocol
             stability = {"requested_generations": PROFILE_CONFIG[self.job.profile]["stability_generations"],
                          "successful_generations": 0, "failed_generations": 0, "device_lost_count": 0,
                          "recovery_attempts": 0, "recovery_successes": 0, "other_backend_errors": []}
@@ -214,16 +250,36 @@ class ModelQualificationRunner:
                     if "DEVICE_LOST" in str(exc).upper(): stability["device_lost_count"] += 1
                     else: stability["other_backend_errors"].append(type(exc).__name__)
                 self._progress("Short stability sequence", increment=1)
+            final_health = backend.health()
+            for target, candidates in {
+                "device_lost_count": ("device_loss_count", "device_lost_count", "intel_device_lost_count"),
+                "recovery_attempts": ("recovery_attempts", "intel_recovery_attempts"),
+                "recovery_successes": ("recovery_successes", "intel_recovery_successes"),
+            }.items():
+                stability[target] = max(stability[target], *(int(final_health.get(key) or 0) for key in candidates))
+            stability["recovery_attempts"] = max(
+                stability["recovery_attempts"], int(bool(final_health.get("device_recovery_attempted"))))
+            stability["recovery_successes"] = max(
+                stability["recovery_successes"], int(bool(final_health.get("device_recovery_succeeded"))))
             result["stability"] = stability
             passed = sum(item["passed"] for item in protocol)
-            result["dimensions"] = {"runtime": "PASS", "protocol": f"{passed}/{len(protocol)}",
+            result["axp_protocol"] = {"protocol_type": "axp_final_answer_protocol", "passed": passed,
+                                      "total": len(protocol), "tests": protocol}
+            result["profile_diagnostic"] = {key: getattr(model, key, None) for key in (
+                "max_answer_tokens", "reasoning_enabled", "reasoning_budget_tokens", "min_visible_answer_tokens",
+                "temperature", "top_p", "top_k", "repeat_penalty", "context_size")}
+            result["dimensions"] = {"runtime": "PASS", "axp_protocol": f"{passed}/{len(protocol)}",
                 "grounding": "PASS" if all(protocol[i]["passed"] for i in (1, 2)) else "FAIL",
                 "citations": "PASS" if protocol[3]["passed"] else "FAIL",
                 "stability": f'{stability["successful_generations"]}/{stability["requested_generations"]}'}
-            if passed != len(protocol): result["status"] = "PROTOCOL_FAILED"
-            elif stability["failed_generations"]: result["status"] = "UNSTABLE"
-            elif stability["device_lost_count"]: result["status"] = "QUALIFIED_WITH_WARNINGS"
-            else: result["status"] = "QUALIFIED"
+            critical_ok = all(protocol[i]["passed"] for i in (1, 2, 3))
+            if stability["failed_generations"]: result["status"] = "UNSTABLE"
+            elif passed == 6 and not critical_ok: result["status"] = "QUALIFIED_WITH_WARNINGS"
+            elif passed == 6 and stability["device_lost_count"]: result["status"] = "QUALIFIED_WITH_WARNINGS"
+            elif passed == 6: result["status"] = "QUALIFIED"
+            elif passed == 5 and critical_ok: result["status"] = "QUALIFIED_WITH_WARNINGS"
+            elif passed >= 3: result["status"] = "PROTOCOL_PARTIAL"
+            else: result["status"] = "PROTOCOL_FAILED"
             result["cpu_baseline"] = {"status": "SKIPPED_OPTIONAL"}
             result["field_observation"] = {"status": "SKIPPED_CORPUS_UNAVAILABLE"}
             return result
@@ -236,14 +292,20 @@ class ModelQualificationRunner:
             finally: self._backend = None
 
     def _recommend(self, results):
-        passed = [r for r in results if r["status"] in ("QUALIFIED", "QUALIFIED_WITH_WARNINGS")]
         for result in results:
             result["recommendations"] = (["UNSTABLE ON INTEL"] if result["status"] == "UNSTABLE" else
                 ["QUALITY FAILED"] if result["status"] == "PROTOCOL_FAILED" else [])
-        if not passed: return
+        stable = [r for r in results if r.get("dimensions", {}).get("runtime") == "PASS" and
+                  not r.get("stability", {}).get("failed_generations")]
+        def tests(result):
+            return {item["id"]: item["passed"] for item in result.get("axp_protocol", {}).get("tests", [])}
+        fast = [r for r in stable if all(tests(r).get(name) for name in
+                ("scalar_lookup", "unsupported_liquid_density", "packaging_trap", "closed_citation"))]
+        balanced = [r for r in stable if all(tests(r).get(name) for name in
+                    ("unsupported_liquid_density", "packaging_trap", "closed_citation", "summary", "direct_lookup"))]
         def metric(r, name): return r.get("performance", {}).get(name, {}).get("generation_ms") or float("inf")
-        min(passed, key=lambda r: metric(r, "quick_warm"))["recommendations"].append("FAST LOOKUP CANDIDATE")
-        min(passed, key=lambda r: metric(r, "rag"))["recommendations"].append("BALANCED RAG CANDIDATE")
+        if fast: min(fast, key=lambda r: metric(r, "rag"))["recommendations"].append("FAST LOOKUP CANDIDATE")
+        if balanced: min(balanced, key=lambda r: metric(r, "rag"))["recommendations"].append("BALANCED RAG CANDIDATE")
 
     def _persist(self, report):
         self.report_root.mkdir(parents=True, exist_ok=True)
@@ -269,7 +331,8 @@ class ModelQualificationRunner:
             try: self.restore()
             except Exception as exc:
                 self.job.error = f"runtime_restore_failed: {exc}"[:500]; state = "failed"
-            report = {"qualification_schema_version": SCHEMA_VERSION, "axp_version": self.axp_version,
+            report = {"qualification_schema_version": SCHEMA_VERSION, "build": build_info(),
+                "axp_version": self.axp_version,
                 "catalog_version": CATALOG_VERSION, "llama_cpp_runtime_version": self.runtime_version,
                 "timestamp": datetime.now(timezone.utc).isoformat(), "profile": self.job.profile,
                 "profile_config": PROFILE_CONFIG[self.job.profile], "hardware": {"cpu": platform.processor(), **self.hardware},

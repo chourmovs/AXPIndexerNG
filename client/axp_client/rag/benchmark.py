@@ -81,13 +81,14 @@ class BenchmarkRunner:
 
     def _state(self, state): self.job.state = state; self.job.updated_at = time.time()
 
-    def _measure(self, backend, state):
+    def _measure(self, backend, state, max_tokens=None):
         self._state(state)
         LOGGER.info("%s started model_id=%s", state.replace("_", " "), self.model_name)
         prompt = benchmark_prompt(self.job.profile)
         prompt_tokens = backend.count_tokens(prompt)
         backend.generate(system_prompt="Answer only from the supplied synthetic benchmark text.",
-                         user_prompt=prompt)
+                         user_prompt=prompt,
+                         max_tokens=max_tokens if max_tokens is not None else PROFILES[self.job.profile]["max_tokens"])
         if self._cancel.is_set(): raise InterruptedError
         telemetry = backend.last_telemetry
         ttft = telemetry.get("time_to_first_token_ms")
