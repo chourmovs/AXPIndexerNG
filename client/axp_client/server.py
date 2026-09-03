@@ -184,6 +184,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     return self.send_json({"error": "forbidden"}, 403)
                 return self.send_json(model_manager.catalog().get("benchmark", {"state": "idle"}) if model_manager else
                                       {"state": "idle"})
+            if url.path == "/api/models/qualification":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                return self.send_json(model_manager.qualification_status() if model_manager else {"state": "idle"})
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -254,6 +258,17 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     body, error = self.read_json_body(MAX_ADMIN_BODY)
                     if error: return self.send_json({"error": error[0]}, error[1])
                     return self.send_json(model_manager.start_benchmark(body.get("profile", "quick")), 202)
+                except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
+            if url.path in ("/api/models/qualification/start", "/api/models/qualification/cancel"):
+                if not self.local_action_allowed(): return self.send_json({"error": "forbidden_origin"}, 403)
+                if model_manager is None: return self.send_json({"error": "not_configured"}, 503)
+                try:
+                    if url.path.endswith("/cancel"):
+                        return self.send_json(model_manager.cancel_qualification(), 202)
+                    body, error = self.read_json_body(MAX_ADMIN_BODY)
+                    if error: return self.send_json({"error": error[0]}, error[1])
+                    return self.send_json(model_manager.start_qualification(body.get("profile", "standard"),
+                        body.get("model")), 202)
                 except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
             if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
                     "download", "cancel", "activate", "remove"):

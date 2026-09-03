@@ -1,6 +1,6 @@
 import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice,
   downloadIntelRuntime, cancelIntelRuntimeDownload, retryIntelProbe, removeIntelRuntime,
-  startIntelBenchmark, cancelIntelBenchmark} from './api.js';
+  startIntelBenchmark, cancelIntelBenchmark, startModelQualification, cancelModelQualification} from './api.js';
 import {createDocumentActions} from './documents.js';
 import {element} from './ui.js';
 
@@ -187,13 +187,29 @@ export function initAsk() {
         runtimeProgress.append(bar,element('small','',`${acceleratorJob.percentage.toFixed(1)}% · ${formatBytes(acceleratorJob.bytes_downloaded)} / ${formatBytes(acceleratorJob.bytes_total)} · ${formatRate(acceleratorJob.bytes_per_second)}${formatEta(acceleratorJob.eta_seconds)}`)); }}
     document.querySelector('#benchmark-intel').hidden=!catalog.hardware.accelerator_available;
     const benchmarkActive=catalog.benchmark && !['idle','complete','complete_with_errors','failed','cancelled'].includes(catalog.benchmark.state);
-    document.querySelector('#benchmark-intel').disabled=benchmarkActive;
+    const qualification=catalog.qualification || {state:'idle'};
+    const qualificationActive=!['idle','complete','complete_with_errors','failed','cancelled'].includes(qualification.state);
+    document.querySelector('#benchmark-intel').disabled=benchmarkActive || qualificationActive;
     document.querySelector('#cancel-benchmark').hidden=!benchmarkActive;
+    const qualify=document.querySelector('#qualify-models'); qualify.hidden=!catalog.hardware.accelerator_available;
+    qualify.disabled=benchmarkActive || qualificationActive || downloading;
+    document.querySelector('#cancel-qualification').hidden=!qualificationActive;
+    const qualificationProgress=document.querySelector('#qualification-progress'); qualificationProgress.replaceChildren();
+    if(qualificationActive){ const percentage=qualification.total_tests ? qualification.completed_tests*100/qualification.total_tests : 0;
+      const bar=element('progress'); bar.max=100; bar.value=percentage;
+      qualificationProgress.append(element('strong','', 'Model qualification'),
+        element('p','',`${qualification.model_index} / ${qualification.model_total} · ${qualification.current_model || 'Preparing'}`),
+        element('p','muted',`${qualification.phase || 'Preparing'} · ${qualification.backend || 'Intel GPU'} · ${qualification.completed_tests} / ${qualification.total_tests} tests · ${qualification.elapsed_seconds.toFixed(1)} s elapsed`),bar);
+    } else if(qualification.report?.models){ const table=element('table','qualification-table');
+      const head=element('tr'); ['Model','Status','Protocol','Prompt tok/s','Decode tok/s','TTFT','GPU','Stability'].forEach(v=>head.append(element('th','',v)));
+      const body=element('tbody'); for(const result of qualification.report.models){ const row=element('tr'); const warm=result.performance?.quick_warm || {};
+        [result.name,result.status,result.dimensions?.protocol || '—',warm.prompt_eval_tokens_per_second?.toFixed(1) || '—',warm.decode_tps?.toFixed(1) || '—',warm.ttft_ms?.toFixed(0) || '—',result.runtime?.gpu_buffer_bytes ? formatBytes(result.runtime.gpu_buffer_bytes) : '—',result.dimensions?.stability || '—'].forEach(v=>row.append(element('td','',v))); body.append(row); }
+      table.append(head,body); qualificationProgress.append(element('strong','', 'Model qualification results'),table); }
     document.querySelector('#remove-intel-runtime').hidden=!installed;
     document.querySelector('#intel-runtime-description').textContent = !catalog.hardware.intel_gpu_detected ? 'No Intel GPU detected.' :
       installed ? `${catalog.hardware.intel_gpu_name} · Intel GPU runtime installed · ${catalog.hardware.sycl_probe_ok ? 'SYCL / Level Zero available' : probeErrorMessage(catalog.hardware.sycl_probe_error)}` :
       `${catalog.hardware.intel_gpu_name} detected · SYCL runtime not installed · approximately 120 MB · Official llama.cpp Windows SYCL runtime · Experimental`;
-    if ((downloading || benchmarkActive) && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
+    if ((downloading || benchmarkActive || qualificationActive) && !manager.hidden) downloadTimer=setTimeout(renderManager,750);
   }
   document.querySelector('#manage-ai').addEventListener('click', async () => { manager.hidden=!manager.hidden; clearTimeout(downloadTimer); if (!manager.hidden) await renderManager(); });
   document.querySelectorAll('input[name="device"]').forEach(radio=>radio.addEventListener('change',async()=>{ try { await setInferenceDevice(radio.value); await renderManager(); await refreshHealth(); }
@@ -209,6 +225,10 @@ export function initAsk() {
   document.querySelector('#benchmark-intel').addEventListener('click',async()=>{ try { await startIntelBenchmark('quick'); await renderManager(); }
     catch(exception){ managerError.textContent=exception.message; } });
   document.querySelector('#cancel-benchmark').addEventListener('click',async()=>{ try { await cancelIntelBenchmark(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#qualify-models').addEventListener('click',async()=>{ try { await startModelQualification(); await renderManager(); }
+    catch(exception){ managerError.textContent=exception.message; } });
+  document.querySelector('#cancel-qualification').addEventListener('click',async()=>{ try { await cancelModelQualification(); await renderManager(); }
     catch(exception){ managerError.textContent=exception.message; } });
   function confirmDownload(model){ return confirm(`Download ${model.name}?\n\nSize: approximately ${model.display_size}\nSource: approved Hugging Face model repository\nStored locally in AXP model cache`); }
   function downloadLabel(state){ return {queued:'Queued…',connecting:'Connecting…',downloading:'Downloading…',verifying:'Verifying SHA-256…',installing:'Installing model…'}[state] || state; }

@@ -19,6 +19,9 @@ export const removeIntelRuntime = () => jsonRequest('/api/models/accelerator/rem
 export const startIntelBenchmark = profile => jsonRequest('/api/models/benchmark', {method:'POST',
   headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile})});
 export const cancelIntelBenchmark = () => jsonRequest('/api/models/benchmark/cancel', {method:'POST'});
+export const startModelQualification = () => jsonRequest('/api/models/qualification/start', {method:'POST',
+  headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:'standard'})});
+export const cancelModelQualification = () => jsonRequest('/api/models/qualification/cancel', {method:'POST'});
 export const retryAskModel = () => jsonRequest('/api/ask/model/retry', {method: 'POST'});
 export const cancelAskGeneration = () => jsonRequest('/api/ask/cancel', {method: 'POST'});
 export const localModels = () => jsonRequest('/api/models', {cache: 'no-store'});

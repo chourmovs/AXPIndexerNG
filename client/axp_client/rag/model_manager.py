@@ -19,6 +19,7 @@ from .accelerator_catalog import INTEL_SYCL
 from .accelerator_manager import AcceleratorError, AcceleratorManager
 from .hardware import detect_hardware
 from .benchmark import BenchmarkRunner
+from .qualification import ModelQualificationRunner, TERMINAL_STATES as QUALIFICATION_TERMINAL_STATES
 from .runtime_manager import ALLOWED_DEVICES, InferenceDeviceError
 
 LOGGER = logging.getLogger("axp_client")
@@ -88,6 +89,7 @@ class ModelManager:
         self.accelerators = getattr(getattr(runtime, "backend", runtime), "accelerators", None) or AcceleratorManager(cache_root)
         self._accelerator_job = None
         self._benchmark = None
+        self._qualification = None
         self.opener = opener or urllib.request.build_opener(TrustedRedirectHandler())
         self._lock, self._job, self._cancel = threading.Lock(), None, threading.Event()
         self._accelerator_cancel = threading.Event()
@@ -124,9 +126,72 @@ class ModelManager:
                     "sycl_probe_error", "sycl_probe_returncode", "sycl_probe_duration_ms")},
                     "accelerator": {**INTEL_SYCL.public(), "installed": bool(self.accelerators.manifest()),
                                     "download": self._accelerator_snapshot()}},
-                "benchmark": self._benchmark.job.public() if self._benchmark else {"state": "idle"}}
+                "benchmark": self._benchmark.job.public() if self._benchmark else {"state": "idle"},
+                "qualification": self.qualification_status()}
+
+    def _qualification_active(self):
+        return bool(self._qualification and self._qualification.job.state not in ({"idle"} | QUALIFICATION_TERMINAL_STATES))
+
+    def qualification_status(self):
+        return self._qualification.job.public() if self._qualification else {"state": "idle"}
+
+    def start_qualification(self, profile_name="standard", model_id=None):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
+        if self._benchmark and self._benchmark.job.state not in ("idle", "complete", "complete_with_errors", "failed", "cancelled"):
+            raise ModelManagerError("benchmark_busy")
+        if self._job and self._job.state in ACTIVE_DOWNLOAD_STATES: raise ModelManagerError("model_download_busy")
+        controller = getattr(self.runtime, "backend", self.runtime)
+        if not controller or not controller.hardware.intel_gpu_available: raise ModelManagerError("intel_gpu_unavailable")
+        original = dict(load_settings())
+        original_profile = catalog_model(original.get("chat_active_model_id"))
+
+        def configured(model, max_tokens):
+            values = {key: getattr(model, key) for key in model.__dataclass_fields__}
+            values["max_answer_tokens"] = max_tokens
+            return type(model)(**values)
+
+        def factory(model, device, max_tokens):
+            settings = {**original, "chat_active_model_id": model.id,
+                        "chat_model_path": str(self.model_path(model.id)), "chat_inference_device": device}
+            return controller._make_backend(settings, configured(model, max_tokens))
+
+        def restore():
+            # Settings were never modified; re-create precisely the runtime the user had.
+            try:
+                if original_profile and Path(original.get("chat_model_path", "")).is_file():
+                    controller.activate(original, original_profile)
+                else:
+                    controller.close()
+            finally:
+                if self.runtime is not controller: setattr(self.runtime, "qualification_active", False)
+
+        hardware = {"cpu": controller.hardware.cpu_name, "intel_gpu": controller.hardware.intel_gpu_name,
+                    "intel_device_id": controller.hardware.intel_gpu_device_id,
+                    "sycl_device": controller.hardware.sycl_device_name}
+        runner = ModelQualificationRunner(factory, lambda model: self.model_path(model.id).is_file(),
+            self.root.parent / "qualification", restore=restore, hardware=hardware)
+        def transaction():
+            controller.close()
+            if self.runtime is not controller: setattr(self.runtime, "qualification_active", True)
+            self._qualification = runner
+            try: return runner.start(profile_name, model_id)
+            except Exception:
+                if self.runtime is not controller: setattr(self.runtime, "qualification_active", False)
+                raise
+        try:
+            return self.runtime.run_when_idle(transaction) if callable(getattr(self.runtime, "run_when_idle", None)) else transaction()
+        except Exception as exc:
+            if type(exc).__name__ == "ChatBusyError": raise ModelManagerError("chat_busy") from exc
+            if isinstance(exc, (ValueError, RuntimeError)): raise ModelManagerError(str(exc)) from exc
+            raise
+
+    def cancel_qualification(self):
+        if not self._qualification: raise ModelManagerError("qualification_not_active")
+        try: return self._qualification.cancel()
+        except RuntimeError as exc: raise ModelManagerError(str(exc)) from exc
 
     def start_benchmark(self, profile_name="quick"):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         settings = load_settings(); profile = catalog_model(settings.get("chat_active_model_id"))
         if profile is None or not Path(settings["chat_model_path"]).is_file():
             raise ModelManagerError("benchmark_model_required")
@@ -164,6 +229,7 @@ class ModelManager:
         except RuntimeError as exc: raise ModelManagerError(str(exc)) from exc
 
     def start_accelerator_download(self):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         with self._lock:
             if self._accelerator_job and self._accelerator_job.state in ACTIVE_DOWNLOAD_STATES:
                 raise ModelManagerError("accelerator_download_busy")
@@ -230,6 +296,7 @@ class ModelManager:
         return self.catalog()
 
     def remove_accelerator(self):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         controller = getattr(self.runtime, "backend", self.runtime)
         if controller and (controller.health().get("inference_device_effective") == "intel_gpu" or
                            controller.health().get("sidecar_pid")):
@@ -242,6 +309,7 @@ class ModelManager:
         return self.catalog()
 
     def start_download(self, model_id, *, activate=False):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         model = catalog_model(model_id)
         if model is None: raise ModelManagerError("model_not_found")
         with self._lock:
@@ -321,6 +389,7 @@ class ModelManager:
             self._state(job, "failed", "model_download_failed")
 
     def activate(self, model_id):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         model = catalog_model(model_id); path = self.model_path(model_id)
         if model is None: raise ModelManagerError("model_not_found")
         if not path.is_file() or not self.manifest_path(model_id).is_file(): raise ModelManagerError("model_not_installed")
@@ -349,6 +418,7 @@ class ModelManager:
             raise
 
     def set_device(self, device):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         if device not in ALLOWED_DEVICES:
             raise ModelManagerError("invalid_inference_device")
         def transaction():
@@ -371,6 +441,7 @@ class ModelManager:
             raise
 
     def remove(self, model_id):
+        if self._qualification_active(): raise ModelManagerError("qualification_busy")
         if load_settings().get("chat_active_model_id") == model_id: raise ModelManagerError("model_active")
         if catalog_model(model_id) is None: raise ModelManagerError("model_not_found")
         target = self.models_dir / model_id

@@ -7,3 +7,4 @@
 .model-manager{margin:1rem 0;padding:1rem;background:#fff;border:1px solid #ccd5e1;border-radius:.5rem}.model-card{display:grid;gap:.35rem;padding:1rem 0;border-bottom:1px solid #e2e8f0}.model-card p{margin:0}.model-card button{justify-self:start}.model-card progress{width:100%;height:1rem}.model-manager fieldset{display:grid;gap:.5rem;margin:1rem 0;border:1px solid #d8e0e9}.model-manager input{width:auto}
 .working { opacity: .7; }
 .retry-model { margin-left: .5rem; }
+.qualification-progress{margin-top:.75rem;overflow-x:auto}.qualification-progress progress{width:100%}.qualification-table{border-collapse:collapse;font-size:.8rem;width:100%}.qualification-table th,.qualification-table td{border-bottom:1px solid #ddd;padding:.35rem;text-align:left;white-space:nowrap}
