@@ -80,7 +80,7 @@ class RagService:
 
     @property
     def busy(self):
-        return self.operations.busy or self._generation_lock.locked()
+        return self.operations.busy or self._generation_lock.locked() or getattr(self, "qualification_active", False)
 
     def activate(self, settings, profile=None):
         if self.busy:
@@ -147,7 +147,7 @@ class RagService:
                                    else depth.target_answer_tokens)
         active_system_prompt = system_prompt(reasoning_enabled)
         response_instruction = response_plan.instruction if reasoning_enabled else None
-        if self.operations.busy or not self._generation_lock.acquire(blocking=False):
+        if getattr(self, "qualification_active", False) or self.operations.busy or not self._generation_lock.acquire(blocking=False):
             raise ChatBusyError
         self._generation_lock.release()
         if not self.health().get("available"):
