@@ -13,7 +13,7 @@ from axp_client.rag.intel_sycl_backend import (
 )
 from axp_client.rag.llama_cpp_backend import GenerationCancelled, GenerationConfig, build_chat_invocation
 from axp_client.rag.model_catalog import CATALOG_VERSION, catalog_model
-from axp_client.rag.runtime_manager import InferenceRuntimeManager
+from axp_client.rag.runtime_manager import InferenceRuntimeManager, generation_config_for_profile
 
 
 def backend(tmp_path, **kwargs):
@@ -97,7 +97,7 @@ def test_intel_payload_includes_profile_temperature(tmp_path, monkeypatch, model
 
 def test_lfm26_catalog_and_cpu_sampler_contract():
     profile = catalog_model("lfm25-2.6b-q4")
-    assert CATALOG_VERSION == 3
+    assert CATALOG_VERSION == 4
     assert (profile.repository, profile.revision, profile.filename) == (
         "LiquidAI/LFM2.5-2.6B-GGUF", "b22e29ebf6249a8c9fcdda36914743e9980595c4",
         "LFM2.5-2.6B-Q4_0.gguf")
@@ -131,7 +131,10 @@ class RecoveryBackend(IntelSyclBackend):
 def recovery_manager(outcomes):
     created = []
     def factory(_settings, _profile):
-        item = RecoveryBackend(outcomes[len(created)]); created.append(item); return item
+        item = RecoveryBackend(outcomes[len(created)])
+        item.config = generation_config_for_profile(_profile)
+        created.append(item)
+        return item
     hardware = HardwareCapabilities("cpu", intel_gpu_available=True, sycl_device_id="SYCL0")
     manager = InferenceRuntimeManager({"chat_model_path": "model.gguf", "chat_active_model_id": "lfm25-2.6b-q4",
         "chat_inference_device": "intel_gpu"}, intel_backend_factory=factory, hardware=hardware)
@@ -142,6 +145,7 @@ def test_one_intel_only_recovery_succeeds():
     manager, created = recovery_manager(["lost", "success"])
     assert manager.generate(system_prompt="s", user_prompt="u", max_tokens=7) == "answer"
     assert [item.attempts for item in created] == [1, 1]
+    assert created[0].config == created[1].config
     assert manager.health()["device_recovery_succeeded"] is True
 
 
