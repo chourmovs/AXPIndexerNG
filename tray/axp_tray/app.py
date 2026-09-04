@@ -114,11 +114,15 @@ class TrayApplication:
     def _search_worker(self):
         try:
             ensure_client(self.settings)
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + 3
             from .process import client_healthy
 
             while time.monotonic() < deadline and not client_healthy(self.settings):
                 time.sleep(0.2)
+            if not client_healthy(self.settings, timeout=0.5):
+                time.sleep(0.2)
+                if not client_healthy(self.settings, timeout=0.5):
+                    raise RuntimeError("client HTTP socket did not become ready")
             webbrowser.open(f"http://{self.settings['web_host']}:{self.settings['web_port']}/")
         except Exception:
             LOGGER.exception("Could not start/open search client")

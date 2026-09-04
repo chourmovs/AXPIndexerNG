@@ -59,7 +59,7 @@ function renderResponse(article, response, turn) {
   const documents = ['answered','local_generation_skipped_latency_budget'].includes(response.status) ? renderDocuments(turn, 'Sources', response.sources, true) :
     renderDocuments(turn, 'Related documents', response.related_documents, false);
   if (documents) article.append(documents);
-  if (response.timings) { const generation=response.generation || {}; const seconds = ((generation.generation_ms || response.timings.total_ms) / 1000).toFixed(1); const count = response.sources?.length || 0;
+  if (response.timings) { const generation=response.generation || {}; const seconds = (response.timings.total_ms / 1000).toFixed(1); const count = response.sources?.length || 0;
     const device=generation.inference_device_effective === 'intel_gpu' ? 'Intel GPU' : generation.inference_device_effective === 'none' ? 'No inference device' : 'CPU';
     const reduced=response.context?.context_reduced_for_latency ? ' · reduced context' : '';
     const expanded=response.context?.search_depth === 1 ? 'Expanded search · ' : '';
@@ -67,7 +67,12 @@ function renderResponse(article, response, turn) {
     const meta=element('small', 'answer-meta', `${expanded}${response.context?.selected_documents ?? count} document${(response.context?.selected_documents ?? count) === 1 ? '' : 's'} · ${evidence} evidence tokens · ${device}${reduced} · ${seconds} s`);
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
       `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
-    article.append(meta); }
+    const details=element('details','timing-details'); details.append(element('summary','','Timing diagnostics'));
+    const rows=[['Retrieval',response.timings.retrieval_ms],['Model load',response.timings.model_load_ms],
+      ['Context',response.timings.context_ms],['GPU prefill',generation.prompt_eval_ms],
+      ['Decode',generation.decode_ms ?? generation.generation_ms],['Total',response.timings.total_ms]];
+    for(const [label,value] of rows) if(value != null) details.append(element('small','',`${label} · ${(value/1000).toFixed(1)} s`));
+    article.append(meta,details); }
   if (['answered','insufficient_evidence','ungrounded_generation','local_generation_skipped_latency_budget'].includes(response.status) &&
       response.context?.search_depth !== 1) {
     const more=element('button','secondary compact search-more','Search more'); more.type='button';

@@ -98,6 +98,19 @@ class RagService:
         finally:
             self._generation_lock.release()
 
+    def try_warmup(self, system_prompt, user_prompt):
+        """Exercise prefill on the one generation lane, or yield to user/admin work."""
+        def warm():
+            started = time.perf_counter()
+            self.backend.generate(system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=2)
+            result = dict(getattr(self.backend, "last_telemetry", {}) or {})
+            result["warmup_ms"] = (time.perf_counter() - started) * 1000
+            return result
+        try:
+            return self.run_when_idle(warm)
+        except ChatBusyError:
+            return None
+
     def retry_model(self):
         self.backend.retry_load()
         return {"status": "reset", "model_state": self.health().get("model_state", "unloaded")}

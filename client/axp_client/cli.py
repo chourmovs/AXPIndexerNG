@@ -168,6 +168,10 @@ def main(argv=None):
     if a.cmd == "health":
         print(json.dumps(capability_report(connect(a.db))))
         return
+    # The web command binds before constructing expensive search/AI dependencies.
+    if a.cmd == "serve":
+        serve(a.db, host=a.host, port=a.port)
+        return
     con = connect(a.db, readonly=True)
     e = embedder_for_index(con, cache_dir=os.getenv("FASTEMBED_CACHE_PATH"), local_only=True)
     if a.cmd == "rag-diagnose":
@@ -235,4 +239,3 @@ def main(argv=None):
             value = {"status": "generation_unavailable", "answerable": False, "error": "local_generation_failed"}
         print(json.dumps(value, ensure_ascii=False))
         return
-    serve(a.db, e, a.host, a.port)
