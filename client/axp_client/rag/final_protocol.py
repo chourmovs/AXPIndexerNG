@@ -39,7 +39,9 @@ def generate_final_answer(*, backend, question: str, evidence: str,
                           response_plan: ResponsePlan | None = None,
                           requested_answer_tokens: int | None = None,
                           effective_answer_tokens: int | None = None,
-                          generate_call: Callable[..., str] | None = None) -> FinalAnswerResult:
+                          generate_call: Callable[..., str] | None = None,
+                          business_context: str | None = None,
+                          skill_response_instruction: str | None = None) -> FinalAnswerResult:
     """Generate and validate an answer from already prepared evidence."""
     config = getattr(backend, "config", GenerationConfig())
     intent = classify_query_evidence_intent(question)
@@ -49,8 +51,12 @@ def generate_final_answer(*, backend, question: str, evidence: str,
         plan.answer_tokens if reasoning_enabled else getattr(config, "max_answer_tokens", 384))
     active_system = system_prompt(reasoning_enabled)
     instruction = plan.instruction if reasoning_enabled else None
+    if skill_response_instruction:
+        instruction = (f"{instruction}\n\n{skill_response_instruction}" if instruction
+                       else skill_response_instruction)
     active_user = user_prompt(question, evidence, instruction,
-                              allowed_citation_ids if reasoning_enabled else None)
+                              allowed_citation_ids if instruction is not None else None,
+                              business_context=business_context)
     if effective_answer_tokens is None:
         fixed = backend.count_tokens(active_system) + backend.count_tokens(active_user)
         window = getattr(backend, "context_window", lambda: getattr(config, "context_size", 6144))()

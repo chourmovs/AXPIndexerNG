@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "example-project-summary",
+  "name": "Example project summary",
+  "description": "Summarize process-development information for a fictional project.",
+  "enabled": true,
+  "priority": 50,
+  "match": {
+    "identifiers": ["PROJECT-X", "PX-001"],
+    "phrases": ["project x"],
+    "keywords": ["development", "scale-up"]
+  },
+  "retrieval": {
+    "mode": "prefer",
+    "path_prefixes": ["X:\\Example\\Project-X"],
+    "extensions": [".pdf", ".docx"],
+    "temporal_policy": "all_history",
+    "max_documents": 32
+  },
+  "business_context": "You are analysing process-development documentation. Prioritize process sequence, scale-up rationale, operating parameters, deviations and unresolved technical points. Use terminology from the indexed documents.",
+  "answer": {
+    "guidance": "Produce a concise project synthesis supported by indexed evidence.",
+    "sections": [
+      {"title": "Summary", "guidance": "Summarize the essential conclusion.", "required": true},
+      {"title": "Process sequence", "guidance": "Describe the supported sequence.", "required": true},
+      {"title": "Critical parameters", "guidance": "Report supported operating parameters.", "required": false},
+      {"title": "Scale-up changes", "guidance": "Highlight supported scale-up changes.", "required": false},
+      {"title": "Open points", "guidance": "Report supported unresolved points.", "required": false}
+    ]
+  },
+  "evidence_policy": "strict"
+}
