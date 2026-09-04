@@ -3,3 +3,4 @@
 @media(max-width:820px){.manager-grid{grid-template-columns:1fr}}
 @media(max-width:650px){main{padding:1rem}.masthead{padding:1rem}.modes{display:flex}.modes button,#search-form button{flex:1}.modes,form,.result-header,.panel-heading{flex-wrap:wrap}.result-header h3{flex-basis:100%}.user-turn,.axp-turn{margin-left:0;margin-right:0}.composer-footer{align-items:end}.composer-footer small{max-width:60%}.model-manager{padding:.8rem}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important}}
+.startup-status{color:var(--axp-primary-strong);background:#f5fafb}.startup-status small{margin-top:.15rem}

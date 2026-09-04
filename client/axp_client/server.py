@@ -11,6 +11,7 @@ from axp_core.background import access_path_for
 from axp_core.build_info import build_info
 from axp_core.database import SearchReaderPool, connect, search_reader_diagnostics
 from axp_core.runtime import configure_logging, load_settings, validate_loopback_host
+from axp_daemon.embeddings import embedder_for_index
 
 from .rag.model_manager import ModelManager, ModelManagerError
 from .rag.runtime_manager import InferenceRuntimeManager
@@ -26,6 +27,7 @@ from .rag.service import (
 )
 from .reranker import Reranker
 from .search import search
+from .startup_state import ClientStartupState
 
 WEB = Path(__file__).parent / "web"
 LOGGER = configure_logging("axp_client", "client.log")
@@ -77,10 +79,10 @@ def resolve_document_access_path(db, document_id, *, directory=False):
     return next((path for path in candidates if path.exists()), None)
 
 
-def make_handler(db, embedder, open_file=open_with_default_application, rag_service=None, model_manager=None,
-                 search_readers=None):
+def make_handler(db, embedder=None, open_file=open_with_default_application, rag_service=None, model_manager=None,
+                 search_readers=None, runtime=None, startup_state=None):
     quality_reranker = None
-    search_readers = search_readers or SearchReaderPool(db)
+    search_readers = search_readers or (None if runtime else SearchReaderPool(db))
 
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self):
@@ -148,20 +150,32 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
                 return self.send_json(build_info())
+            if url.path == "/api/startup":
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                return self.send_json(startup_state.snapshot() if startup_state else {
+                    "phase": "ready", "server": {"state": "ready"},
+                    "search": {"state": "ready"}, "local_ai": {"state": "ready"}})
             if url.path == "/api/search":
                 http_started = time.perf_counter()
                 nonlocal quality_reranker
+                current_embedder = runtime.embedder if runtime else embedder
+                current_readers = runtime.search_readers if runtime else search_readers
+                if startup_state and (current_embedder is None or current_readers is None):
+                    status = startup_state.snapshot()["search"]
+                    code = "search_initializing" if status["state"] == "initializing" else "search_unavailable"
+                    return self.send_json({"error": code, "retryable": status["state"] == "initializing"}, 503)
                 q = parse_qs(url.query).get("q", [""])[0]
                 explain = parse_qs(url.query).get("explain", ["0"])[0] == "1"
                 profile = parse_qs(url.query).get("profile", ["hybrid"])[0]
                 if profile == "quality" and quality_reranker is None:
                     quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
                 acquire_started = time.perf_counter()
-                with search_readers.acquire() as (con, reader_reused):
+                with current_readers.acquire() as (con, reader_reused):
                     db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
                     result = search(
                             con,
-                            embedder,
+                            current_embedder,
                             q,
                             profile=profile,
                             explain=True,
@@ -180,22 +194,26 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             if url.path == "/api/ask/health":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "ask is only available locally"}, 403)
-                if rag_service is None:
+                current_rag = runtime.rag_service if runtime else rag_service
+                if current_rag is None:
                     return self.send_json({"available": False, "reason": "not_configured"})
-                return self.send_json(rag_service.health())
+                return self.send_json(current_rag.health())
             if url.path == "/api/models":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
-                return self.send_json(model_manager.catalog() if model_manager else {"models": []})
+                manager = runtime.model_manager if runtime else model_manager
+                return self.send_json(manager.catalog() if manager else {"models": []})
             if url.path == "/api/models/benchmark":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
-                return self.send_json(model_manager.catalog().get("benchmark", {"state": "idle"}) if model_manager else
+                manager = runtime.model_manager if runtime else model_manager
+                return self.send_json(manager.catalog().get("benchmark", {"state": "idle"}) if manager else
                                       {"state": "idle"})
             if url.path == "/api/models/qualification":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
-                return self.send_json(model_manager.qualification_status() if model_manager else {"state": "idle"})
+                manager = runtime.model_manager if runtime else model_manager
+                return self.send_json(manager.qualification_status() if manager else {"state": "idle"})
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -229,10 +247,12 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
         def do_POST(self):
             url = urlparse(self.path)
             parts = url.path.strip("/").split("/")
+            current_rag = runtime.rag_service if runtime else rag_service
+            current_manager = runtime.model_manager if runtime else model_manager
             if url.path == "/api/models/device":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
-                if model_manager is None:
+                if current_manager is None:
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
                     body, error = self.read_json_body(MAX_ADMIN_BODY)
@@ -240,7 +260,7 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         return self.send_json({"error": error[0]}, error[1])
                     if not isinstance(body, dict) or not isinstance(body.get("device"), str):
                         return self.send_json({"error": "invalid_inference_device"}, 400)
-                    return self.send_json(model_manager.set_device(body["device"]))
+                    return self.send_json(current_manager.set_device(body["device"]))
                 except ModelManagerError as exc:
                     status = 409 if exc.code in ("chat_busy", "intel_gpu_unavailable") else 400
                     return self.send_json({"error": exc.code, **exc.details}, status)
@@ -248,48 +268,48 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                             "/api/models/accelerator/cancel", "/api/models/accelerator/probe"):
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
-                if model_manager is None:
+                if current_manager is None:
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
-                    if url.path.endswith("/download"): result = model_manager.start_accelerator_download()
-                    elif url.path.endswith("/cancel"): result = model_manager.cancel_accelerator_download()
-                    elif url.path.endswith("/probe"): result = model_manager.retry_accelerator_probe()
-                    else: result = model_manager.remove_accelerator()
+                    if url.path.endswith("/download"): result = current_manager.start_accelerator_download()
+                    elif url.path.endswith("/cancel"): result = current_manager.cancel_accelerator_download()
+                    elif url.path.endswith("/probe"): result = current_manager.retry_accelerator_probe()
+                    else: result = current_manager.remove_accelerator()
                     return self.send_json(result, 202 if url.path.endswith(("/download", "/cancel")) else 200)
                 except ModelManagerError as exc:
                     return self.send_json({"error": exc.code, **exc.details}, 409)
             if url.path in ("/api/models/benchmark", "/api/models/benchmark/cancel"):
                 if not self.local_action_allowed(): return self.send_json({"error": "forbidden_origin"}, 403)
-                if model_manager is None: return self.send_json({"error": "not_configured"}, 503)
+                if current_manager is None: return self.send_json({"error": "not_configured"}, 503)
                 try:
-                    if url.path.endswith("/cancel"): return self.send_json(model_manager.cancel_benchmark(), 202)
+                    if url.path.endswith("/cancel"): return self.send_json(current_manager.cancel_benchmark(), 202)
                     body, error = self.read_json_body(MAX_ADMIN_BODY)
                     if error: return self.send_json({"error": error[0]}, error[1])
-                    return self.send_json(model_manager.start_benchmark(body.get("profile", "quick")), 202)
+                    return self.send_json(current_manager.start_benchmark(body.get("profile", "quick")), 202)
                 except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
             if url.path in ("/api/models/qualification/start", "/api/models/qualification/cancel"):
                 if not self.local_action_allowed(): return self.send_json({"error": "forbidden_origin"}, 403)
-                if model_manager is None: return self.send_json({"error": "not_configured"}, 503)
+                if current_manager is None: return self.send_json({"error": "not_configured"}, 503)
                 try:
                     if url.path.endswith("/cancel"):
-                        return self.send_json(model_manager.cancel_qualification(), 202)
+                        return self.send_json(current_manager.cancel_qualification(), 202)
                     body, error = self.read_json_body(MAX_ADMIN_BODY)
                     if error: return self.send_json({"error": error[0]}, error[1])
-                    return self.send_json(model_manager.start_qualification(body.get("profile", "standard"),
+                    return self.send_json(current_manager.start_qualification(body.get("profile", "standard"),
                         body.get("model")), 202)
                 except ModelManagerError as exc: return self.send_json({"error": exc.code, **exc.details}, 409)
             if len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] in (
                     "download", "cancel", "activate", "remove"):
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
-                if model_manager is None:
+                if current_manager is None:
                     return self.send_json({"error": "not_configured"}, 503)
                 try:
                     if parts[3] == "download":
                         body, error = self.read_json_body(MAX_ADMIN_BODY)
                         if error: return self.send_json({"error": error[0]}, error[1])
-                        return self.send_json(model_manager.start_download(parts[2], activate=bool(body.get("activate"))), 202)
-                    result = getattr(model_manager, parts[3])(parts[2])
+                        return self.send_json(current_manager.start_download(parts[2], activate=bool(body.get("activate"))), 202)
+                    result = getattr(current_manager, parts[3])(parts[2])
                     return self.send_json(result)
                 except ModelManagerError as exc:
                     status = 404 if exc.code == "model_not_found" else 409
@@ -297,16 +317,18 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
             if url.path == "/api/ask/model/retry":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
-                if rag_service is None:
+                if current_rag is None:
                     return self.send_json({"error": "chat_model_unavailable"}, 503)
-                return self.send_json(rag_service.retry_model())
+                return self.send_json(current_rag.retry_model())
             if url.path == "/api/ask/cancel":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
-                if rag_service is None or not rag_service.cancel_generation():
+                if current_rag is None or not current_rag.cancel_generation():
                     return self.send_json({"error": "no_active_generation"}, 409)
                 return self.send_json({"status": "cancel_requested"}, 202)
             if url.path in ("/api/ask", "/api/ask/stream"):
+                if runtime:
+                    runtime.user_activity.set()
                 def send(value, status=200):
                     return self.send_json(value, status)
                 if not _is_loopback(self.client_address[0]):
@@ -328,8 +350,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                 search_depth = body.get("search_depth", 0)
                 if type(search_depth) is not int or search_depth not in (0, 1):
                     return send({"error": "invalid_request", "code": "invalid_search_depth"}, 400)
-                if rag_service is None:
-                    return send({"error": "chat_model_unavailable"}, 503)
+                ai_startup = startup_state.snapshot()["local_ai"] if startup_state else {"state": "ready"}
+                if current_rag is None or ai_startup["state"] not in ("ready", "ready_with_warmup_warning"):
+                    return send({"error": "local_ai_initializing", "retryable": True,
+                                 "phase": ai_startup["state"]}, 503)
                 if url.path == "/api/ask/stream":
                     self.send_response(200)
                     self.send_header("Content-Type", "application/x-ndjson")
@@ -358,10 +382,10 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                         ask_options = {"debug": body.get("debug", False), "progress": progress}
                         if search_depth:
                             ask_options["search_depth"] = search_depth
-                        response = rag_service.ask(question, **ask_options)
+                        response = current_rag.ask(question, **ask_options)
                         progress({"event": "final", "response": response})
                     except ChatUnavailableError:
-                        progress({"event": "error", "error": _chat_failure_code(rag_service)})
+                        progress({"event": "error", "error": _chat_failure_code(current_rag)})
                     except ChatBusyError:
                         progress({"event": "error", "error": "chat_busy"})
                     except GenerationCancelled:
@@ -370,7 +394,7 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     except GenerationFailedError:
                         progress({"event": "error", "error": "local_generation_failed"})
                     except ModelLoadFailedError:
-                        progress({"event": "error", "error": _chat_failure_code(rag_service, "model_load_failed")})
+                        progress({"event": "error", "error": _chat_failure_code(current_rag, "model_load_failed")})
                     except ContextPreparationFailedError:
                         progress({"event": "error", "error": "context_preparation_failed"})
                     except ValidationFailedError:
@@ -396,16 +420,16 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
                     ask_options = {"debug": body.get("debug", False)}
                     if search_depth:
                         ask_options["search_depth"] = search_depth
-                    return send(rag_service.ask(question, **ask_options))
+                    return send(current_rag.ask(question, **ask_options))
                 except ChatUnavailableError:
-                    return send({"error": _chat_failure_code(rag_service)}, 503)
+                    return send({"error": _chat_failure_code(current_rag)}, 503)
                 except ChatBusyError:
                     return send({"error": "chat_busy"}, 429)
                 except GenerationFailedError:
                     return send({"status": "generation_unavailable", "answerable": False,
                                            "error": "local_generation_failed"}, 503)
                 except ModelLoadFailedError:
-                    return send({"error": _chat_failure_code(rag_service, "model_load_failed")}, 503)
+                    return send({"error": _chat_failure_code(current_rag, "model_load_failed")}, 503)
                 except ContextPreparationFailedError:
                     return send({"error": "context_preparation_failed"}, 503)
                 except ValidationFailedError:
@@ -456,23 +480,132 @@ def make_handler(db, embedder, open_file=open_with_default_application, rag_serv
     return Handler
 
 
-def serve(db, embedder, host="127.0.0.1", port=8765):
+class ClientRuntime:
+    """Own independently initialized search and AI capabilities."""
+    def __init__(self, db, settings, state):
+        self.db, self.settings, self.state = db, settings, state
+        self.cancel = threading.Event()
+        self.user_activity = threading.Event()
+        self._lock = threading.Lock()
+        self._search_ready = threading.Event()
+        self._embedder = self._search_readers = self._rag_service = self._model_manager = None
+
+    def _get(self, name):
+        with self._lock:
+            return getattr(self, "_" + name)
+
+    @property
+    def embedder(self): return self._get("embedder")
+    @property
+    def search_readers(self): return self._get("search_readers")
+    @property
+    def rag_service(self): return self._get("rag_service")
+    @property
+    def model_manager(self): return self._get("model_manager")
+
+    def start(self):
+        threading.Thread(target=self._initialize_search, name="axp-client-search-init", daemon=True).start()
+        threading.Thread(target=self._initialize_ai, name="axp-client-ai-init", daemon=True).start()
+
+    def _initialize_search(self):
+        try:
+            with connect(self.db, readonly=True) as con:
+                embedder = embedder_for_index(con, cache_dir=os.getenv("FASTEMBED_CACHE_PATH"), local_only=True)
+            self.state.timing("embedder_ready_ms")
+            if self.cancel.is_set(): return
+            readers = SearchReaderPool(self.db)
+            with self._lock:
+                self._embedder, self._search_readers = embedder, readers
+            self.state.update("search", state="ready", phase=None)
+            self.state.timing("search_ready_ms")
+        except Exception as exc:
+            LOGGER.exception("Background search initialization failed")
+            self.state.update("search", state="failed", phase=None, error=str(exc))
+        finally:
+            self._search_ready.set()
+
+    def _initialize_ai(self):
+        probe_started = time.perf_counter()
+        self.state.update("local_ai", state="probing_gpu", phase="probing_gpu")
+        try:
+            backend = InferenceRuntimeManager(self.settings)
+            self.state.timing("intel_probe_ms", (time.perf_counter() - probe_started) * 1000)
+            while not self.cancel.is_set() and not self._search_ready.wait(.1): pass
+            if self.cancel.is_set():
+                backend.close(); return
+            embedder = self.embedder
+            if embedder is None:
+                raise RuntimeError("search dependencies unavailable")
+            rag = RagService(backend=backend, search_fn=search, connect_fn=connect, db=self.db, embedder=embedder)
+            manager = ModelManager(self.settings["model_cache"], runtime=rag)
+            with self._lock:
+                self._rag_service, self._model_manager = rag, manager
+            health = rag.health()
+            model_id = self.settings.get("chat_active_model_id")
+            self.state.update("local_ai", model_id=model_id, model_name=health.get("model_name"),
+                              device=health.get("device_name") or health.get("backend"))
+            requested = self.settings.get("chat_inference_device", "auto")
+            if not model_id:
+                self.state.update("local_ai", state="unconfigured", phase=None); return
+            if requested not in ("intel_gpu", "auto") or not backend.hardware.intel_gpu_available:
+                self.state.update("local_ai", state="ready", phase=None); return
+            self.state.update("local_ai", state="loading_model", phase="loading_model")
+            loaded = time.perf_counter(); rag.run_when_idle(backend.ensure_loaded)
+            self.state.timing("model_load_ms", (time.perf_counter() - loaded) * 1000)
+            if self.cancel.is_set(): return
+            # A short grace period makes an immediately submitted real request win.
+            if self.user_activity.wait(.2):
+                warmup = {"state": "skipped_user_activity"}
+            else:
+                self.state.update("local_ai", state="warming_model", phase="warming_model")
+                filler = "Safety data property value unit method source section verified local evidence. " * 95
+                LOGGER.info("AI warm-up started model_id=%s", model_id)
+                try:
+                    telemetry = rag.try_warmup("You are warming a local inference engine.",
+                                               filler + "\nQuestion: acknowledge readiness.")
+                    warmup = {"state": "completed", **telemetry} if telemetry is not None else {"state": "skipped_busy"}
+                    if telemetry is not None:
+                        LOGGER.info("Active model warm-up completed model_id=%s prompt_tokens=%s prompt_eval_ms=%s "
+                                    "prompt_eval_tps=%s ttft_ms=%s generation_ms=%s warmup_ms=%s", model_id,
+                                    telemetry.get("prompt_tokens"), telemetry.get("prompt_eval_ms"),
+                                    telemetry.get("prompt_eval_tokens_per_second"), telemetry.get("time_to_first_token_ms"),
+                                    telemetry.get("generation_ms"), telemetry.get("warmup_ms"))
+                        self.state.timing("model_warmup_ms", telemetry.get("warmup_ms"))
+                except Exception as exc:
+                    LOGGER.warning("Active model warm-up failed model_id=%s error=%s", model_id, exc)
+                    warmup = {"state": "failed", "error": str(exc)}
+            health = rag.health()
+            final_state = "ready_with_warmup_warning" if warmup["state"] == "failed" else "ready"
+            self.state.update("local_ai", state=final_state, phase=None, warmup=warmup,
+                              offloaded_layers=health.get("offloaded_layers"), total_layers=health.get("total_layers"))
+            self.state.timing("ai_ready_ms")
+        except Exception as exc:
+            LOGGER.exception("Background local AI initialization failed")
+            self.state.update("local_ai", state="failed", phase=None, error=str(exc))
+
+    def close(self):
+        self.cancel.set()
+        rag, readers = self.rag_service, self.search_readers
+        if rag: rag.close()
+        if readers: readers.close()
+
+
+def serve(db, embedder=None, host="127.0.0.1", port=8765):
     validate_loopback_host(host)
     settings = load_settings()
-    backend = InferenceRuntimeManager(settings)
-    rag_service = RagService(backend=backend, search_fn=search, connect_fn=connect, db=db, embedder=embedder)
-    model_manager = ModelManager(settings["model_cache"], runtime=rag_service)
-    search_readers = SearchReaderPool(db)
-    server = ThreadingHTTPServer((host, port), make_handler(
-        db, embedder, rag_service=rag_service, model_manager=model_manager,
-        search_readers=search_readers,
-    ))
+    state = ClientStartupState()
+    runtime = ClientRuntime(db, settings, state)
+    server = ThreadingHTTPServer((host, port), make_handler(db, runtime=runtime, startup_state=state))
+    state.update("server", state="ready")
+    state.timing("http_bind_ms")
     LOGGER.info("Startup context component=client pid=%s host=%s port=%s db_path=%s",
                 os.getpid(), host, port, db)
+    runtime.start()
     try:
         server.serve_forever()
     finally:
         server.server_close()
-        search_readers.close()
-        rag_service.close()
+        runtime.close()
+        timings = state.snapshot()["timings"]
+        LOGGER.info("Client startup timings %s", " ".join(f"{key}={value}" for key, value in timings.items()))
         LOGGER.info("Web client stopped")

@@ -12,6 +12,7 @@ async function jsonRequest(url, options = {}) {
 }
 export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
 export const getBuildInfo = () => jsonRequest('/api/version', {cache: 'no-store'});
+export const getStartup = () => jsonRequest('/api/startup', {cache: 'no-store'});
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
 export const downloadIntelRuntime = () => jsonRequest('/api/models/accelerator/download', {method:'POST'});
 export const cancelIntelRuntimeDownload = () => jsonRequest('/api/models/accelerator/cancel', {method:'POST'});
