@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from axp_core.background import access_path_for
 from axp_core.build_info import build_info
 from axp_core.database import SearchReaderPool, connect, search_reader_diagnostics
-from axp_core.runtime import configure_logging, load_settings, validate_loopback_host
+from axp_core.runtime import configure_logging, data_dir, load_settings, validate_loopback_host
 from axp_daemon.embeddings import embedder_for_index
 
 from .rag.model_manager import ModelManager, ModelManagerError
@@ -27,6 +27,7 @@ from .rag.service import (
 )
 from .reranker import Reranker
 from .search import search
+from .skills import SkillEngine, SkillScopeUnavailableError, SkillSelectionError, SkillStore
 from .startup_state import ClientStartupState
 
 WEB = Path(__file__).parent / "web"
@@ -198,6 +199,20 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                 if current_rag is None:
                     return self.send_json({"available": False, "reason": "not_configured"})
                 return self.send_json(current_rag.health())
+            if url.path == "/api/skills" or url.path.startswith("/api/skills/"):
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                engine = runtime.skill_engine if runtime else getattr(rag_service, "skill_engine", None)
+                if engine is None:
+                    return self.send_json({"skills": [], "invalid": []})
+                if url.path == "/api/skills":
+                    return self.send_json({"skills": [{"id": skill.id, "name": skill.name,
+                        "description": skill.description, "enabled": skill.enabled}
+                        for skill in engine.list_skills()], "invalid": list(engine.invalid)})
+                skill_id = url.path.removeprefix("/api/skills/")
+                skill = engine.get(skill_id)
+                return self.send_json(skill.to_dict() if skill else {"error": "skill_not_found"},
+                                      200 if skill else 404)
             if url.path == "/api/models":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "forbidden"}, 403)
@@ -350,6 +365,10 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                 search_depth = body.get("search_depth", 0)
                 if type(search_depth) is not int or search_depth not in (0, 1):
                     return send({"error": "invalid_request", "code": "invalid_search_depth"}, 400)
+                skill_id = body.get("skill_id", "auto")
+                if not isinstance(skill_id, str) or (skill_id not in ("auto", "none") and
+                                                     (len(skill_id) > 64 or not skill_id)):
+                    return send({"error": "invalid_skill_id"}, 400)
                 ai_startup = startup_state.snapshot()["local_ai"] if startup_state else {"state": "ready"}
                 if current_rag is None or ai_startup["state"] not in ("ready", "ready_with_warmup_warning"):
                     return send({"error": "local_ai_initializing", "retryable": True,
@@ -380,6 +399,8 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
 
                     try:
                         ask_options = {"debug": body.get("debug", False), "progress": progress}
+                        if "skill_id" in body:
+                            ask_options["skill_id"] = skill_id
                         if search_depth:
                             ask_options["search_depth"] = search_depth
                         response = current_rag.ask(question, **ask_options)
@@ -399,6 +420,8 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                         progress({"event": "error", "error": "context_preparation_failed"})
                     except ValidationFailedError:
                         progress({"event": "error", "error": "validation_failed"})
+                    except (SkillSelectionError, SkillScopeUnavailableError) as exc:
+                        progress({"event": "error", "error": exc.code})
                     except (BrokenPipeError, ConnectionResetError):
                         disconnected = True
                         LOGGER.info("Ask stream client disconnected")
@@ -418,6 +441,8 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return
                 try:
                     ask_options = {"debug": body.get("debug", False)}
+                    if "skill_id" in body:
+                        ask_options["skill_id"] = skill_id
                     if search_depth:
                         ask_options["search_depth"] = search_depth
                     return send(current_rag.ask(question, **ask_options))
@@ -434,6 +459,8 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return send({"error": "context_preparation_failed"}, 503)
                 except ValidationFailedError:
                     return send({"error": "validation_failed"}, 503)
+                except (SkillSelectionError, SkillScopeUnavailableError) as exc:
+                    return send({"error": exc.code}, 400)
             if url.path == "/api/shutdown":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
@@ -488,6 +515,7 @@ class ClientRuntime:
         self.user_activity = threading.Event()
         self._lock = threading.Lock()
         self._search_ready = threading.Event()
+        self._skill_engine = SkillEngine(SkillStore(data_dir() / "skills"))
         self._embedder = self._search_readers = self._rag_service = self._model_manager = None
 
     def _get(self, name):
@@ -502,6 +530,8 @@ class ClientRuntime:
     def rag_service(self): return self._get("rag_service")
     @property
     def model_manager(self): return self._get("model_manager")
+    @property
+    def skill_engine(self): return self._skill_engine
 
     def start(self):
         threading.Thread(target=self._initialize_search, name="axp-client-search-init", daemon=True).start()
@@ -537,7 +567,7 @@ class ClientRuntime:
             if embedder is None:
                 raise RuntimeError("search dependencies unavailable")
             rag = RagService(backend=backend, search_fn=search, connect_fn=connect, db=self.db,
-                             embedder=embedder, reader_pool=self.search_readers)
+                             embedder=embedder, reader_pool=self.search_readers, skill_engine=self.skill_engine)
             manager = ModelManager(self.settings["model_cache"], runtime=rag)
             with self._lock:
                 self._rag_service, self._model_manager = rag, manager

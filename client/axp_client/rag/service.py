@@ -60,10 +60,11 @@ class ValidationFailedError(Exception):
 
 
 class RagService:
-    def __init__(self, *, backend, search_fn, connect_fn, db, embedder, reader_pool=None):
+    def __init__(self, *, backend, search_fn, connect_fn, db, embedder, reader_pool=None, skill_engine=None):
         self.backend, self.search_fn, self.connect_fn = backend, search_fn, connect_fn
         self.db, self.embedder = db, embedder
         self.reader_pool = reader_pool
+        self.skill_engine = skill_engine
         self._generation_lock = threading.Lock()
         self.operations = NativeOperationSupervisor()
 
@@ -156,12 +157,19 @@ class RagService:
         )
 
     def ask(self, question, *, debug=False, retrieval=None, progress=None, search_depth=0,
-            retrieval_plan=None):
+            retrieval_plan=None, skill_id="auto"):
         def emit(event, **details):
             if progress is not None:
                 progress({"event": event, **details})
 
         request_id, started = uuid.uuid4().hex[:12], time.perf_counter()
+        skill_execution = (self.skill_engine.resolve(question, skill_id) if self.skill_engine is not None
+                           else None)
+        if skill_execution and skill_execution.skill:
+            emit("skill_selected", skill={"id": skill_execution.skill.id, "name": skill_execution.skill.name,
+                                          "selection": skill_execution.selection})
+            LOGGER.info("RAG skill request_id=%s selection=%s skill_id=%s match_reason=%s", request_id,
+                        skill_execution.selection, skill_execution.skill.id, skill_execution.match_reason)
         model_load_ms = 0.0
         generation_config = getattr(self.backend, "config", GenerationConfig())
         intent = classify_query_evidence_intent(question)
@@ -182,10 +190,18 @@ class RagService:
         acquire_started = time.perf_counter()
         with self._reader() as (con, reader_reused):
             db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
+            if skill_execution and skill_execution.skill and retrieval_plan is None:
+                skill_execution = self.skill_engine.compile(skill_execution, con, search_depth=search_depth)
+                skill = skill_execution.skill
+                LOGGER.info("RAG skill scope request_id=%s mode=%s paths=%s temporal_policy=%s", request_id,
+                            skill.retrieval.mode, len(skill.retrieval.path_prefixes),
+                            skill.retrieval.temporal_policy)
             spiral = None
             if retrieval is None:
                 spiral = SpiralRetriever(search_fn=self.search_fn).retrieve(
-                    con, self.embedder, question, plan=retrieval_plan, search_depth=search_depth,
+                    con, self.embedder, question,
+                    plan=retrieval_plan or (skill_execution.retrieval_plan if skill_execution else None),
+                    search_depth=search_depth,
                     limit=depth.retrieval_limit, request_id=request_id,
                     search_config=SearchConfig(lexical_candidates=depth.candidate_depth,
                                                vector_candidates=depth.candidate_depth))
@@ -262,9 +278,18 @@ class RagService:
             spiral_context = {"search_depth": search_depth, "retrieval_strategy": "spiral",
                               "spiral_stop_stage": spiral.stage if spiral else "provided",
                               "global_fallback_used": spiral.global_fallback_used if spiral else False}
+            skill_metadata = None
+            if skill_execution and skill_execution.skill:
+                skill_metadata = {"id": skill_execution.skill.id, "name": skill_execution.skill.name,
+                                  "selection": skill_execution.selection,
+                                  "match_reason": skill_execution.match_reason}
+                spiral_context.update(skill_id=skill_execution.skill.id,
+                                      skill_selection=skill_execution.selection,
+                                      skill_scope_mode=skill_execution.skill.retrieval.mode,
+                                      **skill_execution.diagnostics)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public(),
-                    "context": spiral_context}
+                    "context": spiral_context, "skill": skill_metadata}
             if not decision.answerable:
                 base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
                                    "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
@@ -305,11 +330,20 @@ class RagService:
                 context_start = time.perf_counter()
                 try:
                     system_tokens = self.backend.count_tokens(active_system_prompt)
+                    skill_business = skill_execution.business_context if skill_execution else None
+                    skill_instruction = skill_execution.response_instruction if skill_execution else None
+                    composed_instruction = response_instruction
+                    if skill_instruction:
+                        composed_instruction = (f"{composed_instruction}\n\n{skill_instruction}"
+                                                if composed_instruction else skill_instruction)
                     reserved_ids = ([f"S{i}" for i in range(1, generation_config.max_context_blocks + 1)]
-                                    if reasoning_enabled else None)
+                                    if composed_instruction is not None else None)
                     question_tokens = self.backend.count_tokens(
-                        user_prompt(question, "", response_instruction, reserved_ids))
+                        user_prompt(question, "", composed_instruction, reserved_ids,
+                                    business_context=skill_business))
                     fixed_tokens = system_tokens + question_tokens
+                    skill_business_tokens = self.backend.count_tokens(skill_business) if skill_business else 0
+                    skill_instruction_tokens = self.backend.count_tokens(skill_instruction) if skill_instruction else 0
                     effective_answer_tokens = min(requested_answer_tokens, max(0,
                         self.backend.context_window() - fixed_tokens - generation_config.safety_tokens))
                     context = build_context(con, content, token_counter=self.backend.count_tokens,
@@ -397,6 +431,9 @@ class RagService:
             "context_limited": (depth.target_evidence_tokens is not None and
                                 context.diagnostics["evidence_budget_tokens"] < depth.target_evidence_tokens),
             "latency_limited": reduced,
+            "skill_business_context_tokens": skill_business_tokens,
+            "skill_response_instruction_tokens": skill_instruction_tokens,
+            "skill_prompt_overhead_tokens": skill_business_tokens + skill_instruction_tokens,
         }
         base["context"] = context_telemetry
         if (estimated is not None and estimated > POLICY.hard_seconds and
@@ -457,6 +494,8 @@ class RagService:
                     allowed_citation_ids=[block.id for block in context.blocks], search_depth=search_depth,
                     response_plan=response_plan, requested_answer_tokens=requested_answer_tokens,
                     effective_answer_tokens=effective_answer_tokens,
+                    business_context=skill_execution.business_context if skill_execution else None,
+                    skill_response_instruction=skill_execution.response_instruction if skill_execution else None,
                     generate_call=lambda **kwargs: self._run_blocking(
                         lambda: self.backend.generate(**kwargs), generation_poll, interval=.25))
                 answer = final_answer.answer

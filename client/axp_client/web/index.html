@@ -35,7 +35,9 @@
         <section class="runtime-card qualification-card"><div class="card-title"><h5>Model qualification</h5><span class="chip warning">EXPERIMENTAL</span></div><p class="muted">Run the same deterministic test suite against every installed model.</p><div class="button-row"><button id="qualify-models" type="button" class="compact" hidden>Qualify all installed models</button><button id="cancel-qualification" type="button" class="secondary compact" hidden>Cancel qualification</button></div><section id="qualification-progress" class="qualification-progress" aria-live="polite"></section></section>
       </section></div><p id="model-manager-error" class="inline-error" aria-live="polite"></p></aside>
     <div id="chat-history" class="chat-history"></div>
-    <form id="ask-form" class="ask-form"><label for="ask-input">Ask a question about your indexed documents</label>
+    <form id="ask-form" class="ask-form"><div class="skill-picker"><label for="skill-select">Skill</label>
+      <select id="skill-select"><option value="auto">Auto</option><option value="none">General</option></select></div>
+      <label for="ask-input">Ask a question about your indexed documents</label>
       <textarea id="ask-input" maxlength="4000" rows="3" placeholder="Why was the process changed?"></textarea>
       <div class="composer-footer"><small>Ask complete questions for the most reliable results.</small><button id="ask-submit" disabled>Ask AXP</button></div>
     </form><div id="ask-progress" class="progress" aria-live="polite"></div>

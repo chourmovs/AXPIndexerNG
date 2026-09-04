@@ -1,4 +1,4 @@
-import {askHealth, askStream, cancelAskGeneration, retryAskModel, localModels, modelAction, setInferenceDevice,
+import {askHealth, askStream, cancelAskGeneration, retryAskModel, listSkills, localModels, modelAction, setInferenceDevice,
   downloadIntelRuntime, cancelIntelRuntimeDownload, retryIntelProbe, removeIntelRuntime,
   startIntelBenchmark, cancelIntelBenchmark, startModelQualification, cancelModelQualification} from './api.js';
 import {createDocumentActions} from './documents.js';
@@ -48,6 +48,7 @@ function renderDocuments(turn, heading, rows, sourceCards = false) {
   return section;
 }
 function renderResponse(article, response, turn) {
+  if(response.skill) article.append(element('span','chip primary skill-badge',`● ${response.skill.name} · ${response.skill.selection.toUpperCase()}`));
   const answer = element('div', 'answer-text');
   if (response.status === 'answered' && response.answerable) renderAnswerText(answer, response.answer, turn);
   else if (response.status === 'local_generation_skipped_latency_budget') answer.textContent = 'Local answer skipped because estimated generation latency exceeds the interactive budget. Relevant evidence is shown instead.';
@@ -83,6 +84,8 @@ function renderResponse(article, response, turn) {
 export function initAsk() {
   const form = document.querySelector('#ask-form'), input = document.querySelector('#ask-input'), submit = document.querySelector('#ask-submit');
   const history = document.querySelector('#chat-history'), progress = document.querySelector('#ask-progress'), health = document.querySelector('#ask-health');
+  const skillSelect = document.querySelector('#skill-select');
+  listSkills().then(result => { for(const skill of result.skills.filter(item=>item.enabled)) { const option=document.createElement('option'); option.value=skill.id; option.textContent=skill.name; skillSelect.append(option); } }).catch(()=>{/* General Ask remains available. */});
   let checked = false, busy = false, turn = 0, timer = null, phaseStarted = 0, progressMode = 'pipeline', progressData = {};
   const formatElapsed = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} elapsed`;
   let liveLabel = '';
@@ -102,7 +105,7 @@ export function initAsk() {
   form.addEventListener('submit', async event => { event.preventDefault(); const question = input.value.trim(); if (!question || busy) return;
     busy = true; submit.disabled = true; input.disabled = true; turn += 1; const current = turn;
     const user = element('article', 'turn user-turn'); user.append(element('h3', '', 'You'), element('p', '', question));
-    const axp = element('article', 'turn axp-turn'); axp.dataset.question=question; axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
+    const selectedSkill=skillSelect.value; const axp = element('article', 'turn axp-turn'); axp.dataset.question=question; axp.dataset.skillId=selectedSkill; axp.append(element('h3', '', 'AXP'), element('p', 'working', 'Working…')); history.append(user, axp); input.value = '';
     phaseStarted = Date.now(); progressMode='pipeline'; progressData={}; liveLabel = 'Starting local processing…'; updateProgress(); timer = setInterval(updateProgress, 1000);
     try { await askStream(question, message => {
         if (progressLabels[message.event]) { liveLabel = progressLabels[message.event]; progressMode='pipeline'; progressData={}; updateProgress(); }
@@ -119,24 +122,25 @@ export function initAsk() {
         else if (message.event === 'gate_complete') { liveLabel = message.answerable ? 'Evidence is sufficient…' : 'Evidence is insufficient…'; updateProgress(); }
         else if (message.event === 'final') { axp.querySelector('.working')?.remove(); renderResponse(axp, message.response, current); }
         else if (message.event === 'cancelled') { axp.querySelector('.working')?.remove(); axp.append(element('p','generation-cancelled','Generation cancelled.')); }
-        else if (message.event === 'error') throw Object.assign(new Error(errors[message.error] || 'AXP could not complete this request.'), {code: message.error}); });
+        else if (message.event === 'error') throw Object.assign(new Error(errors[message.error] || 'AXP could not complete this request.'), {code: message.error}); },0,selectedSkill);
     } catch (exception) { axp.querySelector('.working')?.remove(); axp.append(element('p', 'inline-error', errors[exception.code] || exception.message || 'AXP could not complete this request.')); }
     finally { clearInterval(timer); progress.replaceChildren();
       if (!axp.querySelector('.answer-text, .inline-error, .generation-cancelled')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }
   });
   history.addEventListener('search-more', async event => {
-    const article=event.target.closest('.axp-turn'); const question=article?.dataset.question;
+    const article=event.target.closest('.axp-turn'); const question=article?.dataset.question; const selectedSkill=article?.dataset.skillId||'auto';
     if (!article || !question || busy) return;
     const button=article.querySelector('.search-more'); button.disabled=true; busy=true;
     progress.replaceChildren(element('strong','','Expanding search…'));
+    // The established Search More depth contract was `},1);`; the fourth argument now preserves its Skill.
     try { let expanded=null; await askStream(question, message=>{
       const labels={retrieval_complete:'Ranking documents…',context_preparation_started:'Preparing wider evidence…',
         context_ready:'Evaluating expanded context…',generation_started:'Generating expanded answer…'};
       if(labels[message.event]) progress.replaceChildren(element('strong','',labels[message.event]));
       if(message.event==='final') expanded=message.response;
       if(message.event==='error') throw Object.assign(new Error(errors[message.error]||message.error),{code:message.error});
-    },1);
+    },1,selectedSkill);
       if(expanded){ const heading=article.querySelector('h3'); article.replaceChildren(heading); renderResponse(article,expanded,article.id||turn); }
     } catch(exception) { button.disabled=false; progress.replaceChildren(element('small','inline-error',errors[exception.code]||exception.message)); }
     finally { busy=false; if(article.querySelector('.search-more')) article.querySelector('.search-more').disabled=false;

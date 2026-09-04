@@ -14,6 +14,7 @@ export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURICo
 export const getBuildInfo = () => jsonRequest('/api/version', {cache: 'no-store'});
 export const getStartup = () => jsonRequest('/api/startup', {cache: 'no-store'});
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
+export const listSkills = () => jsonRequest('/api/skills', {cache: 'no-store'});
 export const downloadIntelRuntime = () => jsonRequest('/api/models/accelerator/download', {method:'POST'});
 export const cancelIntelRuntimeDownload = () => jsonRequest('/api/models/accelerator/cancel', {method:'POST'});
 export const retryIntelProbe = () => jsonRequest('/api/models/accelerator/probe', {method:'POST'});
@@ -34,10 +35,10 @@ export const setInferenceDevice = device => jsonRequest('/api/models/device',
 export const openDocument = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open`, {method: 'POST'});
 export const openDocumentDirectory = id => jsonRequest(`/api/document/${encodeURIComponent(id)}/open-dir`, {method: 'POST'});
 
-export async function askStream(question, onEvent, searchDepth = 0) {
+export async function askStream(question, onEvent, searchDepth = 0, skillId = 'auto') {
   let response;
   try { response = await fetch('/api/ask/stream', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question, search_depth: searchDepth})}); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
+    body: JSON.stringify({question, search_depth: searchDepth, skill_id: skillId})}); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
   if (!response.ok) {
     let body = {}; try { body = await response.json(); } catch (_) { /* normalized below */ }
     throw new ApiError(body.error || 'http_error', body.error || 'AXP request failed.', response.status);

@@ -41,8 +41,14 @@ def system_prompt(reasoning_enabled=False):
     return f"{SYSTEM_PROMPT}\n\n{LFM_FINAL_RESPONSE_DISCIPLINE}"
 
 
-def user_prompt(question, evidence, response_instruction=None, allowed_citation_ids=None):
-    prefix = (f"QUESTION\n{question}\n\nEVIDENCE\n--- BEGIN EVIDENCE ---\n{evidence}"
+def user_prompt(question, evidence, response_instruction=None, allowed_citation_ids=None,
+                business_context=None):
+    business = ""
+    if business_context is not None:
+        business = (f"\n\nBUSINESS CONTEXT\n{business_context}\n\nBUSINESS CONTEXT is application guidance for "
+                    "terminology, focus, and interpretation. It is NOT factual evidence. All factual claims must "
+                    "come from cited EVIDENCE.")
+    prefix = (f"QUESTION\n{question}{business}\n\nEVIDENCE\n--- BEGIN EVIDENCE ---\n{evidence}"
               "\n--- END EVIDENCE ---")
     if response_instruction is None:
         return (f"{prefix}\n\nAnswer in 1–3 sentences. Every answer MUST contain [Sx]. "
