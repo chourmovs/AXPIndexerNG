@@ -327,12 +327,14 @@ def rank_documents(hits, *, intent=None):
 
 
 def retrieve_rag_candidates(con, embedder, question, *, search_fn, raw_search_fn=None,
-                            limit=24, search_config=None):
+                            limit=24, search_config=None, query_vector=None):
     """Search once, then classify and enrich candidates without changing Search output."""
     started = time.perf_counter()
     retrieval_fn = raw_search_fn or getattr(search_fn, "raw_search", search_fn)
-    found = retrieval_fn(con, embedder, question, limit=limit, profile="hybrid", explain=True,
-                         config=search_config)
+    kwargs = dict(limit=limit, profile="hybrid", explain=True, config=search_config)
+    if query_vector is not None:
+        kwargs["query_vector"] = query_vector
+    found = retrieval_fn(con, embedder, question, **kwargs)
     candidates = [dict(row) for row in found.get("results", found)]
     document_ids = sorted({int(row["document_id"]) for row in candidates})
     documents = {}

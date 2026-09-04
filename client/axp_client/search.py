@@ -12,12 +12,12 @@ LOGGER = logging.getLogger("axp_client")
 
 
 def raw_search(con, embedder, query, limit=20, *, profile="hybrid", explain=False,
-               reranker=None, config=None):
+               reranker=None, config=None, query_vector=None):
     """Return the unpresented hybrid candidate pool (the RAG retrieval boundary)."""
     validate_index_signature(con, embedder.model_id, embedder.dimension,
                              getattr(embedder, "distance_metric", "cosine"))
     started = time.perf_counter()
-    vector = embedder.embed_query(query)
+    vector = query_vector if query_vector is not None else embedder.embed_query(query)
     embedding_ms = (time.perf_counter() - started) * 1000
     result = hybrid_search(con, query, vector, limit, config=config or SearchConfig(),
                            profile=profile, reranker=reranker, explain=True)
