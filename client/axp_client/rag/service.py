@@ -3,6 +3,7 @@ import re
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 from axp_core.hybrid import SearchConfig
 
@@ -18,6 +19,7 @@ from .prompts import SYSTEM_PROMPT, system_prompt, user_prompt
 from .response_policy import classify_response_plan
 from .retrieval import (classify_query_evidence_intent, rank_documents,
                         retrieve_document_passages, retrieve_rag_candidates)
+from .spiral import SpiralRetriever
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
@@ -58,11 +60,21 @@ class ValidationFailedError(Exception):
 
 
 class RagService:
-    def __init__(self, *, backend, search_fn, connect_fn, db, embedder):
+    def __init__(self, *, backend, search_fn, connect_fn, db, embedder, reader_pool=None):
         self.backend, self.search_fn, self.connect_fn = backend, search_fn, connect_fn
         self.db, self.embedder = db, embedder
+        self.reader_pool = reader_pool
         self._generation_lock = threading.Lock()
         self.operations = NativeOperationSupervisor()
+
+    @contextmanager
+    def _reader(self):
+        if self.reader_pool is not None:
+            with self.reader_pool.acquire() as borrowed:
+                yield borrowed
+        else:
+            with self.connect_fn(self.db, readonly=True) as con:
+                yield con, False
 
     def health(self):
         return {**self.backend.health(), "generation_busy": self.operations.busy or self._generation_lock.locked()}
@@ -122,7 +134,7 @@ class RagService:
         config = getattr(self.backend, "config", GenerationConfig())
         policy = depth_policy(search_depth, evidence_tokens=config.max_evidence_tokens,
                               answer_tokens=config.max_answer_tokens)
-        with self.connect_fn(self.db, readonly=True) as con:
+        with self._reader() as (con, _reused):
             return retrieve_rag_candidates(con, self.embedder, question, search_fn=self.search_fn,
                 limit=policy.retrieval_limit, search_config=SearchConfig(
                     lexical_candidates=policy.candidate_depth, vector_candidates=policy.candidate_depth))
@@ -143,7 +155,8 @@ class RagService:
             signals["documents"], result_count,
         )
 
-    def ask(self, question, *, debug=False, retrieval=None, progress=None, search_depth=0):
+    def ask(self, question, *, debug=False, retrieval=None, progress=None, search_depth=0,
+            retrieval_plan=None):
         def emit(event, **details):
             if progress is not None:
                 progress({"event": event, **details})
@@ -166,12 +179,17 @@ class RagService:
         if not self.health().get("available"):
             raise ChatUnavailableError
         emit("retrieval_started")
-        with self.connect_fn(self.db, readonly=True) as con:
-            retrieval = retrieval or retrieve_rag_candidates(
-                con, self.embedder, question, search_fn=self.search_fn, limit=depth.retrieval_limit,
-                search_config=SearchConfig(lexical_candidates=depth.candidate_depth,
-                                           vector_candidates=depth.candidate_depth)
-            )
+        acquire_started = time.perf_counter()
+        with self._reader() as (con, reader_reused):
+            db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
+            spiral = None
+            if retrieval is None:
+                spiral = SpiralRetriever(search_fn=self.search_fn).retrieve(
+                    con, self.embedder, question, plan=retrieval_plan, search_depth=search_depth,
+                    limit=depth.retrieval_limit, request_id=request_id,
+                    search_config=SearchConfig(lexical_candidates=depth.candidate_depth,
+                                               vector_candidates=depth.candidate_depth))
+                retrieval = spiral.retrieval
             candidates, all_content = retrieval.candidates, retrieval.content_evidence
             LOGGER.info("RAG raw retrieval request_id=%s raw_candidates=%s query_intent=%s",
                         request_id, len(candidates), intent.kind)
@@ -194,6 +212,7 @@ class RagService:
             eligible_documents = eligible_documents[:selected_limit]
             drilldown = retrieve_document_passages(
                 con, self.embedder, question, [doc["document_id"] for doc in eligible_documents],
+                query_vector=None if spiral is None else getattr(spiral, "query_vector", None),
                 search_depth=search_depth,
                 config=SearchConfig(lexical_candidates=depth.candidate_depth,
                                     vector_candidates=depth.candidate_depth),
@@ -240,11 +259,16 @@ class RagService:
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
             self._log_gate(request_id, decision, len(candidates))
             emit("gate_complete", answerable=decision.answerable)
+            spiral_context = {"search_depth": search_depth, "retrieval_strategy": "spiral",
+                              "spiral_stop_stage": spiral.stage if spiral else "provided",
+                              "global_fallback_used": spiral.global_fallback_used if spiral else False}
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public(),
-                    "context": {"search_depth": search_depth}}
+                    "context": spiral_context}
             if not decision.answerable:
-                base["timings"] = {"retrieval_ms": retrieval_ms, "total_ms": (time.perf_counter() - started) * 1000}
+                base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
+                                   "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
+                                   "total_ms": (time.perf_counter() - started) * 1000}
                 if debug:
                     base["debug"] = self._debug(retrieval, decision, None)
                 return base
@@ -346,7 +370,7 @@ class RagService:
             base["decision"] = {"reason": "no_context_evidence", "best_relevance": decision.best_relevance}
             return base
         evidence_tokens = context.diagnostics["evidence_tokens"]
-        context_telemetry = {
+        context_telemetry = {**spiral_context,
             "search_depth": search_depth, "input_multiplier": depth.input_multiplier,
             "output_multiplier": depth.output_multiplier,
             "target_evidence_tokens": depth.target_evidence_tokens,
@@ -562,7 +586,9 @@ class RagService:
             LOGGER.exception("Validation failed request id=%s type=%s", request_id, type(exc).__name__)
             raise ValidationFailedError from exc
         drill_timings = drilldown.timings if drilldown else {}
-        base["timings"] = {"retrieval_ms": retrieval_ms, "global_retrieval_ms": retrieval_ms,
+        base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
+                           "global_retrieval_ms": retrieval.timings.get("spiral_global_ms", 0.0),
+                           "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
                            "document_ranking_ms": max(0.0, (ranking_finished - started) * 1000 - retrieval_ms),
                            **drill_timings, "context_ms": context_ms, "model_load_ms": model_load_ms,
                            "generation_ms": generation_ms,
@@ -605,6 +631,7 @@ class RagService:
     @staticmethod
     def _debug(retrieval, decision, context):
         return {**retrieval.diagnostics, "gate": decision.public(),
+                "spiral_trace": list(retrieval.timings.get("spiral_trace", ())),
                 "selected_evidence_ids": [] if context is None else [x.id for x in context.blocks],
                 "selected_chunk_ids": [] if context is None else [x.chunk_ids for x in context.blocks],
                 "context_characters": 0 if context is None else len(context.prompt_text)}

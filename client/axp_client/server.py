@@ -536,7 +536,8 @@ class ClientRuntime:
             embedder = self.embedder
             if embedder is None:
                 raise RuntimeError("search dependencies unavailable")
-            rag = RagService(backend=backend, search_fn=search, connect_fn=connect, db=self.db, embedder=embedder)
+            rag = RagService(backend=backend, search_fn=search, connect_fn=connect, db=self.db,
+                             embedder=embedder, reader_pool=self.search_readers)
             manager = ModelManager(self.settings["model_cache"], runtime=rag)
             with self._lock:
                 self._rag_service, self._model_manager = rag, manager
