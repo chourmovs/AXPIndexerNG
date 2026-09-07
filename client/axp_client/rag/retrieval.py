@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from axp_core.fts import search_documents as lexical_search_documents
 from axp_core.fts import TOKEN_RE
 from axp_core.hybrid import SearchConfig, _meaningful_terms, _relevance, fold_search_text
+from axp_core.document_identity import analyze_document_identity, identity_diagnostics
 from axp_core.identifiers import extract_identifiers
 from axp_core.vectors import search_documents as vector_search_documents
 
@@ -275,7 +276,7 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
     return DocumentDrilldownResult(passages, timings, diagnostics)
 
 
-def rank_documents(hits, *, intent=None):
+def rank_documents(hits, *, intent=None, query=""):
     grouped = {}
     for hit in hits:
         grouped.setdefault(int(hit["document_id"]), []).append(hit)
@@ -290,6 +291,9 @@ def rank_documents(hits, *, intent=None):
                           row.get("exact_content_identifier_match") or row.get("exact_content_phrase_match"))
                      for row in rows)
         first = rows[0]
+        identity = analyze_document_identity(query,
+            filename=first.get("filename"), title=first.get("title"),
+            source_label=first.get("source_label"), source_path=first.get("source_path"))
         identity_strength = first.get("document_identity_strength", "none")
         identity_bonus = {"none": 0, "weak": .01, "strong": .14, "exact": .22}[identity_strength]
         query_terms = set(intent.identity_terms) if intent and intent.kind == "general_semantic" else set()
@@ -315,13 +319,17 @@ def rank_documents(hits, *, intent=None):
             "document_score": scores[0] + .20*scores[1] + .10*scores[2] + .05*min(strong, 3)
                               + .10*max(float(r.get("title_coverage") or 0) for r in rows)
                               + .03*max(float(r.get("filename_coverage") or 0) for r in rows) + identity_bonus,
-            "ranked_hits": rows})
+            "ranked_hits": rows, **identity_diagnostics(identity)})
     if intent and intent.kind == "general_semantic" and 2 <= len(intent.identity_terms) <= 4:
-        ranked.sort(key=lambda doc: (-int(doc["complete_query_match"]), -doc["document_score"],
+        ranked.sort(key=lambda doc: (tuple(-value for value in doc["document_identity_priority"]),
+                                     -doc["collection_coverage"], -doc["metadata_identity_coverage"],
+                                     -int(doc["complete_query_match"]), -doc["document_score"],
                                      -int(doc["exact_identifier_present"]),
                                      -int(doc["exact_phrase_present"]), doc["document_id"]))
     else:
-        ranked.sort(key=lambda doc: (-doc["document_score"], -int(doc["exact_identifier_present"]),
+        ranked.sort(key=lambda doc: (tuple(-value for value in doc["document_identity_priority"]),
+                                     -doc["collection_coverage"], -doc["metadata_identity_coverage"],
+                                     -doc["document_score"], -int(doc["exact_identifier_present"]),
                                      -int(doc["exact_phrase_present"]), doc["document_id"]))
     return ranked
 
@@ -381,7 +389,7 @@ def retrieve_rag_candidates(con, embedder, question, *, search_fn, raw_search_fn
             )
     intent = classify_query_evidence_intent(question)
     classify_passages(content, intent)
-    ranked_documents = rank_documents(content, intent=intent)
+    ranked_documents = rank_documents(content, intent=intent, query=question)
     return RagRetrievalResult(
         candidates=candidates,
         content_evidence=content,
