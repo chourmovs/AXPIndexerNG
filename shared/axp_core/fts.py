@@ -1,6 +1,7 @@
 import re
 
 from .identifiers import extract_identifiers
+from .path_keys import sql_path_prefix
 
 # FTS declaration order: body, title, filename, heading, identifiers.
 BM25_WEIGHTS = (1.0, 4.0, 3.0, 4.0, 8.0)
@@ -57,7 +58,7 @@ def search_scoped(con, query, *, source_ids=None, path_prefixes=None, extensions
     prefixes = tuple(path_prefixes or ())
     if prefixes:
         clauses.append("(" + " OR ".join("lower(d.path_key) LIKE ? ESCAPE '\\'" for _ in prefixes) + ")")
-        values.extend(_prefix_pattern(value) for value in prefixes)
+        values.extend(sql_path_prefix(value) for value in prefixes)
     if modified_after_ms is not None:
         clauses.append("d.modified_unix_ms>=?"); values.append(int(modified_after_ms))
     if modified_before_ms is not None:
@@ -76,12 +77,6 @@ def search_scoped(con, query, *, source_ids=None, path_prefixes=None, extensions
         (*BM25_WEIGHTS, *values, min(int(limit), 2000)),
     ).fetchall()
     return [dict(row) for row in rows]
-
-
-def _prefix_pattern(value):
-    normalized = str(value).replace("\\", "/").casefold().rstrip("/")
-    escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return escaped + "%"
 
 
 def search_documents(con, query, document_ids):

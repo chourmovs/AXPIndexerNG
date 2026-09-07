@@ -12,6 +12,13 @@ const progressLabels = {retrieval_started: 'Searching indexed documents…', ret
   generation_skipped: 'Relevant evidence ready; local answer skipped.',
   generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
+  skill_scope_unavailable: 'Skill scope unavailable — the selected Skill cannot find its configured indexed location.',
+  model_loading: 'Local model still loading — wait for Local AI to become ready and retry.',
+  model_not_ready: 'The local model is not ready. Wait for Local AI and retry.',
+  no_supporting_evidence: 'AXP found insufficient supporting evidence.',
+  no_supporting_evidence_in_scope: 'No evidence in Skill scope — AXP searched only the selected strict scope and found insufficient supporting evidence.',
+  generation_failed: 'The local model could not generate an answer.',
+  generation_cancelled: 'Local generation was cancelled.',
   project_required: 'This Skill needs a project context. Include the project name/code in the question.',
   project_not_found: 'AXP could not find that project in indexed paths.',
   project_ambiguous: 'Multiple indexed projects match that name. Include a distinguishing project code or parent name.',
@@ -32,6 +39,12 @@ const downloadErrors = {network_error: 'Download blocked or unavailable on this 
   insufficient_disk: 'There is not enough free disk space for this model.',
   download_cancelled: 'Download cancelled. The verified partial data can be resumed later.'};
 const activeDownloadStates = new Set(['queued', 'connecting', 'downloading', 'verifying', 'installing', 'probing']);
+
+function renderAskError(container, exception) {
+  const code=exception.code||'generation_failed';
+  container.append(element('p','inline-error',errors[code]||exception.message||'AXP could not complete this request.'),
+    element('small','muted',`Diagnostic: ${code}`));
+}
 
 function renderAnswerText(container, answer, turnId) {
   const matcher = /\[S(\d+)\]/g; let offset = 0;
@@ -141,8 +154,8 @@ export function initAsk() {
         else if (message.event === 'gate_complete') { liveLabel = message.answerable ? 'Evidence is sufficient…' : 'Evidence is insufficient…'; updateProgress(); }
         else if (message.event === 'final') { axp.querySelector('.working')?.remove(); renderResponse(axp, message.response, current); }
         else if (message.event === 'cancelled') { axp.querySelector('.working')?.remove(); axp.append(element('p','generation-cancelled','Generation cancelled.')); }
-        else if (message.event === 'error') throw Object.assign(new Error(errors[message.error] || 'AXP could not complete this request.'), {code: message.error}); },0,selectedSkill);
-    } catch (exception) { axp.querySelector('.working')?.remove(); axp.append(element('p', 'inline-error', errors[exception.code] || exception.message || 'AXP could not complete this request.')); }
+        else if (message.event === 'error') { const code=message.code||message.error; throw Object.assign(new Error(message.message||errors[code]||code), {code}); } },0,selectedSkill);
+    } catch (exception) { axp.querySelector('.working')?.remove(); renderAskError(axp,exception); }
     finally { clearInterval(timer); progress.replaceChildren();
       if (!axp.querySelector('.answer-text, .inline-error, .generation-cancelled')) axp.append(element('p', 'inline-error', 'AXP could not complete this request.'));
       busy = false; input.disabled = false; submit.disabled = !input.value.trim(); input.focus(); }

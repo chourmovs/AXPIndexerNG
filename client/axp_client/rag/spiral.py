@@ -10,6 +10,7 @@ from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig, _meaningful_terms, fold_search_text
 from axp_core.document_identity import analyze_document_identity
 from axp_core.identifiers import extract_identifiers
+from axp_core.path_keys import canonical_path_key, sql_path_prefix
 
 from .answerability import decide_answerability, is_supporting_evidence
 from .retrieval import (RagRetrievalResult, classify_query_evidence_intent,
@@ -33,6 +34,10 @@ class RetrievalScope:
     extensions: tuple[str, ...] = ()
     modified_after_ms: int | None = None
     modified_before_ms: int | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "path_prefixes", tuple(dict.fromkeys(
+            canonical_path_key(value).rstrip("\\/") for value in self.path_prefixes)))
 
 
 @dataclass(frozen=True)
@@ -102,7 +107,7 @@ def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope
     if scope.path_prefixes:
         clauses.append("(" + " OR ".join("lower(path_key) LIKE ? ESCAPE '\\'"
                                            for _ in scope.path_prefixes) + ")")
-        values.extend(_path_prefix(value) for value in scope.path_prefixes)
+        values.extend(sql_path_prefix(value) for value in scope.path_prefixes)
     rows = con.execute("SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,"
                        "s.label source_label,s.path source_path FROM documents d JOIN sources s ON s.id=d.source_id "
                        "WHERE " + " AND ".join(clauses), values).fetchall()
@@ -202,8 +207,3 @@ class SpiralRetriever:
             "global_fallback_used": global_used, "spiral_trace": tuple(trace),
             **{f"spiral_{row['stage']}_ms": row["elapsed_ms"] for row in trace}})
         return SpiralResult(result, decision, stage_name, tuple(trace), global_used, embedding_ms, query_vector)
-
-
-def _path_prefix(value):
-    normalized = str(value).replace("\\", "/").casefold().rstrip("/")
-    return normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"

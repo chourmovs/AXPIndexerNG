@@ -427,7 +427,8 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return send({"error": "invalid_skill_id"}, 400)
                 ai_startup = startup_state.snapshot()["local_ai"] if startup_state else {"state": "ready"}
                 if current_rag is None or ai_startup["state"] not in ("ready", "ready_with_warmup_warning"):
-                    return send({"error": "local_ai_initializing", "retryable": True,
+                    return send({"error": "model_loading", "code": "model_loading",
+                                 "message": "The local model is still loading.", "retryable": True,
                                  "phase": ai_startup["state"]}, 503)
                 if url.path == "/api/ask/stream":
                     self.send_response(200)
@@ -462,14 +463,17 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                         response = current_rag.ask(question, **ask_options)
                         progress({"event": "final", "response": response})
                     except ChatUnavailableError:
-                        progress({"event": "error", "error": _chat_failure_code(current_rag)})
+                        code = _chat_failure_code(current_rag)
+                        progress({"event": "error", "error": code, "code": code,
+                                  "message": "The local model is not ready.", "retryable": True})
                     except ChatBusyError:
                         progress({"event": "error", "error": "chat_busy"})
                     except GenerationCancelled:
                         # RagService emitted the terminal cancellation after the native iterator exited.
                         pass
                     except GenerationFailedError:
-                        progress({"event": "error", "error": "local_generation_failed"})
+                        progress({"event": "error", "error": "generation_failed", "code": "generation_failed",
+                                  "message": "The local model could not generate an answer.", "retryable": True})
                     except ModelLoadFailedError:
                         progress({"event": "error", "error": _chat_failure_code(current_rag, "model_load_failed")})
                     except ContextPreparationFailedError:
@@ -477,7 +481,11 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     except ValidationFailedError:
                         progress({"event": "error", "error": "validation_failed"})
                     except (SkillSelectionError, SkillScopeUnavailableError) as exc:
-                        details = {"event": "error", "error": exc.code}
+                        messages = {"skill_scope_unavailable": "The selected Skill search location is not available in the current index.",
+                                    "project_required": "The selected Skill requires a project context.",
+                                    "project_ambiguous": "Multiple indexed projects match this request."}
+                        details = {"event": "error", "error": exc.code, "code": exc.code,
+                                   "message": messages.get(exc.code, str(exc)), "retryable": False}
                         if getattr(exc, "candidates", None):
                             details["candidates"] = list(exc.candidates)
                         progress(details)
@@ -511,7 +519,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return send({"error": "chat_busy"}, 429)
                 except GenerationFailedError:
                     return send({"status": "generation_unavailable", "answerable": False,
-                                           "error": "local_generation_failed"}, 503)
+                                           "error": "generation_failed", "code": "generation_failed"}, 500)
                 except ModelLoadFailedError:
                     return send({"error": _chat_failure_code(current_rag, "model_load_failed")}, 503)
                 except ContextPreparationFailedError:
@@ -522,7 +530,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     details = {"error": exc.code}
                     if getattr(exc, "candidates", None):
                         details["candidates"] = list(exc.candidates)
-                    return send(details, 400)
+                    return send(details, 409 if isinstance(exc, SkillScopeUnavailableError) else 400)
             if url.path == "/api/shutdown":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
