@@ -191,8 +191,11 @@ class RagService:
         with self._reader() as (con, reader_reused):
             db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
             if skill_execution and skill_execution.skill and retrieval_plan is None:
-                skill_execution = self.skill_engine.compile(skill_execution, con, search_depth=search_depth)
+                skill_execution = self.skill_engine.compile(skill_execution, con, question=question,
+                                                             search_depth=search_depth)
                 skill = skill_execution.skill
+                if skill_execution.project_context:
+                    emit("project_resolved", project={"name": skill_execution.project_context.name})
                 LOGGER.info("RAG skill scope request_id=%s mode=%s paths=%s temporal_policy=%s", request_id,
                             skill.retrieval.mode, len(skill.retrieval.path_prefixes),
                             skill.retrieval.temporal_policy)
@@ -287,9 +290,12 @@ class RagService:
                                       skill_selection=skill_execution.selection,
                                       skill_scope_mode=skill_execution.skill.retrieval.mode,
                                       **skill_execution.diagnostics)
+            project_metadata = ({"name": skill_execution.project_context.name,
+                                 "resolution": skill_execution.project_context.resolution}
+                                if skill_execution and skill_execution.project_context else None)
             base = {"status": "insufficient_evidence", "answerable": False, "answer": None, "sources": [],
                     "related_documents": related, "decision": decision.public(),
-                    "context": spiral_context, "skill": skill_metadata}
+                    "context": spiral_context, "skill": skill_metadata, "project": project_metadata}
             if not decision.answerable:
                 base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
                                    "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,

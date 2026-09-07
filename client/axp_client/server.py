@@ -68,6 +68,14 @@ class DocumentNotFoundError(Exception):
     pass
 
 
+def _skills_response(engine):
+    skills = engine.list_skills()
+    return {"status": engine.store.status().to_dict(),
+            "skills": [{"id": skill.id, "name": skill.name, "description": skill.description,
+                        "enabled": skill.enabled, "schema_version": skill.schema_version}
+                       for skill in skills], "invalid": list(engine.invalid)}
+
+
 def resolve_document_access_path(db, document_id, *, directory=False):
     """Resolve a document action from its database identity, never browser input."""
     with connect(db, readonly=True) as con:
@@ -138,7 +146,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            if urlparse(self.path).path.startswith(("/api/ask", "/api/models")):
+            if urlparse(self.path).path.startswith(("/api/ask", "/api/models", "/api/skills")):
                 self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
@@ -204,11 +212,12 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return self.send_json({"error": "forbidden"}, 403)
                 engine = runtime.skill_engine if runtime else getattr(rag_service, "skill_engine", None)
                 if engine is None:
-                    return self.send_json({"skills": [], "invalid": []})
+                    return self.send_json({"status": {"path": "", "directory_exists": False,
+                        "readable": False, "valid_count": 0, "invalid_count": 0,
+                        "last_reload_ms": None, "reload_generation": 0, "error": "not_configured"},
+                        "skills": [], "invalid": []})
                 if url.path == "/api/skills":
-                    return self.send_json({"skills": [{"id": skill.id, "name": skill.name,
-                        "description": skill.description, "enabled": skill.enabled}
-                        for skill in engine.list_skills()], "invalid": list(engine.invalid)})
+                    return self.send_json(_skills_response(engine))
                 skill_id = url.path.removeprefix("/api/skills/")
                 skill = engine.get(skill_id)
                 return self.send_json(skill.to_dict() if skill else {"error": "skill_not_found"},
@@ -264,6 +273,21 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
             parts = url.path.strip("/").split("/")
             current_rag = runtime.rag_service if runtime else rag_service
             current_manager = runtime.model_manager if runtime else model_manager
+            if url.path in ("/api/skills/reload", "/api/skills/open-dir"):
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                engine = runtime.skill_engine if runtime else getattr(rag_service, "skill_engine", None)
+                if engine is None:
+                    return self.send_json({"error": "not_configured"}, 503)
+                if url.path.endswith("/reload"):
+                    engine.store.force_reload()
+                    return self.send_json(_skills_response(engine))
+                try:
+                    open_file(engine.store.path)
+                    return self.send_json({"status": "opened"})
+                except OSError:
+                    LOGGER.exception("Could not open Skills directory")
+                    return self.send_json({"error": "skills_directory_open_failed"}, 500)
             if url.path == "/api/models/device":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)
@@ -421,7 +445,10 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     except ValidationFailedError:
                         progress({"event": "error", "error": "validation_failed"})
                     except (SkillSelectionError, SkillScopeUnavailableError) as exc:
-                        progress({"event": "error", "error": exc.code})
+                        details = {"event": "error", "error": exc.code}
+                        if getattr(exc, "candidates", None):
+                            details["candidates"] = list(exc.candidates)
+                        progress(details)
                     except (BrokenPipeError, ConnectionResetError):
                         disconnected = True
                         LOGGER.info("Ask stream client disconnected")
@@ -460,7 +487,10 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                 except ValidationFailedError:
                     return send({"error": "validation_failed"}, 503)
                 except (SkillSelectionError, SkillScopeUnavailableError) as exc:
-                    return send({"error": exc.code}, 400)
+                    details = {"error": exc.code}
+                    if getattr(exc, "candidates", None):
+                        details["candidates"] = list(exc.candidates)
+                    return send(details, 400)
             if url.path == "/api/shutdown":
                 if not self.local_action_allowed():
                     return self.send_json({"error": "forbidden_origin"}, 403)

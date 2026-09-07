@@ -1,4 +1,4 @@
-import {askHealth, askStream, cancelAskGeneration, retryAskModel, listSkills, localModels, modelAction, setInferenceDevice,
+import {askHealth, askStream, cancelAskGeneration, retryAskModel, listSkills, reloadSkills, openSkillsDirectory, localModels, modelAction, setInferenceDevice,
   downloadIntelRuntime, cancelIntelRuntimeDownload, retryIntelProbe, removeIntelRuntime,
   startIntelBenchmark, cancelIntelBenchmark, startModelQualification, cancelModelQualification} from './api.js';
 import {createDocumentActions} from './documents.js';
@@ -12,6 +12,10 @@ const progressLabels = {retrieval_started: 'Searching indexed documents…', ret
   generation_skipped: 'Relevant evidence ready; local answer skipped.',
   generation_complete: 'Local generation complete.', validation_started: 'Validating citations…'};
 const errors = {chat_busy: 'AXP is already generating an answer. Please wait for the current question to finish.',
+  project_required: 'This Skill needs a project context. Include the project name/code in the question.',
+  project_not_found: 'AXP could not find that project in indexed paths.',
+  project_ambiguous: 'Multiple indexed projects match that name. Include a distinguishing project code or parent name.',
+  project_skill_scope_unavailable: 'The selected project does not contain this Skill scope in indexed content.',
   local_generation_failed: 'The local answer model could not complete this request.',
   chat_model_unavailable: 'Ask AXP requires a locally provisioned GGUF model. Document Search remains fully available.',
   backend_cpu_incompatible: 'This AXP build requires CPU instructions unavailable on this PC.',
@@ -49,6 +53,7 @@ function renderDocuments(turn, heading, rows, sourceCards = false) {
 }
 function renderResponse(article, response, turn) {
   if(response.skill) article.append(element('span','chip primary skill-badge',`● ${response.skill.name} · ${response.skill.selection.toUpperCase()}`));
+  if(response.project) article.append(element('span','chip neutral skill-badge',`● Project: ${response.project.name}`));
   const answer = element('div', 'answer-text');
   if (response.status === 'answered' && response.answerable) renderAnswerText(answer, response.answer, turn);
   else if (response.status === 'local_generation_skipped_latency_budget') answer.textContent = 'Local answer skipped because estimated generation latency exceeds the interactive budget. Relevant evidence is shown instead.';
@@ -85,7 +90,21 @@ export function initAsk() {
   const form = document.querySelector('#ask-form'), input = document.querySelector('#ask-input'), submit = document.querySelector('#ask-submit');
   const history = document.querySelector('#chat-history'), progress = document.querySelector('#ask-progress'), health = document.querySelector('#ask-health');
   const skillSelect = document.querySelector('#skill-select');
-  listSkills().then(result => { for(const skill of result.skills.filter(item=>item.enabled)) { const option=document.createElement('option'); option.value=skill.id; option.textContent=skill.name; skillSelect.append(option); } }).catch(()=>{/* General Ask remains available. */});
+  const skillStatus=document.querySelector('#skill-status'), diagnostics=document.querySelector('#skill-diagnostics'), diagnosticList=document.querySelector('#skill-diagnostic-list');
+  async function refreshSkills(force=false) { skillStatus.textContent='Loading Skills…'; skillStatus.classList.remove('warning');
+    try { const result=await (force ? reloadSkills() : listSkills()); const selected=skillSelect.value;
+      skillSelect.replaceChildren(new Option('Auto','auto'),new Option('General','none'));
+      const enabled=result.skills.filter(item=>item.enabled); for(const skill of enabled) skillSelect.append(new Option(skill.name,skill.id));
+      if([...skillSelect.options].some(item=>item.value===selected)) skillSelect.value=selected;
+      const disabled=result.skills.length-enabled.length, invalid=result.invalid.length;
+      skillStatus.textContent=invalid ? `⚠ ${result.skills.length} Skills loaded · ${invalid} invalid` : result.skills.length ? `${result.skills.length} Skills loaded` : 'No Skills configured';
+      skillStatus.classList.toggle('warning',Boolean(invalid)); diagnostics.hidden=!invalid && !disabled;
+      const rows=[...result.skills.map(skill=>element('p','',`${skill.enabled?'✓':'○'} ${skill.name} — ${skill.enabled?'Valid':'Valid, disabled'}`)), ...result.invalid.map(item=>element('p','inline-error',`❌ ${item.file} — ${item.detail}`))];
+      if(disabled) rows.unshift(element('p','muted',`${result.skills.length} valid · ${enabled.length} enabled · ${disabled} disabled · ${invalid} invalid`)); diagnosticList.replaceChildren(...rows);
+    } catch(error) { skillStatus.textContent='⚠ Skills could not be loaded'; skillStatus.classList.add('warning'); diagnostics.hidden=false; diagnosticList.replaceChildren(element('p','inline-error',error.message || 'Could not read the local Skill directory.')); } }
+  document.querySelector('#reload-skills').addEventListener('click',()=>refreshSkills(true));
+  document.querySelector('#open-skills').addEventListener('click',async()=>{ try{await openSkillsDirectory();}catch(error){skillStatus.textContent=`⚠ ${error.message}`;skillStatus.classList.add('warning');} });
+  refreshSkills();
   let checked = false, busy = false, turn = 0, timer = null, phaseStarted = 0, progressMode = 'pipeline', progressData = {};
   const formatElapsed = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} elapsed`;
   let liveLabel = '';
