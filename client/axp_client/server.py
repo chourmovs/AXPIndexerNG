@@ -26,6 +26,8 @@ from .rag.service import (
     ValidationFailedError,
 )
 from .reranker import Reranker
+from .rich_documents import RichDocumentService
+from axp_core.rich_document import RichDocumentError
 from .search import search
 from .skills import SkillEngine, SkillScopeUnavailableError, SkillSelectionError, SkillStore
 from .startup_state import ClientStartupState
@@ -89,9 +91,10 @@ def resolve_document_access_path(db, document_id, *, directory=False):
 
 
 def make_handler(db, embedder=None, open_file=open_with_default_application, rag_service=None, model_manager=None,
-                 search_readers=None, runtime=None, startup_state=None):
+                 search_readers=None, runtime=None, startup_state=None, rich_service=None):
     quality_reranker = None
     search_readers = search_readers or (None if runtime else SearchReaderPool(db))
+    rich_service = rich_service or (None if runtime else RichDocumentService(db))
 
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self):
@@ -238,6 +241,35 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     return self.send_json({"error": "forbidden"}, 403)
                 manager = runtime.model_manager if runtime else model_manager
                 return self.send_json(manager.qualification_status() if manager else {"state": "idle"})
+            if url.path.startswith("/api/document/") and (url.path.endswith("/rich") or "/rich/assets/" in url.path):
+                if not _is_loopback(self.client_address[0]):
+                    return self.send_json({"error": "forbidden"}, 403)
+                parts = url.path.strip("/").split("/")
+                try:
+                    doc_id = int(parts[2])
+                    service = runtime.rich_document_service if runtime else rich_service
+                    if len(parts) == 4 and parts[3] == "rich":
+                        return self.send_json(service.get_document(doc_id).to_manifest())
+                    if len(parts) == 6 and parts[3:5] == ["rich", "assets"]:
+                        asset, asset_path = service.get_asset(doc_id, parts[5])
+                        data = asset_path.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Type", asset.media_type)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "private, immutable")
+                        disposition = "inline" if asset.browser_renderable else "attachment"
+                        self.send_header("Content-Disposition", f'{disposition}; filename="{asset.filename}"')
+                        self.end_headers(); self.wfile.write(data); return
+                    return self.send_json({"error": "not found"}, 404)
+                except (ValueError, IndexError):
+                    return self.send_json({"error": "not found"}, 404)
+                except RichDocumentError as exc:
+                    status = 404 if exc.code in ("rich_document_not_found", "rich_asset_not_found") else 409
+                    if exc.code == "rich_asset_invalid": status = 400
+                    if exc.code == "rich_document_unavailable": status = 410
+                    return self.send_json({"error": exc.code}, status)
+                except OSError:
+                    return self.send_json({"error": "rich_document_unavailable"}, 410)
             if url.path.startswith("/api/document/"):
                 try:
                     doc_id = int(url.path.rsplit("/", 1)[1])
@@ -546,6 +578,7 @@ class ClientRuntime:
         self._lock = threading.Lock()
         self._search_ready = threading.Event()
         self._skill_engine = SkillEngine(SkillStore(data_dir() / "skills"))
+        self._rich_document_service = RichDocumentService(db)
         self._embedder = self._search_readers = self._rag_service = self._model_manager = None
 
     def _get(self, name):
@@ -562,6 +595,8 @@ class ClientRuntime:
     def model_manager(self): return self._get("model_manager")
     @property
     def skill_engine(self): return self._skill_engine
+    @property
+    def rich_document_service(self): return self._rich_document_service
 
     def start(self):
         threading.Thread(target=self._initialize_search, name="axp-client-search-init", daemon=True).start()
