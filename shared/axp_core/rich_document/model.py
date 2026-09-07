@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 RICH_DOCUMENT_SCHEMA_VERSION = 1
-DOCX_RICH_EXTRACTOR_VERSION = 1
+DOCX_RICH_EXTRACTOR_VERSION = 2
 
 
 def _freeze(value):

@@ -297,6 +297,10 @@ class RagService:
                     "related_documents": related, "decision": decision.public(),
                     "context": spiral_context, "skill": skill_metadata, "project": project_metadata}
             if not decision.answerable:
+                base["error"] = ("no_supporting_evidence_in_scope"
+                                 if skill_execution and skill_execution.skill and
+                                 skill_execution.skill.retrieval.mode == "strict"
+                                 else "no_supporting_evidence")
                 base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
                                    "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
                                    "total_ms": (time.perf_counter() - started) * 1000}

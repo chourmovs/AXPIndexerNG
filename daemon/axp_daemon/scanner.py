@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from axp_core.path_keys import canonical_path_key
+
 SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".docx", ".pptx", ".xlsx", ".csv"}
 DRIVE_IGNORES = {"$recycle.bin", "system volume information"}
 TEMPORARY_PREFIXES = ("~$", ".~lock.")
@@ -60,7 +62,7 @@ class Discovery:
 
 
 def path_key(path):
-    return os.path.normcase(os.path.abspath(os.fspath(path))).casefold()
+    return canonical_path_key(path)
 
 
 def discover(root, recursive=True, *, include_ignored=False):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.table import Table
+from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
 from .model import RICH_DOCUMENT_SCHEMA_VERSION, RichAsset, RichDocument
@@ -17,7 +17,9 @@ MEDIA = {"png": ("image/png", True), "jpg": ("image/jpeg", True), "jpeg": ("imag
          "gif": ("image/gif", True), "bmp": ("image/bmp", True), "webp": ("image/webp", True),
          "tif": ("image/tiff", False), "tiff": ("image/tiff", False), "svg": ("image/svg+xml", True),
          "emf": ("image/x-emf", False), "wmf": ("image/x-wmf", False)}
-UNSUPPORTED_TAGS = {"chart", "diagram", "oleObject", "object", "txbxContent", "control"}
+UNSUPPORTED_TYPES = {"chart": "chart", "diagram": "drawing", "oleObject": "ole",
+                     "object": "ole", "txbxContent": "text_box", "control": "control",
+                     "oMath": "equation", "oMathPara": "equation"}
 
 
 class _Extractor:
@@ -25,6 +27,17 @@ class _Extractor:
         self.document, self.document_id, self.filename, self.source_sha = document, document_id, filename, source_sha
         self.assets, self.blobs, self.blocks = {}, {}, []
         self.text_chars = self.table_cells = self.unsupported = self.external = 0
+        self.unsupported_by_type = {}
+        self._unsupported_nodes = set()
+
+    def unsupported_block(self, node, object_type=None):
+        if node in self._unsupported_nodes:
+            return None
+        self._unsupported_nodes.add(node)
+        kind = object_type or UNSUPPORTED_TYPES.get(node.tag.rsplit("}", 1)[-1], "unknown")
+        self.unsupported += 1
+        self.unsupported_by_type[kind] = self.unsupported_by_type.get(kind, 0) + 1
+        return {"type": "unsupported", "object_type": kind}
 
     def limit(self):
         if len(self.blocks) > MAX_BLOCKS or self.text_chars > MAX_TEXT_CHARACTERS or self.table_cells > MAX_TABLE_CELLS:
@@ -96,6 +109,18 @@ class _Extractor:
                 elif node.tag == qn("a:blip"):
                     item = self.image(node, node)
                     if item: content.append(item)
+                else:
+                    local = node.tag.rsplit("}", 1)[-1]
+                    if local in UNSUPPORTED_TYPES:
+                        item = self.unsupported_block(node)
+                        if item: content.append(item)
+            # A DrawingML container with neither an image nor a more specific
+            # supported/unsupported child must not disappear silently.
+            if child.tag == qn("w:r"):
+                for drawing in child.xpath(".//*[local-name()='drawing']"):
+                    if not drawing.xpath(".//*[local-name()='blip' or local-name()='chart' or local-name()='diagram']"):
+                        item = self.unsupported_block(drawing, "drawing")
+                        if item: content.append(item)
         return content
 
     def paragraph(self, element, parent, depth=0):
@@ -125,14 +150,19 @@ class _Extractor:
         if depth > MAX_NESTING_DEPTH: raise RichDocumentError("rich_document_too_complex")
         table = Table(element, parent)
         rows = []
-        for row in table.rows:
+        for row in table._tbl.tr_lst:
             cells = []
-            for cell in row.cells:
+            # tc_lst contains physical XML cells.  ``row.cells`` expands grid
+            # spans and vertical merges into repeated logical proxies.
+            for tc in row.tc_lst:
+                cell = _Cell(tc, table)
                 self.table_cells += 1
-                tc_pr = cell._tc.tcPr
+                tc_pr = tc.tcPr
                 span = tc_pr.gridSpan.val if tc_pr is not None and tc_pr.gridSpan is not None else 1
-                merge = tc_pr.vMerge.val if tc_pr is not None and tc_pr.vMerge is not None else None
-                blocks = self.walk(cell._tc, cell, depth + 1)
+                merge_element = tc_pr.vMerge if tc_pr is not None else None
+                merge = ("continue" if merge_element is not None and merge_element.val in (None, "continue")
+                         else "restart" if merge_element is not None and merge_element.val == "restart" else "none")
+                blocks = self.walk(tc, cell, depth + 1)
                 cells.append({"blocks": blocks, "grid_span": int(span), "v_merge": merge})
             rows.append({"cells": cells})
         style = table.style.name if table.style is not None else None
@@ -148,14 +178,21 @@ class _Extractor:
     def run(self):
         self.blocks = self.walk(self.document.element.body, self.document)
         xml = self.document.element.body
-        self.unsupported += sum(1 for node in xml.iter() if node.tag.rsplit("}", 1)[-1] in UNSUPPORTED_TAGS)
+        # Count objects outside paragraphs too, without double counting located placeholders.
+        for node in xml.iter():
+            if node.tag.rsplit("}", 1)[-1] in UNSUPPORTED_TYPES:
+                self.unsupported_block(node)
         self.limit()
         counts = {"paragraphs": sum(x["type"] == "paragraph" for x in self.blocks),
                   "tables": sum(x["type"] == "table" for x in self.blocks),
                   "images": len(self.assets), "image_references": self._image_references(self.blocks),
-                  "unsupported_objects": self.unsupported, "external_relationships": self.external,
+                  "unsupported_objects": self.unsupported,
+                  "unsupported_by_type": dict(sorted(self.unsupported_by_type.items())),
+                  "external_relationships": self.external, "truncation": False,
+                  "parser_warning_count": 0, "duplicates_suppressed": 0,
                   "block_count": len(self.blocks)}
-        fidelity = "partial" if self.unsupported or self.external else "full"
+        fidelity = "full" if (not self.unsupported and not counts["truncation"]
+                              and counts["parser_warning_count"] == 0) else "partial"
         return RichDocument(RICH_DOCUMENT_SCHEMA_VERSION, self.document_id, self.filename, self.source_sha,
                             tuple(self.blocks), tuple(self.assets.values()), fidelity, counts), self.blobs
 

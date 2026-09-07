@@ -149,9 +149,10 @@ class RichDocumentService:
                      "rich_document_extract_ms": round(extract_ms, 3),
                      "rich_document_cache_write_ms": round(write_ms, 3)}
         rich = replace(rich, diagnostics={**dict(rich.diagnostics), **telemetry})
-        LOGGER.info("Rich document request document_id=%s extension=.docx cache_hit=%s blocks=%s tables=%s images=%s unsupported=%s elapsed_ms=%.1f",
-                    rich.document_id, rich.diagnostics.get("cache_hit"), len(rich.blocks), rich.diagnostics.get("tables"),
-                    rich.diagnostics.get("images"), rich.diagnostics.get("unsupported_objects"), elapsed)
+        LOGGER.info("Rich document request document_id=%s extension=.docx cache_hit=%s fidelity=%s blocks=%s tables=%s images=%s unsupported=%s duplicates_suppressed=%s elapsed_ms=%.1f",
+                    rich.document_id, rich.diagnostics.get("cache_hit"), rich.fidelity, len(rich.blocks),
+                    rich.diagnostics.get("tables"), rich.diagnostics.get("images"), rich.diagnostics.get("unsupported_objects"),
+                    rich.diagnostics.get("duplicates_suppressed", 0), elapsed)
         return rich
 
     def get_asset(self, document_id, asset_id):
