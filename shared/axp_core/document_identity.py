@@ -57,7 +57,20 @@ def _ordered_terms(value, *, meaningful=True):
 
 
 def _meaningful_terms(value):
-    return set(_ordered_terms(value))
+    """Return the historical search term set used by passage/query logic.
+
+    Short components are useful when comparing an explicit compound filename as
+    an ordered phrase (for example ``PROJECT-X``), but must not leak into the
+    general query-term API.  In particular, the ``n`` in ``n-Heptane`` is not a
+    standalone factual search term.
+    """
+    terms = set()
+    for match in TOKEN_RE.finditer(str(value or "")):
+        token = fold_search_text(match.group(0))
+        variants = (token, *re.split(r"[-._/\\]+", token))
+        terms.update(_canonical_term(part) for part in variants
+                     if len(part) >= 3 and _canonical_term(part) not in QUERY_STOPWORDS)
+    return terms
 
 
 def _is_phrase(query_terms, metadata_terms):

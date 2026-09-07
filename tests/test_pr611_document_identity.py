@@ -1,4 +1,4 @@
-from axp_core.document_identity import analyze_document_identity
+from axp_core.document_identity import _meaningful_terms, analyze_document_identity
 
 
 def test_filename_stem_is_an_explicit_phrase_inside_query():
@@ -22,3 +22,7 @@ def test_identity_uses_boundaries_titles_and_ignores_extensions():
 
 def test_generic_single_word_filename_is_not_authoritative():
     assert not analyze_document_identity("show report", filename="Report.docx").filename_identity_match
+
+
+def test_short_compound_components_do_not_leak_into_general_query_terms():
+    assert _meaningful_terms("density of n-Heptane") == {"density", "n-heptane", "heptane"}
