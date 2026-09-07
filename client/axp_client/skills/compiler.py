@@ -10,6 +10,10 @@ class SkillScopeUnavailableError(ValueError):
     code = "skill_scope_unavailable"
 
 
+class ProjectSkillScopeUnavailableError(SkillScopeUnavailableError):
+    code = "project_skill_scope_unavailable"
+
+
 def compile_response_instruction(skill):
     if not skill.answer_guidance and not skill.answer_sections:
         return None
@@ -36,15 +40,34 @@ def _resolved_paths(con, paths):
     return tuple(resolved), tuple(unresolved)
 
 
-def compile_retrieval_plan(skill, con, *, search_depth=0, now_ms=None):
+def compile_retrieval_plan(skill, con, *, search_depth=0, now_ms=None, project_context=None):
     retrieval = skill.retrieval
-    has_territory = bool(retrieval.path_prefixes or retrieval.extensions)
+    project_root = None
+    relative_diagnostics = {}
+    if retrieval.scope_kind == "project_relative":
+        if project_context is None:
+            raise ProjectSkillScopeUnavailableError("project context is required")
+        project_root = project_context.root_path
+        requested = tuple(str(__import__("pathlib").PureWindowsPath(project_root, relative))
+                          for relative in retrieval.relative_paths)
+        resolved, missing = _resolved_paths(con, requested)
+        relative_diagnostics = {"resolved_relative_paths": tuple(
+            relative for relative, absolute in zip(retrieval.relative_paths, requested) if absolute in resolved),
+            "missing_relative_paths": tuple(
+                relative for relative, absolute in zip(retrieval.relative_paths, requested) if absolute in missing),
+            "relative_scope_count": len(resolved)}
+        if not resolved and retrieval.mode == "strict":
+            raise ProjectSkillScopeUnavailableError("project Skill scope is unavailable in indexed content")
+        paths = resolved
+    else:
+        paths = retrieval.path_prefixes
+    has_territory = bool(paths or retrieval.extensions)
     if not has_territory:
         return default_spiral_plan(search_depth=search_depth, now_ms=now_ms), {"resolved": 0, "unresolved": 0}
-    resolved, unresolved = _resolved_paths(con, retrieval.path_prefixes)
+    resolved, unresolved = _resolved_paths(con, paths)
     # Extension-only territory is resolvable without pretending it is a filesystem location.
     available = bool(resolved or (not retrieval.path_prefixes and retrieval.extensions))
-    diagnostics = {"resolved": len(resolved), "unresolved": len(unresolved),
+    diagnostics = {"resolved": len(resolved), "unresolved": len(unresolved), **relative_diagnostics,
                    "skill_scope_unresolved": not available}
     if not available:
         if retrieval.mode == "strict":
@@ -68,6 +91,10 @@ def compile_retrieval_plan(skill, con, *, search_depth=0, now_ms=None):
         stages.append(SpiralStage("skill_scope", "scoped_lexical", scope, retrieval.max_documents,
                                   allow_early_stop=True))
     if retrieval.mode == "prefer":
+        if project_root:
+            stages.append(SpiralStage("project_root", "scoped_lexical",
+                                      RetrievalScope(path_prefixes=(project_root,), extensions=retrieval.extensions),
+                                      retrieval.max_documents, allow_early_stop=True))
         stages.append(SpiralStage("global", "global_hybrid", max_documents=retrieval.max_documents,
                                   allow_early_stop=False))
     return SpiralPlan(tuple(stages), allow_global_fallback=retrieval.mode == "prefer"), diagnostics

@@ -6,12 +6,19 @@ from dataclasses import dataclass, field
 from .compiler import compile_response_instruction, compile_retrieval_plan
 from .matching import match_skill
 from .store import SkillStore
+from axp_client.projects import ProjectResolver
 
 
 class SkillSelectionError(ValueError):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+
+
+class ProjectResolutionError(SkillSelectionError):
+    def __init__(self, code, candidates=()):
+        super().__init__(code)
+        self.candidates = candidates
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,7 @@ class SkillExecution:
     business_context: str | None = None
     response_instruction: str | None = None
     diagnostics: dict = field(default_factory=dict)
+    project_context: object | None = None
 
 
 class SkillEngine:
@@ -59,10 +67,20 @@ class SkillEngine:
                               response_instruction=compile_response_instruction(skill),
                               diagnostics=diagnostics or {"match": "matched"})
 
-    def compile(self, execution, con, *, search_depth=0):
+    def compile(self, execution, con, *, question="", search_depth=0):
         if execution.skill is None:
             return execution
-        plan, diagnostics = compile_retrieval_plan(execution.skill, con, search_depth=search_depth)
+        project = execution.project_context
+        if execution.skill.retrieval.scope_kind == "project_relative":
+            resolution = ProjectResolver().resolve(con, question,
+                relative_paths=execution.skill.retrieval.relative_paths, skill_match=execution.skill.match)
+            if resolution.error:
+                raise ProjectResolutionError(resolution.error, resolution.candidates)
+            project = resolution.context
+        plan, diagnostics = compile_retrieval_plan(execution.skill, con, search_depth=search_depth,
+                                                   project_context=project)
         return SkillExecution(execution.skill, execution.selection, execution.match_reason, plan,
                               execution.business_context, execution.response_instruction,
-                              {**execution.diagnostics, **diagnostics})
+                              {**execution.diagnostics, **diagnostics,
+                               "project_resolution": project.resolution if project else None,
+                               "project_name": project.name if project else None}, project)

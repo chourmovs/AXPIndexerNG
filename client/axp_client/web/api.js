@@ -15,6 +15,8 @@ export const getBuildInfo = () => jsonRequest('/api/version', {cache: 'no-store'
 export const getStartup = () => jsonRequest('/api/startup', {cache: 'no-store'});
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});
 export const listSkills = () => jsonRequest('/api/skills', {cache: 'no-store'});
+export const reloadSkills = () => jsonRequest('/api/skills/reload', {method:'POST'});
+export const openSkillsDirectory = () => jsonRequest('/api/skills/open-dir', {method:'POST'});
 export const downloadIntelRuntime = () => jsonRequest('/api/models/accelerator/download', {method:'POST'});
 export const cancelIntelRuntimeDownload = () => jsonRequest('/api/models/accelerator/cancel', {method:'POST'});
 export const retryIntelProbe = () => jsonRequest('/api/models/accelerator/probe', {method:'POST'});

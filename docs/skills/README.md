@@ -18,3 +18,9 @@ global fallback. Mode `strict` never searches globally and fails when none of it
 
 Schema v1 accepts only `.extension` values, `recent_first` or `all_history` temporal policy, 16–48 maximum documents,
 and the `strict` evidence policy. Unsupported schema versions and unknown fields are rejected rather than guessed.
+
+## Project-relative example (schema v2)
+
+`sequence-v2.example.json` is a generic, trans-project routing example that may be copied into the local Skills directory for field testing. It is intentionally not an active built-in Skill.
+
+**PR61 validates project-relative routing only. Rich DOCX/images/verbatim rendering arrives in PR62/PR63.**
