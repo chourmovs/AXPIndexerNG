@@ -1,21 +1,16 @@
 import time
-import re
-import unicodedata
 from dataclasses import dataclass
-from pathlib import Path
 
-from .fts import TOKEN_RE
+from .document_identity import (_meaningful_terms, analyze_document_identity,
+                                fold_search_text as _fold_search_text, identity_diagnostics)
 from .fts import search as lexical_search
 from .identifiers import extract_identifiers, normalize_identifier
 from .vectors import search as vector_search
 
-QUERY_STOPWORDS = {
-    "avec", "dans", "des", "est", "les", "par", "pour", "que", "quel", "quelle", "quels",
-    "quelles", "qui", "sont", "sur", "trouve", "donne", "une", "un", "de", "du", "la", "le",
-    "and", "for", "from", "the", "this", "with", "what", "which", "where", "is", "are", "of",
-    "a", "an", "in", "at", "give", "find",
-}
 
+def fold_search_text(value):
+    """Backward-compatible export of the shared search normalization."""
+    return _fold_search_text(value)
 
 @dataclass(frozen=True)
 class SearchConfig:
@@ -54,22 +49,6 @@ def diversify(rows, limit, maximum=3):
     return result
 
 
-def fold_search_text(value):
-    """Fold human-language search text without changing stored/displayed text."""
-    decomposed = unicodedata.normalize("NFKD", str(value or ""))
-    return "".join(character for character in decomposed
-                   if not unicodedata.combining(character)).casefold()
-
-
-def _meaningful_terms(value):
-    terms = set()
-    for match in TOKEN_RE.finditer(value or ""):
-        token = fold_search_text(match.group(0))
-        variants = (token, *re.split(r"[-._/]", token))
-        terms.update(part for part in variants if len(part) >= 3 and part not in QUERY_STOPWORDS)
-    return terms
-
-
 def _coverage(query_terms, value):
     return len(query_terms & _meaningful_terms(value)) / len(query_terms) if query_terms else 0.0
 
@@ -102,7 +81,6 @@ def _relevance(item, query_terms, config):
     if accepted:
         passage_score += 0.10 * item["exact_identifier_match"] + 0.08 * item["exact_phrase_match"]
         score += 0.10 * item["exact_identifier_match"] + 0.08 * item["exact_phrase_match"]
-        score += 0.05 * item["exact_filename_match"]
     item["vector_similarity"] = similarity
     item["lexical_coverage"] = float(coverage)
     item["content_lexical_coverage"] = float(content_coverage)
@@ -144,9 +122,11 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
     quoted = [part for i, part in enumerate(query.split('"')) if i % 2 and part.strip()]
     for item in merged.values():
         item_ids = {normalize_identifier(x) for x in item.get("identifiers", "").split()}
-        stem = Path(item.get("filename") or item["path"]).stem.casefold()
+        identity = analyze_document_identity(query, filename=item.get("filename") or item.get("path"),
+            title=item.get("title"), source_label=item.get("source_label"), source_path=item.get("source_path"))
         item["exact_identifier_match"] = bool(query_ids & item_ids)
-        item["exact_filename_match"] = bool(query.strip() and query.strip().casefold() == stem)
+        item["exact_filename_match"] = identity.filename_identity_match
+        item.update(identity_diagnostics(identity))
         item["exact_phrase_match"] = any(x.casefold() in item["snippet"].casefold() for x in quoted)
         item["exact_priority"] = sum(
             (item["exact_identifier_match"], item["exact_filename_match"], item["exact_phrase_match"])

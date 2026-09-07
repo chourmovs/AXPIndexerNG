@@ -36,7 +36,7 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     intent = classify_query_evidence_intent(query)
     classify_passages(result["results"], intent)
     ranking_started = time.perf_counter()
-    ranked_documents = rank_documents(result["results"], intent=intent)
+    ranked_documents = rank_documents(result["results"], intent=intent, query=query)
     document_ranking_ms = (time.perf_counter() - ranking_started) * 1000
     documents = ranked_documents[:2]
     drilldown = retrieve_document_passages(con, embedder, query,
@@ -61,7 +61,9 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
             continue
         representative.update({key: document[key] for key in (
             "document_score", "document_query_coverage", "document_metadata_coverage",
-            "complete_query_match",
+            "complete_query_match", "filename_identity_match", "title_identity_match",
+            "metadata_identity_coverage", "collection_coverage", "identity_terms",
+            "collection_terms", "document_identity_priority",
         )})
         representatives.append(representative)
     result["results"] = representatives[:limit]
@@ -72,6 +74,12 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     result["query_intent"] = intent.kind
     result["identity_terms"] = sorted(intent.identity_terms)
     result["target_terms"] = sorted(intent.target_terms)
+    for document in ranked_documents[:min(5, len(ranked_documents))]:
+        LOGGER.info("Search document rank document_id=%s filename=%s filename_identity=%s "
+                    "title_identity=%s identity_coverage=%.2f collection_coverage=%.2f document_score=%.3f",
+                    document["document_id"], document["filename"], document["filename_identity_match"],
+                    document["title_identity_match"], document["metadata_identity_coverage"],
+                    document["collection_coverage"], document["document_score"])
     if intent.kind == "scalar_fact":
         LOGGER.info("Search evidence query_intent=%s identity_terms=%s target_terms=%s "
                     "raw_candidates=%s direct_answer=%s strong_support=%s topical_only=%s displayed=%s",

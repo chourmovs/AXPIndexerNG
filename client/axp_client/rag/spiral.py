@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig, _meaningful_terms, fold_search_text
+from axp_core.document_identity import analyze_document_identity
 from axp_core.identifiers import extract_identifiers
 
 from .answerability import decide_answerability, is_supporting_evidence
@@ -103,24 +103,25 @@ def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope
         clauses.append("(" + " OR ".join("lower(path_key) LIKE ? ESCAPE '\\'"
                                            for _ in scope.path_prefixes) + ")")
         values.extend(_path_prefix(value) for value in scope.path_prefixes)
-    rows = con.execute("SELECT id,title,filename,path,path_key,modified_unix_ms FROM documents WHERE " +
-                       " AND ".join(clauses), values).fetchall()
+    rows = con.execute("SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,"
+                       "s.label source_label,s.path source_path FROM documents d JOIN sources s ON s.id=d.source_id "
+                       "WHERE " + " AND ".join(clauses), values).fetchall()
     ranked = []
     for row in rows:
         item = dict(row)
         metadata = " ".join(str(item.get(key) or "") for key in ("title", "filename", "path", "path_key"))
         folded = fold_search_text(metadata)
         metadata_terms = _meaningful_terms(metadata)
-        stem = re.sub(r"\.[^.]+$", "", item.get("filename") or "")
-        normalized_stem = fold_search_text(stem)
         id_exact = any(value.casefold() in folded for value in identifiers)
-        exact_stem = bool(normalized_stem and normalized_stem == fold_search_text(question))
+        identity = analyze_document_identity(question, filename=item.get("filename"), title=item.get("title"),
+            source_label=item.get("source_label"), source_path=item.get("source_path"))
         covered = terms & metadata_terms
         complete = bool(terms and covered == terms)
-        if not (id_exact or exact_stem or covered):
+        if not (id_exact or any(identity.priority) or covered):
             continue
-        key = (-int(id_exact), -int(exact_stem), -int(complete), -len(covered),
-               -int(item.get("modified_unix_ms") or 0), int(item["id"]))
+        key = (-int(id_exact), *(-value for value in identity.priority),
+               -identity.collection_coverage, -identity.metadata_identity_coverage,
+               -int(complete), -len(covered), int(item["id"]))
         ranked.append((key, int(item["id"])))
     return [document_id for _, document_id in sorted(ranked)[:max(0, min(limit, SCOPED_VECTOR_MAX_DOCUMENTS))]]
 
@@ -172,7 +173,7 @@ class SpiralRetriever:
                 content = drill.passages
                 result = RagRetrievalResult(content, content, [],
                     {"retrieval_ms": (time.perf_counter() - stage_started) * 1000},
-                    rank_documents(content, intent=intent))
+                    rank_documents(content, intent=intent, query=question))
                 global_used = False
             decision = decide_answerability(result.content_evidence)
             supporting = any(is_supporting_evidence(row) for row in result.content_evidence)
