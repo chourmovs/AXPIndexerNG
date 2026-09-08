@@ -17,6 +17,7 @@ if "--scheduled-task" not in sys.argv:
     raise SystemExit("This launcher is reserved for Windows Task Scheduler")
 arguments = ["run", "--db", settings["db_path"], "--model-cache", settings["model_cache"],
              "--embedding-profile", settings["embedding_profile"], "--scan-interval", str(settings["scan_interval_s"]),
+             "--embedding-device", settings["embedding_device"],
              "--embedding-batch-size", str(settings["embedding_batch_size"]), "--model-download-retry",
              str(settings["model_download_retry_s"]), "--launch-mode", "scheduled_task"]
 if settings.get("download_missing_models", True):

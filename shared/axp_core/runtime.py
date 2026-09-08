@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
     "chat_active_model_id": None,
     "chat_inference_device": "auto",
     "embedding_profile": "balanced",
+    "embedding_device": "auto",
     "embedding_batch_size": 64,
     "download_missing_models": True,
     "model_download_retry_s": 60,
@@ -138,6 +139,7 @@ def _normalize_settings(current):
         "auto_restart_daemon": lambda value: value if type(value) is bool else None,
         "daemon_runtime_mode": lambda value: value if value in ("interactive", "scheduled_task") else None,
         "chat_inference_device": lambda value: value if value in ("auto", "cpu", "intel_gpu") else None,
+        "embedding_device": lambda value: value if value in ("auto", "cpu", "intel_gpu") else None,
         "background_drive_mappings": lambda value: value if isinstance(value, dict) and all(
             isinstance(key, str) and isinstance(item, str) for key, item in value.items()) else None,
         **{key: (lambda value: value if isinstance(value, (str, os.PathLike)) and str(value).strip() else None)

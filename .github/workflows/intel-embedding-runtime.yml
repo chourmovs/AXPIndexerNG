@@ -1,0 +1,68 @@
+name: Intel embedding accelerator pack
+on:
+  workflow_dispatch:
+    inputs:
+      source_revision:
+        description: Immutable Hugging Face commit for paraphrase-multilingual-MiniLM-L12-v2
+        required: true
+      version:
+        description: Accelerator asset version
+        required: true
+        default: dev
+permissions: { contents: read }
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Export exact FP32 model and assemble optional runtime
+        shell: pwsh
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python -m pip install -r requirements-intel-embedding.txt optimum-intel[openvino]==1.24.0
+          optimum-cli export openvino --model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 `
+            --revision $env:SOURCE_REVISION --task feature-extraction --weight-format fp32 pack/model
+          python -m pip install --target pack/python -r requirements-intel-embedding.txt
+          @'
+          import hashlib, importlib.metadata, json, os
+          from pathlib import Path
+          root = Path("pack")
+          files = {}
+          for path in sorted((root / "model").rglob("*")):
+              if path.is_file():
+                  files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+          manifest = {
+              "runtime_schema": 1, "backend": "openvino_genai",
+              "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+              "embedding_dimension": 384, "distance_metric": "cosine",
+              "source_revision": os.environ["SOURCE_REVISION"], "pooling": "MEAN", "normalize": True,
+              "maximum_sequence_length": 512, "query_prefix": "", "document_prefix": "",
+              "model_path": "model", "files": files,
+              "export_tools": {name: importlib.metadata.version(name) for name in
+                               ("openvino", "openvino-genai", "optimum-intel")},
+          }
+          (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+          '@ | python -
+      - name: Smoke optional pack on hosted CPU
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH=(Resolve-Path pack/python).Path
+          @'
+          import openvino, openvino_genai
+          pipeline = openvino_genai.TextEmbeddingPipeline("pack/model", "CPU", {})
+          vector = list(pipeline.embed_documents(["portable accelerator smoke"])[0])
+          assert len(vector) == 384
+          '@ | python -
+      - name: Archive with independent SHA256
+        shell: pwsh
+        run: |
+          $name='AXPIndexerNG-intel-embedding-runtime-${{ inputs.version }}.zip'
+          Compress-Archive pack/* $name
+          (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()+"  $name" | Set-Content "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: intel-embedding-runtime
+          path: AXPIndexerNG-intel-embedding-runtime-*

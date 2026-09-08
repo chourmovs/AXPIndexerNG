@@ -195,7 +195,8 @@ def start_daemon(settings):
         return backend.run()
     arguments = ["run", "--db", settings["db_path"], "--model-cache", settings["model_cache"],
                  "--embedding-profile", settings["embedding_profile"], "--scan-interval",
-                 settings["scan_interval_s"], "--embedding-batch-size", settings["embedding_batch_size"],
+                 settings["scan_interval_s"], "--embedding-device", settings["embedding_device"],
+                 "--embedding-batch-size", settings["embedding_batch_size"],
                  "--model-download-retry", settings["model_download_retry_s"], "--launch-mode", "interactive"]
     if settings.get("download_missing_models", True):
         arguments.append("--allow-download")

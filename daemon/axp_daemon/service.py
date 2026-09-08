@@ -12,6 +12,7 @@ from axp_core.runtime import atomic_write_json, configure_logging, read_json, ru
 from axp_core.sources import get_source, list_sources, remove_source
 
 from .embeddings import Embedder
+from .embedding_backends import create_indexing_embedder
 from .indexer import scan_source
 from .scanner import discover
 
@@ -265,7 +266,8 @@ def _provision_embedder(profile, model_cache, allow_download, retry_s, publisher
 
 
 def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300, embedding_batch_size=64,
-               allow_model_download=False, model_download_retry_s=60, launch_mode="interactive"):
+               allow_model_download=False, model_download_retry_s=60, launch_mode="interactive",
+               embedding_device="auto"):
     paths = runtime_paths()
     LOGGER.info("Startup context component=daemon pid=%s launch_mode=%s db_path=%s embedding_profile=%s "
                 "embedding_batch_size=%s scan_interval=%s", os.getpid(), launch_mode, db, embedding_profile,
@@ -283,9 +285,17 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                                       model_download_retry_s, publisher, control)
         if embedder is None:
             return {"status": "stopped"}
+        embedder = create_indexing_embedder(embedding_profile, device=embedding_device, cache_dir=model_cache,
+                                             batch_size=embedding_batch_size, local_only=True)
         con = connect(db, dimension=embedder.dimension)
         ensure_index_signature(con, embedder.model_id, embedder.dimension, embedder.distance_metric)
-        publisher.update(state="idle", **_catalog_totals(con))
+        publisher.update(state="idle", embedding_model=embedder.model_id, embedding_dimension=embedder.dimension,
+                         embedding_device_requested=embedding_device,
+                         embedding_device_effective=embedder.effective_device, embedding_backend=embedder.backend,
+                         embedding_batch_size=embedding_batch_size,
+                         intel_gpu_qualified=embedder.intel_gpu_qualified,
+                         intel_gpu_device_name=embedder.intel_gpu_device_name,
+                         embedding_fallback_reason=embedder.fallback_reason, **_catalog_totals(con))
         first_cycle = True
         while not control.stop:
             control.poll()
@@ -322,6 +332,15 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
                     try:
                         result = scan_source(con, source["id"], embedder,
                                              embedding_batch_size=embedding_batch_size, control=control)
+                        publisher.update(
+                            embedding_device_effective=result["embedding_device_effective"],
+                            embedding_backend=result["embedding_backend"],
+                            embedding_chunks_per_second=result["embedding_throughput_chunks_s"],
+                            embedding_total_ms=result["embedding_ms"],
+                            intel_gpu_qualified=result["intel_gpu_qualified"],
+                            intel_gpu_device_name=result["intel_gpu_device_name"],
+                            embedding_fallback_reason=result["embedding_fallback_reason"],
+                        )
                         LOGGER.info(
                             "Source scan completed: %s status=%s seen=%s content=%s metadata=%s ignored=%s failed=%s chunks=%s",
                             source["path"], result["status"], result["files_seen"], result["files_content"],
