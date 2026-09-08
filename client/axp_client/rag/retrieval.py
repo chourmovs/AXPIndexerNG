@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 import re
+import logging
 from dataclasses import dataclass
 
 from axp_core.fts import search_documents as lexical_search_documents
@@ -11,6 +12,9 @@ from axp_core.hybrid import SearchConfig, _meaningful_terms, _relevance, fold_se
 from axp_core.document_identity import analyze_document_identity, identity_diagnostics
 from axp_core.identifiers import extract_identifiers
 from axp_core.vectors import search_documents as vector_search_documents
+
+LOGGER = logging.getLogger("axp_client")
+RAG_DRILLDOWN_MAX_DOCUMENTS = 3
 
 SCALAR_TARGETS = ("density", "relative density", "boiling point", "flash point", "molecular weight",
                   "molar mass", "viscosity", "melting point", "ph", "concentration", "assay", "titre")
@@ -157,7 +161,11 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
                                 search_depth=0, config=None, intent=None):
     """Rank all existing chunks in a small selected-document working set."""
     started = time.perf_counter()
-    ids = list(dict.fromkeys(int(value) for value in document_ids))
+    requested_ids = list(dict.fromkeys(int(value) for value in document_ids))
+    if len(requested_ids) > RAG_DRILLDOWN_MAX_DOCUMENTS:
+        LOGGER.error("RAG drilldown document limit exceeded requested=%s maximum=%s",
+                     len(requested_ids), RAG_DRILLDOWN_MAX_DOCUMENTS)
+    ids = requested_ids[:RAG_DRILLDOWN_MAX_DOCUMENTS]
     config = config or SearchConfig()
     intent = intent or classify_query_evidence_intent(query)
     if not ids:
@@ -187,7 +195,8 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
             scoped_queries = dict.fromkeys(scoped_queries, factual_query)
         for scoped_query in dict.fromkeys(scoped_queries.values()):
             scoped_ids = [doc_id for doc_id, value in scoped_queries.items() if value == scoped_query]
-            vector = query_vector if scoped_query == query and query_vector is not None else None
+            # Reuse one primary vector for every selected document.
+            vector = query_vector
             if vector is None and embedder is not None:
                 embed_started = time.perf_counter()
                 vector = embedder.embed_query(scoped_query)

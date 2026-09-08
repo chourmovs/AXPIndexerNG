@@ -19,7 +19,7 @@ from .prompts import SYSTEM_PROMPT, system_prompt, user_prompt
 from .response_policy import classify_response_plan
 from .retrieval import (classify_query_evidence_intent, rank_documents,
                         retrieve_document_passages, retrieve_rag_candidates)
-from .spiral import SpiralRetriever
+from .coordinator import RetrievalCoordinator
 
 LOGGER = logging.getLogger("axp_client")
 RETRIEVAL_LIMIT = 24
@@ -201,9 +201,9 @@ class RagService:
                             skill.retrieval.temporal_policy)
             spiral = None
             if retrieval is None:
-                spiral = SpiralRetriever(search_fn=self.search_fn).retrieve(
+                spiral = RetrievalCoordinator(search_fn=self.search_fn).retrieve(
                     con, self.embedder, question,
-                    plan=retrieval_plan or (skill_execution.retrieval_plan if skill_execution else None),
+                    policy=retrieval_plan or (skill_execution.retrieval_plan if skill_execution else None),
                     search_depth=search_depth,
                     limit=depth.retrieval_limit, request_id=request_id,
                     search_config=SearchConfig(lexical_candidates=depth.candidate_depth,
@@ -236,8 +236,10 @@ class RagService:
                 config=SearchConfig(lexical_candidates=depth.candidate_depth,
                                     vector_candidates=depth.candidate_depth),
                 intent=intent,
-            ) if eligible_documents else None
+            ) if eligible_documents and spiral is None else None
+            selected_ids = {int(doc["document_id"]) for doc in eligible_documents}
             content = (drilldown.passages if drilldown else
+                       [row for row in all_content if int(row["document_id"]) in selected_ids] if spiral else
                        [hit for doc in eligible_documents for hit in doc["ranked_hits"]])
             if intent.kind == "scalar_fact":
                 content = [row for row in content if row.get("evidence_tier") in
@@ -278,7 +280,7 @@ class RagService:
             emit("retrieval_complete", candidates=len(candidates), content_candidates=len(content))
             self._log_gate(request_id, decision, len(candidates))
             emit("gate_complete", answerable=decision.answerable)
-            spiral_context = {"search_depth": search_depth, "retrieval_strategy": "spiral",
+            spiral_context = {"search_depth": search_depth, "retrieval_strategy": "fast_path_first",
                               "spiral_stop_stage": spiral.stage if spiral else "provided",
                               "global_fallback_used": spiral.global_fallback_used if spiral else False}
             skill_metadata = None
