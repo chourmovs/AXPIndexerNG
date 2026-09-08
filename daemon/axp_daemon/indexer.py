@@ -109,6 +109,10 @@ def _embed_group(items, embedder, result, control):
         if len(vectors) != len(inputs):
             raise RuntimeError(f"Embedding backend returned {len(vectors)} vectors for {len(inputs)} chunks")
     except Exception as exc:  # noqa: BLE001 -- split the batch before sacrificing a document
+        from .embedding_backends import BackendFailure
+
+        if isinstance(exc, BackendFailure):
+            raise
         result["embedding_ms"] += (time.perf_counter() - started) * 1000
         if len(items) > 1:
             middle = len(items) // 2
@@ -333,6 +337,17 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
     result["total_indexing_ms"] = (time.perf_counter() - began) * 1000
     seconds = result["embedding_ms"] / 1000
     result["embedding_throughput_chunks_s"] = result["chunks_embedded"] / seconds if seconds else 0.0
+    health = embedder.health() if hasattr(embedder, "health") else {}
+    result.update(
+        embedding_model=getattr(embedder, "model_id", None),
+        embedding_dimension=getattr(embedder, "dimension", None),
+        embedding_device_requested=getattr(embedder, "requested_device", "cpu"),
+        embedding_device_effective=getattr(embedder, "effective_device", "cpu"),
+        embedding_backend=getattr(embedder, "backend", "fastembed"),
+        intel_gpu_qualified=bool(health.get("intel_gpu_qualified", False)),
+        intel_gpu_device_name=health.get("intel_gpu_device_name"),
+        embedding_fallback_reason=getattr(embedder, "fallback_reason", None),
+    )
     return result
 
 

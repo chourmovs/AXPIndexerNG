@@ -7,7 +7,7 @@ from axp_core.metadata import ensure_index_signature
 from axp_core.runtime import read_json, runtime_paths
 from axp_core.sources import add_source, disable_source, enable_source, get_source, list_sources, remove_source
 
-from .embeddings import Embedder
+from .embedding_backends import create_indexing_embedder
 from .indexer import scan, scan_source
 from .service import _safe_reindex, run_daemon, send_control
 
@@ -17,11 +17,15 @@ def _embedding_args(parser):
     parser.add_argument("--allow-download", action="store_true")
     parser.add_argument("--embedding-profile", choices=("balanced", "quality"), default="balanced")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
+    parser.add_argument("--embedding-device", choices=("auto", "cpu", "intel_gpu"), default="auto")
 
 
 def _embedder(args):
-    return Embedder(args.embedding_profile, cache_dir=args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"),
-                    local_only=not args.allow_download)
+    return create_indexing_embedder(
+        args.embedding_profile, device=args.embedding_device,
+        cache_dir=args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"),
+        local_only=not args.allow_download, batch_size=args.embedding_batch_size,
+    )
 
 
 def _source_json(row):
@@ -48,6 +52,7 @@ def main(argv=None):
     run.add_argument("--allow-download", action="store_true")
     run.add_argument("--embedding-profile", choices=("balanced", "quality"), default="balanced")
     run.add_argument("--embedding-batch-size", type=int, default=64)
+    run.add_argument("--embedding-device", choices=("auto", "cpu", "intel_gpu"), default="auto")
     run.add_argument("--scan-interval", type=int, default=300)
     run.add_argument("--model-download-retry", type=int, default=60)
     run.add_argument("--launch-mode", choices=("interactive", "scheduled_task"), default="interactive")
@@ -68,16 +73,30 @@ def main(argv=None):
     _embedding_args(scan_one)
     control = sub.add_parser("control")
     control.add_argument("action", choices=("scan", "pause", "resume", "stop"))
+    qualify = sub.add_parser("embedding-qualify")
+    qualify.add_argument("--device", choices=("intel_gpu",), default="intel_gpu")
+    qualify.add_argument("--db", dest="sample_db")
+    qualify.add_argument("--count", type=int, default=256)
+    qualify.add_argument("--embedding-batch-size", type=int, default=64,
+                         choices=(16, 32, 64, 128, 256))
+    qualify.add_argument("--runtime-dir")
     args = parser.parse_args(argv)
 
     if args.cmd == "control":
         print(json.dumps(send_control(args.action)))
         return
+    if args.cmd == "embedding-qualify":
+        from .qualification import qualify as qualify_embeddings
+
+        print(json.dumps(qualify_embeddings(sample_db=args.sample_db, count=args.count,
+                                             batch_size=args.embedding_batch_size,
+                                             runtime_dir=args.runtime_dir), indent=2))
+        return
     if args.cmd == "run":
         value = run_daemon(
             args.db, args.model_cache or os.getenv("FASTEMBED_CACHE_PATH"), args.embedding_profile,
             max(1, args.scan_interval), max(1, args.embedding_batch_size), args.allow_download,
-            max(1, args.model_download_retry), launch_mode=args.launch_mode,
+            max(1, args.model_download_retry), launch_mode=args.launch_mode, embedding_device=args.embedding_device,
         )
         print(json.dumps(value))
         return
