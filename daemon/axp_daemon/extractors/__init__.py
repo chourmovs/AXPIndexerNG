@@ -1,4 +1,6 @@
-from . import csv, docx, pdf, pptx, text, xlsx
+from axp_core.office_formats import OFFICE_FORMATS
+
+from . import csv, doc, docx, pdf, ppt, pptx, text, xls, xlsx
 
 EXTRACTORS = {
     ".txt": text.extract,
@@ -10,6 +12,14 @@ EXTRACTORS = {
     ".xlsx": xlsx.extract,
     ".csv": csv.extract,
 }
+
+_OFFICE_EXTRACTORS = {
+    "doc": doc.extract, "docx": docx.extract,
+    "xls": xls.extract, "xlsx": xlsx.extract,
+    "ppt": ppt.extract, "pptx": pptx.extract,
+}
+EXTRACTORS.update({extension: _OFFICE_EXTRACTORS[spec.extractor]
+                   for extension, spec in OFFICE_FORMATS.items()})
 
 
 def extract(path):

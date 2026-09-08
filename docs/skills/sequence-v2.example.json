@@ -8,7 +8,7 @@
   "match": {"identifiers": [], "phrases": ["synthèse", "séquence", "sequence", "process sequence"], "keywords": ["synthèse", "séquence", "sequence"]},
   "retrieval": {
     "scope": {"kind": "project_relative", "relative_paths": ["sequences"], "path_prefixes": []},
-    "mode": "strict", "extensions": [".docx"], "temporal_policy": "all_history", "max_documents": 32
+    "mode": "strict", "extensions": [".doc", ".docx"], "temporal_policy": "all_history", "max_documents": 32
   },
   "business_context": "Locate the authoritative project sequence information. Do not introduce information from outside the selected project evidence.",
   "answer": {"guidance": "For this temporary RAG implementation, preserve the source sequence as faithfully as possible. Rich source-document rendering will be introduced separately.", "sections": []},

@@ -4,6 +4,7 @@ PyMuPDF
 python-docx
 python-pptx
 openpyxl
+office-oxide==0.1.9
 pystray
 Pillow
 
