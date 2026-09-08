@@ -99,13 +99,13 @@ def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope
     scope = scope or RetrievalScope()
     clauses, values = ["1=1"], []
     if scope.source_ids:
-        clauses.append(f"source_id IN ({','.join('?' for _ in scope.source_ids)})")
+        clauses.append(f"d.source_id IN ({','.join('?' for _ in scope.source_ids)})")
         values.extend(scope.source_ids)
     if scope.extensions:
-        clauses.append(f"lower(extension) IN ({','.join('?' for _ in scope.extensions)})")
+        clauses.append(f"lower(d.extension) IN ({','.join('?' for _ in scope.extensions)})")
         values.extend(value.casefold() for value in scope.extensions)
     if scope.path_prefixes:
-        clauses.append("(" + " OR ".join("lower(path_key) LIKE ? ESCAPE '\\'"
+        clauses.append("(" + " OR ".join("lower(d.path_key) LIKE ? ESCAPE '\\'"
                                            for _ in scope.path_prefixes) + ")")
         values.extend(sql_path_prefix(value) for value in scope.path_prefixes)
     rows = con.execute("SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,"
