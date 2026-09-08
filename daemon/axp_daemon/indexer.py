@@ -7,6 +7,7 @@ from pathlib import Path
 
 from axp_core.background import resolve_source_path
 from axp_core.identifiers import extract_identifiers
+from axp_core.office_formats import OFFICE_EXTENSIONS
 from axp_core.runtime import load_settings
 from axp_core.sources import (
     add_source,
@@ -69,6 +70,29 @@ def _record_document_failure(item, exc, result, control):
     result["failed"] += 1
     _control_call(control, "file_error", item.logical_path, exc)
     _control_call(control, "progress", result)
+
+
+def _preserve_failed_document(con, source_id, path, stat, old):
+    """Keep a failed file discoverable while ensuring stale/synthetic text is not evidence."""
+    now = int(time.time() * 1000)
+    title = path.stem.replace("_", " ").replace("-", " ").strip()
+    if old:
+        con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id=?)", (old["id"],))
+        con.execute("DELETE FROM chunks WHERE document_id=?", (old["id"],))
+        con.execute(
+            """UPDATE documents SET source_id=?,path=?,extension=?,size_bytes=?,modified_unix_ms=?,
+            indexed_unix_ms=?,title=?,filename=?,ingestion_mode='metadata' WHERE id=?""",
+            (source_id, str(path), path.suffix.lower(), stat.st_size, stat.st_mtime_ns // 1_000_000,
+             now, title, path.name, old["id"]),
+        )
+    else:
+        con.execute(
+            """INSERT INTO documents(source_id,path,path_key,extension,size_bytes,modified_unix_ms,sha256,
+            indexed_unix_ms,title,filename,ingestion_mode) VALUES(?,?,?,?,?,?,?,?,?,?,'metadata')""",
+            (source_id, str(path), path_key(path), path.suffix.lower(), stat.st_size,
+             stat.st_mtime_ns // 1_000_000, "", now, title, path.name),
+        )
+    con.commit()
 
 
 def _embed_group(items, embedder, result, control):
@@ -234,7 +258,10 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     continue
                 if mode == "content":
                     _control_call(control, "stage", "extracting")
-                    sections = extract(access_path)
+                    sections = list(extract(access_path))
+                    if extension in OFFICE_EXTENSIONS and not any(str(text or "").strip() for text, _ in sections):
+                        from .extractors.legacy_office import OfficeExtractionError
+                        raise OfficeExtractionError("office_content_empty")
                     result["files_extracted"] += 1
                     _control_call(control, "stage", "chunking")
                     chunks = [chunk for text, page in sections for chunk in chunk_text(text, page)]
@@ -252,6 +279,8 @@ def scan_source(con, source_id, embedder, *, embedding_batch_size=64, control=No
                     _flush(con, source_id, pending, embedder, result, control)
                     pending_chunks = 0
             except Exception as exc:  # noqa: BLE001 -- isolate a bad document
+                if mode == "content" and extension in OFFICE_EXTENSIONS:
+                    _preserve_failed_document(con, source_id, path, stat, old)
                 result[f"files_{mode}"] -= 1
                 breakdown[mode] -= 1
                 breakdown["failed"] += 1

@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from axp_core.path_keys import canonical_path_key
+from axp_core.office_formats import OFFICE_EXTENSIONS
 
-SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".docx", ".pptx", ".xlsx", ".csv"}
+SUPPORTED = {".txt", ".md", ".markdown", ".pdf", ".csv"} | OFFICE_EXTENSIONS
 DRIVE_IGNORES = {"$recycle.bin", "system volume information"}
 TEMPORARY_PREFIXES = ("~$", ".~lock.")
 TEMPORARY_SUFFIXES = {".tmp", ".part", ".crdownload"}

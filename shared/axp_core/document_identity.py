@@ -17,7 +17,7 @@ QUERY_STOPWORDS = {
     "avec", "dans", "des", "est", "les", "par", "pour", "que", "quel", "quelle", "quels",
     "quelles", "qui", "sont", "sur", "trouve", "donne", "une", "un", "de", "du", "la", "le",
     "and", "for", "from", "the", "this", "with", "what", "which", "where", "is", "are", "of",
-    "a", "an", "in", "at", "give", "find", "show", "open", "ouvre", "ouvrir", "cherche",
+    "a", "an", "in", "at", "give", "find", "show", "open", "ouvre", "ouvrir", "cherche", "montre",
     "resume", "resumer", "synthese", "document", "rapport", "report", "procedure", "dit", "moi",
     "fais", "peux", "peut", "please",
 }
