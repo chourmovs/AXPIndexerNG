@@ -263,7 +263,7 @@ class LlamaCppBackend:
                 choice = (chunk.get("choices") or [{}])[0]
                 finish_reason = choice.get("finish_reason") or finish_reason
                 content = (choice.get("delta") or {}).get("content")
-                if content:
+                if isinstance(content, str) and content:
                     now = time.perf_counter()
                     if first_token is None:
                         first_token = now
@@ -284,7 +284,12 @@ class LlamaCppBackend:
             generation_ms = (ended - started) * 1000
             decode_ms = (ended - first_token) * 1000 if first_token is not None else None
             self.last_telemetry = {
-                "time_to_first_token_ms": None if first_token is None else (first_token - started) * 1000,
+                "time_to_first_token_ms": (None if first_token is None or not supports_stream
+                                           else (first_token - started) * 1000),
+                "first_generated_token_ms": (None if first_token is None or not supports_stream
+                                             else (first_token - started) * 1000),
+                "ttft_semantics": ("first_nonempty_content_delta_after_generation_request" if supports_stream
+                                   else "unavailable_nonstreaming"),
                 "generation_ms": generation_ms, "decode_ms": decode_ms, "completion_tokens": completion,
                 "decode_tokens_per_second": completion / (decode_ms / 1000) if completion is not None and decode_ms else None,
                 "overall_tokens_per_second": completion / (generation_ms / 1000) if completion is not None and generation_ms else None,

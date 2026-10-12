@@ -575,7 +575,14 @@ class IntelSyclBackend:
             visible_ttft_ms = (first_visible-started)*1000 if first_visible else None
             reasoning_phase_ms = ((first_visible-first_reasoning)*1000
                                   if first_reasoning and first_visible else None)
+            first_generated = min((tick for tick in (first_reasoning, first_visible) if tick is not None),
+                                  default=None)
             self.last_telemetry = {"time_to_first_token_ms": visible_ttft_ms, "ttft_ms": visible_ttft_ms,
+                "ttft_semantics": "first_nonempty_content_delta_after_generation_request",
+                "first_generated_token_ms": ((first_generated-started)*1000
+                                             if first_generated is not None else None),
+                "ttft_prefill_inconsistent": bool(prompt_ms is not None and visible_ttft_ms is not None
+                                                  and visible_ttft_ms + 1 < prompt_ms),
                 "visible_ttft_ms": visible_ttft_ms, "reasoning_ttft_ms": reasoning_ttft_ms,
                 "reasoning_phase_ms": reasoning_phase_ms,
                 "visible_answer_ms": (ended-first_visible)*1000 if first_visible else None,

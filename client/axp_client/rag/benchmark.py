@@ -92,13 +92,16 @@ class BenchmarkRunner:
         if self._cancel.is_set(): raise InterruptedError
         telemetry = backend.last_telemetry
         ttft = telemetry.get("time_to_first_token_ms")
-        prompt_eval_ms = telemetry.get("prompt_eval_ms") or ttft
+        prompt_eval_ms = telemetry.get("prompt_eval_ms")
         result = {"prompt_tokens": telemetry.get("prompt_tokens") or prompt_tokens,
                 "prompt_eval_ms": prompt_eval_ms,
                 "prompt_eval_timing_derived": telemetry.get("prompt_eval_ms") is None,
                 "prompt_eval_tokens_per_second": (telemetry.get("prompt_eval_tokens_per_second") or
                     (prompt_tokens / (prompt_eval_ms / 1000) if prompt_eval_ms else None)),
                 "ttft_ms": ttft,
+                "ttft_semantics": telemetry.get("ttft_semantics"),
+                "first_generated_token_ms": telemetry.get("first_generated_token_ms"),
+                "ttft_prefill_inconsistent": telemetry.get("ttft_prefill_inconsistent", False),
                 "generation_ms": telemetry.get("generation_ms"),
                 "completion_tokens": telemetry.get("completion_tokens"),
                 "decode_ms": telemetry.get("decode_ms"),

@@ -206,7 +206,7 @@ def start_daemon(settings):
 def stop_daemon(intentional=True):
     if intentional:
         atomic_write_json(runtime_paths()["desired"], {"state": "stopped", "updated_ms": int(time.time() * 1000)})
-    return send_control("stop")
+    return send_control("stop") if intentional else send_control("stop", intentional=False, reason="manual_restart")
 
 
 def restart_daemon(settings, timeout=15):
@@ -251,3 +251,95 @@ def stop_client(settings, timeout=1.0):
             return response.status == 200
     except (OSError, urllib.error.URLError):
         return False
+
+
+def recover_unhealthy_daemon(settings, state, reason, timeout=5.0):
+    """Challenge the exact instance before recovering an authenticated process.
+
+    Runs off the Tk thread. A responsive worker, changed instance, intentional
+    stop or an unauthenticated PID vetoes termination.
+    """
+    import uuid
+    from .state import read_daemon_state
+
+    paths = runtime_paths()
+    instance = state.get("instance_id")
+    if not instance:
+        LOGGER.warning("Recovery refused: legacy state has no instance identity pid=%s", state.get("pid"))
+        return False
+    request_id = uuid.uuid4().hex
+    atomic_write_json(paths["runtime"] / "daemon_health_probe.json",
+                      {"instance_id": instance, "request_id": request_id})
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = read_daemon_state()
+        if current.get("instance_id") != instance:
+            return False
+        reply = read_json(paths["runtime"] / "daemon_worker_health_reply.json", {}) or {}
+        worker_replied = (reply.get("request_id") == request_id and reply.get("instance_id") == instance
+                          and reply.get("pid") == state.get("pid") and
+                          reply.get("process_create_time") == state.get("process_create_time"))
+        if current.get("worker_health_probe_id") == request_id or worker_replied:
+            LOGGER.info("Recovery vetoed: worker healthy instance=%s pid=%s", instance, current.get("pid"))
+            return False
+        if reason == "heartbeat_stale" and current.get("health_probe_id") == request_id:
+            LOGGER.info("Recovery vetoed: publisher healthy instance=%s pid=%s worker=%s",
+                        instance, current.get("pid"), current.get("worker_state"))
+            return False
+        time.sleep(0.1)
+    current = read_daemon_state()
+    desired = read_json(paths["desired"], {}) or {}
+    if (current.get("instance_id") != instance or desired.get("state") != "running" or
+            current.get("state") == "stopping"):
+        return False
+    matches = [(proc, identity) for proc, identity in verified_owned_processes({"daemon"})
+               if identity.get("pid") == current.get("pid") and
+               abs(identity.get("create_time", -1) - current.get("process_create_time", -2)) <= CREATE_TIME_TOLERANCE_S]
+    if not matches and settings.get("daemon_runtime_mode") == "scheduled_task":
+        # Scheduler launches are not children of the tray. Authenticate their
+        # published creation time, executable, module, cwd and catalog argument.
+        try:
+            proc = psutil.Process(int(current["pid"]))
+            command = proc.cmdline()
+            db_argument = command[command.index("--db") + 1]
+            identity = {"pid": current["pid"], "create_time": current["process_create_time"],
+                        "role": "daemon", "executable": proc.exe(),
+                        "installation_root": str(installation_root().resolve())}
+            if (_same_path(proc.cwd(), installation_root()) and
+                    _same_path(db_argument, settings["db_path"]) and
+                    is_owned_process(proc, identity, {"daemon"})):
+                matches = [(proc, identity)]
+        except (KeyError, ValueError, IndexError, OSError, psutil.Error):
+            pass
+    if len(matches) != 1:
+        LOGGER.warning("Recovery refused: process identity unavailable instance=%s pid=%s mode=%s",
+                       instance, current.get("pid"), settings.get("daemon_runtime_mode"))
+        return False
+    LOGGER.warning("Daemon recovery reason=%s instance=%s pid=%s heartbeat_age_ms=%s worker=%s stage=%s",
+                   reason, instance, current.get("pid"), current.get("heartbeat_age_ms"),
+                   current.get("worker_state"), current.get("current_stage"))
+    send_control("stop", intentional=False, target_instance_id=instance, reason=reason)
+    # Only the challenged identity may be terminated. Other daemons and reused
+    # PIDs are never included, even if the registry changes during the wait.
+    proc, identity = matches[0]
+    try:
+        proc.wait(timeout=2)
+    except psutil.TimeoutExpired:
+        if not is_owned_process(proc, identity, {"daemon"}):
+            return False
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except psutil.TimeoutExpired:
+            if not is_owned_process(proc, identity, {"daemon"}):
+                return False
+            proc.kill()
+            proc.wait(timeout=2)
+    except psutil.NoSuchProcess:
+        pass
+    if daemon_instance_running(settings["db_path"]):
+        return False
+    if (read_json(paths["desired"], {}) or {}).get("state") != "running":
+        return False
+    start_daemon(settings)
+    return True

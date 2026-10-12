@@ -41,7 +41,7 @@ def _metadata_identity_rows(con, document_ids):
 
 
 def raw_search(con, embedder, query, limit=20, *, profile="hybrid", explain=False,
-               reranker=None, config=None, query_vector=None):
+               reranker=None, config=None, query_vector=None, include_query_vector=False):
     """Return the unpresented hybrid candidate pool (the RAG retrieval boundary)."""
     validate_index_signature(con, embedder.model_id, embedder.dimension,
                              getattr(embedder, "distance_metric", "cosine"))
@@ -52,6 +52,8 @@ def raw_search(con, embedder, query, limit=20, *, profile="hybrid", explain=Fals
                            profile=profile, reranker=reranker, explain=True)
     result["timings"]["query_embedding_ms"] = embedding_ms
     result["timings"]["total_ms"] += embedding_ms
+    if include_query_vector:
+        result["_query_vector"] = vector
     return result if explain else result["results"]
 
 
@@ -59,7 +61,8 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     search_started = time.perf_counter()
     active_config = config or SearchConfig()
     result = raw_search(con, embedder, query, limit, profile=profile, reranker=reranker,
-                        config=active_config, explain=True)
+                        config=active_config, explain=True, include_query_vector=True)
+    query_vector = result.pop("_query_vector", None)
     identity_started = time.perf_counter()
     identity_ids = (resolve_identity_documents(con, query, limit=METADATA_IDENTITY_CANDIDATES)
                     if con is not None else [])
@@ -80,7 +83,7 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     document_ranking_ms = (time.perf_counter() - ranking_started) * 1000
     documents = ranked_documents[:2]
     drilldown = retrieve_document_passages(con, embedder, query,
-        [document["document_id"] for document in documents], config=active_config, intent=intent)
+        [document["document_id"] for document in documents], query_vector=query_vector, config=active_config, intent=intent)
     # The drill-down result is already grouped by authoritative document rank.
     ranked = list(drilldown.passages)
     seen = {int(row["chunk_id"]) for row in ranked}
@@ -111,7 +114,9 @@ def search(con, embedder, query, limit=20, *, profile="hybrid", explain=False, r
     result["results"] = representatives[:limit]
     for rank, row in enumerate(result["results"], 1):
         row["final_rank"] = rank
+    embedding_ms = result["timings"].get("query_embedding_ms", 0.0)
     result["timings"].update(drilldown.timings)
+    result["timings"]["query_embedding_ms"] = result["timings"].get("query_embedding_ms", 0.0) + embedding_ms
     result["timings"]["document_ranking_ms"] = document_ranking_ms
     result["timings"]["metadata_identity_ms"] = metadata_identity_ms
     result["metadata_identity_candidates"] = len(identity_ids)

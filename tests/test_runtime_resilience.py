@@ -110,7 +110,7 @@ def test_startup_race_lock_held_suppresses_spawn(tmp_path):
 def test_manual_restart_waits_for_lock_release(monkeypatch):
     calls = []
     probes = iter((True, True, False))
-    monkeypatch.setattr(process, "send_control", lambda command: calls.append(("stop", command)))
+    monkeypatch.setattr(process, "send_control", lambda command, **kwargs: calls.append(("stop", command)))
     monkeypatch.setattr(process, "daemon_instance_running", lambda _: next(probes))
     monkeypatch.setattr(process.time, "sleep", lambda _: None)
     monkeypatch.setattr(process, "start_daemon", lambda settings: calls.append(("start", settings)) or "new")
@@ -121,7 +121,7 @@ def test_manual_restart_waits_for_lock_release(monkeypatch):
 def test_manual_restart_refuses_spawn_while_lock_remains_held(monkeypatch):
     calls = []
     clock = iter((0, 0, 2))
-    monkeypatch.setattr(process, "send_control", lambda command: None)
+    monkeypatch.setattr(process, "send_control", lambda command, **kwargs: None)
     monkeypatch.setattr(process, "daemon_instance_running", lambda _: True)
     monkeypatch.setattr(process.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(process.time, "sleep", lambda _: None)

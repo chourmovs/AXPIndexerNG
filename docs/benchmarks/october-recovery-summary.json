@@ -1,0 +1,493 @@
+{
+  "fixture": {
+    "documents": 23363,
+    "chunks": 467255,
+    "dimension": 384,
+    "repetitions": 3
+  },
+  "cold_definition": "new SQLite connection; OS caches not cleared",
+  "embeddings": "deterministic synthetic; not real model",
+  "statistics": "median of 3; p95 not meaningful at this sample size",
+  "scenarios": [
+    {
+      "scenario": "name",
+      "temperature": "cold_connection",
+      "before": {
+        "search_total_ms": 2771.82,
+        "metadata_identity_ms": 2256.191,
+        "query_embedding_ms": 0.093,
+        "fts_retrieval_ms": 0.532,
+        "vector_retrieval_ms": 385.053,
+        "fusion_ms": 4.072,
+        "passage_scoring_ms": 9.052,
+        "document_ranking_ms": 0.238,
+        "drilldown_total_ms": 4.171,
+        "rag_retrieval_ms": 2180.193,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 518.691,
+        "metadata_identity_ms": 0.587,
+        "query_embedding_ms": 0.07,
+        "fts_retrieval_ms": 0.381,
+        "vector_retrieval_ms": 391.286,
+        "fusion_ms": 4.338,
+        "passage_scoring_ms": 9.147,
+        "document_ranking_ms": 0.29,
+        "drilldown_total_ms": 3.475,
+        "rag_retrieval_ms": 4.766,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "name",
+      "temperature": "warm",
+      "before": {
+        "search_total_ms": 2858.627,
+        "metadata_identity_ms": 2324.335,
+        "query_embedding_ms": 0.101,
+        "fts_retrieval_ms": 0.413,
+        "vector_retrieval_ms": 397.333,
+        "fusion_ms": 4.537,
+        "passage_scoring_ms": 9.313,
+        "document_ranking_ms": 0.252,
+        "drilldown_total_ms": 4.063,
+        "rag_retrieval_ms": 2306.991,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 422.229,
+        "metadata_identity_ms": 0.388,
+        "query_embedding_ms": 0.064,
+        "fts_retrieval_ms": 0.329,
+        "vector_retrieval_ms": 403.282,
+        "fusion_ms": 4.074,
+        "passage_scoring_ms": 9.911,
+        "document_ranking_ms": 0.359,
+        "drilldown_total_ms": 3.29,
+        "rag_retrieval_ms": 4.778,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "hybrid",
+      "temperature": "cold_connection",
+      "before": {
+        "search_total_ms": 2884.642,
+        "metadata_identity_ms": 2377.866,
+        "query_embedding_ms": 0.091,
+        "fts_retrieval_ms": 0.473,
+        "vector_retrieval_ms": 379.131,
+        "fusion_ms": 4.777,
+        "passage_scoring_ms": 8.711,
+        "document_ranking_ms": 0.277,
+        "drilldown_total_ms": 4.793,
+        "rag_retrieval_ms": 2803.489,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 557.282,
+        "metadata_identity_ms": 0.442,
+        "query_embedding_ms": 0.092,
+        "fts_retrieval_ms": 0.391,
+        "vector_retrieval_ms": 399.574,
+        "fusion_ms": 5.423,
+        "passage_scoring_ms": 8.848,
+        "document_ranking_ms": 0.32,
+        "drilldown_total_ms": 4.291,
+        "rag_retrieval_ms": 408.462,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "hybrid",
+      "temperature": "warm",
+      "before": {
+        "search_total_ms": 2937.477,
+        "metadata_identity_ms": 2426.977,
+        "query_embedding_ms": 0.091,
+        "fts_retrieval_ms": 0.405,
+        "vector_retrieval_ms": 382.597,
+        "fusion_ms": 5.122,
+        "passage_scoring_ms": 9.581,
+        "document_ranking_ms": 0.268,
+        "drilldown_total_ms": 4.99,
+        "rag_retrieval_ms": 2821.106,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 432.871,
+        "metadata_identity_ms": 0.219,
+        "query_embedding_ms": 0.09,
+        "fts_retrieval_ms": 0.314,
+        "vector_retrieval_ms": 413.623,
+        "fusion_ms": 4.502,
+        "passage_scoring_ms": 9.04,
+        "document_ranking_ms": 0.242,
+        "drilldown_total_ms": 3.505,
+        "rag_retrieval_ms": 417.289,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "identified",
+      "temperature": "cold_connection",
+      "before": {
+        "search_total_ms": 2987.403,
+        "metadata_identity_ms": 2478.59,
+        "query_embedding_ms": 0.09,
+        "fts_retrieval_ms": 0.648,
+        "vector_retrieval_ms": 382.741,
+        "fusion_ms": 5.166,
+        "passage_scoring_ms": 8.967,
+        "document_ranking_ms": 0.273,
+        "drilldown_total_ms": 5.308,
+        "rag_retrieval_ms": 2337.386,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 544.313,
+        "metadata_identity_ms": 0.645,
+        "query_embedding_ms": 0.051,
+        "fts_retrieval_ms": 0.433,
+        "vector_retrieval_ms": 415.118,
+        "fusion_ms": 5.0,
+        "passage_scoring_ms": 8.734,
+        "document_ranking_ms": 0.236,
+        "drilldown_total_ms": 3.673,
+        "rag_retrieval_ms": 5.121,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "identified",
+      "temperature": "warm",
+      "before": {
+        "search_total_ms": 2910.846,
+        "metadata_identity_ms": 2383.625,
+        "query_embedding_ms": 0.117,
+        "fts_retrieval_ms": 0.499,
+        "vector_retrieval_ms": 401.539,
+        "fusion_ms": 4.927,
+        "passage_scoring_ms": 9.181,
+        "document_ranking_ms": 0.262,
+        "drilldown_total_ms": 4.691,
+        "rag_retrieval_ms": 2454.862,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 455.562,
+        "metadata_identity_ms": 0.655,
+        "query_embedding_ms": 0.052,
+        "fts_retrieval_ms": 0.425,
+        "vector_retrieval_ms": 424.359,
+        "fusion_ms": 7.877,
+        "passage_scoring_ms": 14.17,
+        "document_ranking_ms": 0.237,
+        "drilldown_total_ms": 4.287,
+        "rag_retrieval_ms": 6.095,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "multiple",
+      "temperature": "cold_connection",
+      "before": {
+        "search_total_ms": 2889.318,
+        "metadata_identity_ms": 2375.454,
+        "query_embedding_ms": 0.091,
+        "fts_retrieval_ms": 0.589,
+        "vector_retrieval_ms": 386.015,
+        "fusion_ms": 5.22,
+        "passage_scoring_ms": 9.106,
+        "document_ranking_ms": 0.265,
+        "drilldown_total_ms": 5.0,
+        "rag_retrieval_ms": 2403.703,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 540.058,
+        "metadata_identity_ms": 0.729,
+        "query_embedding_ms": 0.065,
+        "fts_retrieval_ms": 0.466,
+        "vector_retrieval_ms": 417.105,
+        "fusion_ms": 5.237,
+        "passage_scoring_ms": 8.516,
+        "document_ranking_ms": 0.243,
+        "drilldown_total_ms": 3.989,
+        "rag_retrieval_ms": 5.21,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "multiple",
+      "temperature": "warm",
+      "before": {
+        "search_total_ms": 3009.672,
+        "metadata_identity_ms": 2474.695,
+        "query_embedding_ms": 0.092,
+        "fts_retrieval_ms": 0.607,
+        "vector_retrieval_ms": 401.367,
+        "fusion_ms": 5.344,
+        "passage_scoring_ms": 10.079,
+        "document_ranking_ms": 0.23,
+        "drilldown_total_ms": 4.99,
+        "rag_retrieval_ms": 2479.918,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      },
+      "after": {
+        "search_total_ms": 430.126,
+        "metadata_identity_ms": 0.499,
+        "query_embedding_ms": 0.043,
+        "fts_retrieval_ms": 0.434,
+        "vector_retrieval_ms": 408.931,
+        "fusion_ms": 5.331,
+        "passage_scoring_ms": 9.238,
+        "document_ranking_ms": 0.215,
+        "drilldown_total_ms": 3.837,
+        "rag_retrieval_ms": 5.744,
+        "answerable": [
+          true,
+          true,
+          true
+        ],
+        "top_documents": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "scenario": "absent",
+      "temperature": "cold_connection",
+      "before": {
+        "search_total_ms": 2849.041,
+        "metadata_identity_ms": 2344.806,
+        "query_embedding_ms": 0.091,
+        "fts_retrieval_ms": 0.412,
+        "vector_retrieval_ms": 387.841,
+        "fusion_ms": 5.257,
+        "passage_scoring_ms": 9.41,
+        "document_ranking_ms": 1.676,
+        "drilldown_total_ms": 10.051,
+        "rag_retrieval_ms": 3498.294,
+        "answerable": [
+          false,
+          false,
+          false
+        ],
+        "top_documents": [
+          47,
+          47,
+          47
+        ]
+      },
+      "after": {
+        "search_total_ms": 535.749,
+        "metadata_identity_ms": 0.408,
+        "query_embedding_ms": 0.093,
+        "fts_retrieval_ms": 0.304,
+        "vector_retrieval_ms": 407.245,
+        "fusion_ms": 4.733,
+        "passage_scoring_ms": 8.971,
+        "document_ranking_ms": 1.427,
+        "drilldown_total_ms": 7.814,
+        "rag_retrieval_ms": 433.47,
+        "answerable": [
+          false,
+          false,
+          false
+        ],
+        "top_documents": [
+          47,
+          47,
+          47
+        ]
+      }
+    },
+    {
+      "scenario": "absent",
+      "temperature": "warm",
+      "before": {
+        "search_total_ms": 2926.906,
+        "metadata_identity_ms": 2405.306,
+        "query_embedding_ms": 0.093,
+        "fts_retrieval_ms": 0.33,
+        "vector_retrieval_ms": 417.858,
+        "fusion_ms": 5.766,
+        "passage_scoring_ms": 9.263,
+        "document_ranking_ms": 1.498,
+        "drilldown_total_ms": 9.924,
+        "rag_retrieval_ms": 3465.916,
+        "answerable": [
+          false,
+          false,
+          false
+        ],
+        "top_documents": [
+          47,
+          47,
+          47
+        ]
+      },
+      "after": {
+        "search_total_ms": 411.507,
+        "metadata_identity_ms": 0.268,
+        "query_embedding_ms": 0.09,
+        "fts_retrieval_ms": 0.278,
+        "vector_retrieval_ms": 377.761,
+        "fusion_ms": 4.883,
+        "passage_scoring_ms": 9.577,
+        "document_ranking_ms": 1.494,
+        "drilldown_total_ms": 7.526,
+        "rag_retrieval_ms": 434.401,
+        "answerable": [
+          false,
+          false,
+          false
+        ],
+        "top_documents": [
+          47,
+          47,
+          47
+        ]
+      }
+    }
+  ]
+}

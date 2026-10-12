@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import threading
 import time
+import uuid
+
+import psutil
 from pathlib import Path
 
 from axp_core.database import connect
@@ -24,18 +27,28 @@ def now_ms():
 
 
 def send_control(command, **values):
-    payload = {"command": command, "requested_ms": now_ms(), "request_id": f"{os.getpid()}-{time.time_ns()}", **values}
+    intentional = values.pop("intentional", True)
+    state = read_json(runtime_paths()["state"], {}) or {}
+    if state.get("instance_id"):
+        values.setdefault("target_instance_id", state["instance_id"])
+    payload = {"command": command, "sender_pid": os.getpid(), "requested_monotonic": time.monotonic(), "requested_ms": now_ms(), "request_id": f"{os.getpid()}-{time.time_ns()}", **values}
     atomic_write_json(runtime_paths()["control"], payload)
-    if command == "stop":
+    if command == "stop" and intentional:
         atomic_write_json(runtime_paths()["desired"], {"state": "stopped", "updated_ms": now_ms()})
     return payload
 
 
 class StatePublisher:
-    def __init__(self, interval_s=2, warning_interval_s=60, launch_mode="interactive"):
+    def __init__(self, interval_s=2, warning_interval_s=60, launch_mode="interactive", db_path=None):
         self.path = runtime_paths()["state"]
+        self.started_monotonic = time.monotonic()
         self.started_ms = now_ms()
+        self.instance_id = uuid.uuid4().hex
         self.value = {
+            "db_path": str(Path(db_path).resolve()) if db_path else None,
+            "started_monotonic": self.started_monotonic,
+            "instance_id": self.instance_id, "process_create_time": psutil.Process().create_time(),
+            "worker_progress_monotonic": time.monotonic(), "worker_state": "starting",
             "pid": os.getpid(), "state": "starting", "started_ms": self.started_ms, "launch_mode": launch_mode,
             "heartbeat_ms": now_ms(), "current_source_id": None, "current_source": None, "current_file": None,
             "current_stage": "idle", "source_scan_started_ms": None, "scan_cycle_started_ms": None,
@@ -56,16 +69,23 @@ class StatePublisher:
         self.thread = threading.Thread(target=self._run, name="axp-heartbeat", daemon=True)
 
     def start(self):
+        self._publish_safely()
         self.thread.start()
 
     def update(self, **values):
         with self.lock:
             self.value.update(values)
+            self.value["worker_progress_monotonic"] = time.monotonic()
+            self.value["worker_state"] = values.get("state", self.value.get("state"))
 
     def _write(self):
+        probe = read_json(runtime_paths()["runtime"] / "daemon_health_probe.json", {}) or {}
         with self.lock:
             value = {**self.value, "heartbeat_ms": now_ms(),
+                     "heartbeat_monotonic": time.monotonic(),
                      "heartbeat_write_failures": self.write_failures}
+        if probe.get("instance_id") == self.instance_id:
+            value["health_probe_id"] = probe.get("request_id")
         atomic_write_json(self.path, value)
 
     def _publish_safely(self):
@@ -104,15 +124,44 @@ class DaemonControl:
         self.reindex_source_id = None
         self.remove_source_id = None
         self.last_request_id = None
+        self.last_health_probe_id = None
 
     def poll(self):
+        # Checkpoints describe worker progress, independently of the publisher.
+        self.publisher.update()
+        probe = read_json(runtime_paths()["runtime"] / "daemon_health_probe.json", {}) or {}
+        if probe.get("instance_id") == getattr(self.publisher, "instance_id", None) and probe.get("request_id"):
+            self.publisher.update(worker_health_probe_id=probe["request_id"])
+            if probe["request_id"] != self.last_health_probe_id:
+                try:
+                    atomic_write_json(runtime_paths()["runtime"] / "daemon_worker_health_reply.json",
+                        {"instance_id": self.publisher.instance_id, "request_id": probe["request_id"],
+                         "pid": os.getpid(),
+                         "process_create_time": self.publisher.value.get("process_create_time")})
+                    self.last_health_probe_id = probe["request_id"]
+                except OSError as exc:
+                    LOGGER.warning("Worker health reply publication failed instance=%s: %r",
+                                   self.publisher.instance_id, exc)
         request = read_json(runtime_paths()["control"], {}) or {}
         request_id = request.get("request_id")
         if not request_id or request_id == self.last_request_id:
             return
         self.last_request_id = request_id
         command = request.get("command")
-        LOGGER.info("Control request: %s", command)
+        target = request.get("target_instance_id")
+        obsolete = target and target != getattr(self.publisher, "instance_id", None)
+        if not target:
+            if "requested_monotonic" in request:
+                obsolete = request["requested_monotonic"] < getattr(self.publisher, "started_monotonic", 0)
+            else:
+                obsolete = request.get("requested_ms", 0) < getattr(self.publisher, "started_ms", 0)
+        if obsolete:
+            LOGGER.info("Ignored obsolete control request command=%s request_id=%s target=%s instance=%s",
+                        command, request_id, target, getattr(self.publisher, "instance_id", None))
+            return
+        LOGGER.info("Control request: %s request_id=%s sender_pid=%s reason=%s instance=%s pid=%s",
+                    command, request_id, request.get("sender_pid"), request.get("reason", "explicit_request"),
+                    getattr(self.publisher, "instance_id", None), os.getpid())
         if command == "stop":
             self.stop = True
             self.publisher.update(state="stopping")
@@ -277,7 +326,7 @@ def run_daemon(db, model_cache, embedding_profile="balanced", scan_interval=300,
     except AlreadyLocked:
         return {"status": "already_running"}
     atomic_write_json(paths["desired"], {"state": "running", "updated_ms": now_ms()})
-    publisher = StatePublisher(launch_mode=launch_mode)
+    publisher = StatePublisher(launch_mode=launch_mode, db_path=db)
     control = DaemonControl(publisher)
     publisher.start()
     try:

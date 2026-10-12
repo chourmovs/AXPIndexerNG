@@ -71,11 +71,11 @@ class RagService:
     @contextmanager
     def _reader(self):
         if self.reader_pool is not None:
-            with self.reader_pool.acquire() as borrowed:
+            with self.reader_pool.acquire(with_timings=True) as borrowed:
                 yield borrowed
         else:
             with self.connect_fn(self.db, readonly=True) as con:
-                yield con, False
+                yield con, False, {"reader_queue_wait_ms": 0.0}
 
     def health(self):
         return {**self.backend.health(), "generation_busy": self.operations.busy or self._generation_lock.locked()}
@@ -188,7 +188,7 @@ class RagService:
             raise ChatUnavailableError
         emit("retrieval_started")
         acquire_started = time.perf_counter()
-        with self._reader() as (con, reader_reused):
+        with self._reader() as (con, reader_reused, reader_timings):
             db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
             if skill_execution and skill_execution.skill and retrieval_plan is None:
                 skill_execution = self.skill_engine.compile(skill_execution, con, question=question,
@@ -304,7 +304,7 @@ class RagService:
                                  skill_execution.skill.retrieval.mode == "strict"
                                  else "no_supporting_evidence")
                 base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
-                                   "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
+                                   "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused, **reader_timings,
                                    "total_ms": (time.perf_counter() - started) * 1000}
                 if debug:
                     base["debug"] = self._debug(retrieval, decision, None)
@@ -552,10 +552,6 @@ class RagService:
                     "search_depth_expanded_output=%s", request_id, model_id, response_plan.mode,
                     response_plan.target_words, requested_answer_tokens, effective_answer_tokens,
                     search_depth, telemetry["search_depth_expanded_output"])
-        ttft = telemetry.get("time_to_first_token_ms")
-        if telemetry.get("prompt_eval_ms") is None and ttft:
-            telemetry["prompt_eval_ms"] = ttft
-            telemetry["prompt_eval_timing_derived"] = True
         if telemetry.get("prompt_eval_tokens_per_second") is None and telemetry.get("prompt_eval_ms"):
             telemetry["prompt_eval_tokens_per_second"] = telemetry["prompt_tokens"] / (telemetry["prompt_eval_ms"] / 1000)
         PERFORMANCE_ESTIMATES.update(model_id, effective_device,
@@ -639,10 +635,17 @@ class RagService:
         drill_timings = drilldown.timings if drilldown else {}
         base["timings"] = {**retrieval.timings, "retrieval_ms": retrieval_ms,
                            "global_retrieval_ms": retrieval.timings.get("spiral_global_ms", 0.0),
-                           "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused,
+                           "db_acquire_ms": db_acquire_ms, "reader_reused": reader_reused, **reader_timings,
                            "document_ranking_ms": max(0.0, (ranking_finished - started) * 1000 - retrieval_ms),
                            **drill_timings, "context_ms": context_ms, "model_load_ms": model_load_ms,
                            "generation_ms": generation_ms,
+                           "queue_wait_ms": 0.0,  # Busy generation is rejected, never queued.
+                           "prefill_ms": telemetry.get("prompt_eval_ms"),
+                           "first_generated_token_ms": telemetry.get("first_generated_token_ms"),
+                           "request_first_generated_token_ms": (
+                               (generation_start - started)*1000 + telemetry["first_generated_token_ms"]
+                               if telemetry.get("first_generated_token_ms") is not None else None),
+                           "decode_ms": telemetry.get("decode_ms"),
                            "citation_validation_ms": locals().get("citation_validation_ms", 0.0),
                            "citation_repair_ms": locals().get("citation_repair_ms", 0.0),
                            "total_ms": (time.perf_counter() - started) * 1000}

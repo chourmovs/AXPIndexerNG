@@ -193,8 +193,10 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
         if intent.kind == "scalar_fact" and intent.target_terms:
             factual_query = " ".join(sorted(intent.target_terms))
             scoped_queries = dict.fromkeys(scoped_queries, factual_query)
-        for scoped_query in dict.fromkeys(scoped_queries.values()):
-            scoped_ids = [doc_id for doc_id, value in scoped_queries.items() if value == scoped_query]
+        queries = [query] if query_vector is not None else dict.fromkeys(scoped_queries.values())
+        for scoped_query in queries:
+            scoped_ids = ids if query_vector is not None else [
+                doc_id for doc_id, value in scoped_queries.items() if value == scoped_query]
             # Reuse one primary vector for every selected document.
             vector = query_vector
             if vector is None and embedder is not None:
@@ -234,8 +236,10 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
     query_terms = _meaningful_terms(query)
     document_terms = {}
     for item in merged.values():
-        document_terms.setdefault(int(item["document_id"]), _meaningful_terms(
-            f'{item.get("title") or ""} {item.get("filename") or ""}'))
+        document_id = int(item["document_id"])
+        if document_id not in document_terms:
+            document_terms[document_id] = _meaningful_terms(
+                f'{item.get("title") or ""} {item.get("filename") or ""}')
     for item in merged.values():
         item.setdefault("lexical_rank", None)
         item.setdefault("scoped_lexical_rank", None)
@@ -403,6 +407,6 @@ def retrieve_rag_candidates(con, embedder, question, *, search_fn, raw_search_fn
         candidates=candidates,
         content_evidence=content,
         metadata_related=list(related_by_document.values()),
-        timings={"retrieval_ms": (time.perf_counter() - started) * 1000},
+        timings={**found.get("timings", {}), "retrieval_ms": (time.perf_counter() - started) * 1000},
         ranked_documents=ranked_documents,
     )
