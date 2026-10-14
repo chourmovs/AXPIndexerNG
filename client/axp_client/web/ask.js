@@ -85,7 +85,7 @@ function renderResponse(article, response, turn) {
     const evidence=response.context?.selected_evidence_tokens ?? '—';
     const meta=element('small', 'answer-meta', `${expanded}${response.context?.selected_documents ?? count} document${(response.context?.selected_documents ?? count) === 1 ? '' : 's'} · ${evidence} evidence tokens · ${device}${reduced} · ${seconds} s`);
     if(generation.completion_tokens != null) meta.append(document.createElement('br'), document.createTextNode(
-      `TTFT ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
+      `First visible text ${(generation.time_to_first_token_ms/1000).toFixed(1)} s · ${generation.completion_tokens} tokens · ${generation.decode_tokens_per_second.toFixed(1)} tok/s`));
     const details=element('details','timing-details'); details.append(element('summary','','Timing diagnostics'));
     const rows=[['Retrieval',response.timings.retrieval_ms],['Model load',response.timings.model_load_ms],
       ['Context',response.timings.context_ms],['GPU prefill',generation.prompt_eval_ms],
@@ -126,7 +126,7 @@ export function initAsk() {
     if(progressMode==='waiting'){ rows.push(element('small','','Waiting for first token'));
       if(elapsed>=60) rows.push(element('small','stalled','Local CPU inference is very slow on this machine. You can cancel this generation.'));
       else if(elapsed>=10) rows.push(element('small','stalled','Prompt evaluation is taking longer than usual.')); }
-    if(progressMode==='generating') rows.push(element('small','',`First token: ${(progressData.time_to_first_token_ms/1000).toFixed(1)} s`),
+    if(progressMode==='generating') rows.push(element('small','',`First visible text: ${(progressData.time_to_first_token_ms/1000).toFixed(1)} s`),
       element('small','',`${progressData.generated_fragments} output fragments`));
     if(progressMode==='context') rows.push(element('small','',`${Number(progressData.evidence_tokens).toLocaleString()} / ${Number(progressData.evidence_budget_tokens).toLocaleString()} evidence tokens`),
       element('small','',`${progressData.documents} documents · ${progressData.blocks} evidence blocks`));
@@ -252,7 +252,7 @@ export function initAsk() {
         element('p','muted',`${qualification.phase || 'Preparing'} · ${qualification.backend || 'Intel GPU'} · ${qualification.completed_tests} / ${qualification.total_tests} tests · ${qualification.elapsed_seconds.toFixed(1)} s elapsed`),bar);
     } else if(qualification.report?.models){ const table=element('table','qualification-table');
       const legacy=qualification.report.qualification_schema_version !== 2;
-      const head=element('tr'); ['Model','Status','AXP Protocol','RAG Prompt','RAG Decode','RAG TTFT','RAG Time','Offload','Stability'].forEach(v=>head.append(element('th','',v)));
+      const head=element('tr'); ['Model','Status','AXP Protocol','RAG Prompt','RAG Decode','RAG First text','RAG Time','Offload','Stability'].forEach(v=>head.append(element('th','',v)));
       const body=element('tbody'); for(const result of qualification.report.models){ const row=element('tr'); const rag=result.performance?.rag || {};
         const normalized=String(result.status || 'failed').toUpperCase();
         const status=element('span',`chip ${normalized === 'QUALIFIED' ? 'success' : normalized.includes('WARNING') || normalized.includes('PARTIAL') ? 'warning' : 'danger'}`,normalized.replaceAll('_',' '));

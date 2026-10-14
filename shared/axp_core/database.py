@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -61,6 +62,9 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
     row = con.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
         con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
+    from .identity_index import ensure_identity_index
+
+    ensure_identity_index(con)
     con.commit()
     return con
 
@@ -93,8 +97,25 @@ def fts_structural_diagnostics(con):
         return {"fts_segment_count": None, "fts_index_pages": None}
 
 
-def search_reader_diagnostics(con):
-    """Collect safe settings and index-size diagnostics for field telemetry."""
+_DIAGNOSTIC_SNAPSHOTS = OrderedDict()
+_DIAGNOSTIC_LOCK = threading.Lock()
+
+
+def search_reader_diagnostics(con, *, refresh=False):
+    """Return a startup snapshot; interactive requests never rescan the corpus.
+
+    Counts are explicitly marked stale after a writer commit. Call refresh=True
+    from maintenance/diagnostics when exact current counts are needed.
+    """
+    version = con.execute("PRAGMA data_version").fetchone()[0]
+    changes = getattr(con, "total_changes", 0)
+    with _DIAGNOSTIC_LOCK:
+        cached = _DIAGNOSTIC_SNAPSHOTS.get(con)
+        if cached is not None and not refresh:
+            _DIAGNOSTIC_SNAPSHOTS.move_to_end(con)
+            return {**cached, "catalog_snapshot_stale":
+                    cached["catalog_snapshot_data_version"] != version or
+                    cached["catalog_snapshot_total_changes"] != changes}
     def pragma(name, default=None):
         try:
             row = con.execute(f"PRAGMA {name}").fetchone()
@@ -108,7 +129,9 @@ def search_reader_diagnostics(con):
         except sqlite3.Error:
             return None
 
-    return {
+    result = {
+        "catalog_snapshot_data_version": version, "catalog_snapshot_total_changes": changes,
+        "catalog_snapshot_stale": False,
         "sqlite_cache_size": pragma("cache_size"),
         "sqlite_mmap_size": pragma("mmap_size", 0),
         "sqlite_temp_store": pragma("temp_store"),
@@ -116,6 +139,11 @@ def search_reader_diagnostics(con):
         "total_vectors": count("chunk_vectors"),
         **fts_structural_diagnostics(con),
     }
+    with _DIAGNOSTIC_LOCK:
+        _DIAGNOSTIC_SNAPSHOTS[con] = result
+        while len(_DIAGNOSTIC_SNAPSHOTS) > 8:
+            _DIAGNOSTIC_SNAPSHOTS.popitem(last=False)
+    return dict(result)
 
 
 class SearchReaderPool:
@@ -132,7 +160,8 @@ class SearchReaderPool:
         self._condition = threading.Condition()
 
     @contextmanager
-    def acquire(self):
+    def acquire(self, *, with_timings=False):
+        acquire_started = time.perf_counter()
         con = None
         reused = False
         with self._condition:
@@ -146,6 +175,8 @@ class SearchReaderPool:
             else:
                 # Reserve the slot before opening so concurrent initialization stays bounded.
                 self._created += 1
+        queue_ms = (time.perf_counter() - acquire_started) * 1000
+        open_started = time.perf_counter()
         if con is None:
             try:
                 con = connect(self.path, readonly=True, check_same_thread=False)
@@ -155,14 +186,20 @@ class SearchReaderPool:
                     self._created -= 1
                     self._condition.notify()
                 raise
+        open_ms = 0.0 if reused else (time.perf_counter() - open_started) * 1000
         try:
-            yield con, reused
+            if with_timings:
+                yield con, reused, {"reader_queue_wait_ms": queue_ms, "reader_open_ms": open_ms}
+            else:
+                yield con, reused
         finally:
             # End any accidental snapshot before another request borrows this reader.
             if con.in_transaction:
                 con.rollback()
             with self._condition:
                 if self._closed:
+                    with _DIAGNOSTIC_LOCK:
+                        _DIAGNOSTIC_SNAPSHOTS.pop(con, None)
                     con.close()
                     self._created -= 1
                 else:
@@ -177,6 +214,8 @@ class SearchReaderPool:
             self._created -= len(readers)
             self._condition.notify_all()
         for con in readers:
+            with _DIAGNOSTIC_LOCK:
+                _DIAGNOSTIC_SNAPSHOTS.pop(con, None)
             con.close()
 
 

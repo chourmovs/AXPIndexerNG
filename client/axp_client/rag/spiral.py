@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig, _meaningful_terms, fold_search_text
 from axp_core.document_identity import analyze_document_identity
+from axp_core.identity_index import identity_candidate_ids
 from axp_core.identifiers import extract_identifiers
 from axp_core.path_keys import canonical_path_key, sql_path_prefix
 
@@ -97,7 +98,21 @@ def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope
     terms = set(intent.identity_terms)
     identifiers = {value for value, _ in extract_identifiers(question)}
     scope = scope or RetrievalScope()
+    candidate_ids = identity_candidate_ids(con, question, identifiers)
+    if candidate_ids is not None and not candidate_ids:
+        return []
     clauses, values = ["1=1"], []
+    if candidate_ids is not None:
+        # A JSON table avoids SQLite's variable limit for broad, uncapped matches.
+        import json
+        clauses.append("d.id IN (SELECT value FROM json_each(?))")
+        values.append(json.dumps(sorted(candidate_ids)))
+    if scope.modified_after_ms is not None:
+        clauses.append("d.modified_unix_ms>=?")
+        values.append(scope.modified_after_ms)
+    if scope.modified_before_ms is not None:
+        clauses.append("d.modified_unix_ms<?")
+        values.append(scope.modified_before_ms)
     if scope.source_ids:
         clauses.append(f"d.source_id IN ({','.join('?' for _ in scope.source_ids)})")
         values.extend(scope.source_ids)

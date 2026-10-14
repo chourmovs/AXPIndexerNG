@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from axp_core.document_identity import analyze_document_identity
+from axp_core.document_identity import _meaningful_terms, analyze_document_identity
 from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig
 from .answerability import decide_answerability, is_supporting_evidence
 from .retrieval import (RagRetrievalResult, classify_query_evidence_intent, rank_documents,
-                        retrieve_document_passages, retrieve_rag_candidates)
+                        retrieve_document_passages, retrieve_rag_candidates, build_scoped_passage_query)
 from .spiral import RetrievalScope, SpiralResult, resolve_identity_documents
 
 LOGGER = logging.getLogger("axp_client")
@@ -78,7 +78,10 @@ class RetrievalCoordinator:
                                   spiral_trace=trace)
             return SpiralResult(result, decision, "hybrid_discovery", trace, True,
                                 embedding_ms, vector)
-        ids, route = self._identity(con, question, policy); hybrid_calls = 0; related = []
+        tick = time.perf_counter()
+        ids, route = self._identity(con, question, policy)
+        identity_ms = (time.perf_counter() - tick) * 1000
+        hybrid_calls = 0; related = []; seed = None
         if not ids:
             route = "hybrid_discovery"
             scoped = policy.scope.path_prefixes or policy.scope.source_ids or policy.scope.extensions
@@ -90,21 +93,94 @@ class RetrievalCoordinator:
                 hybrid_calls, related = 1, seed.metadata_related
                 ids = [d["document_id"] for d in seed.ranked_documents]
         ids = list(dict.fromkeys(ids))[:RAG_PRIMARY_DOCUMENTS]
-        drill = retrieve_document_passages(con, embedder, question, ids, query_vector=vector, config=config, intent=intent)
+        drill = retrieve_document_passages(con, embedder, question, ids, query_vector=vector, search_depth=search_depth, config=config, intent=intent)
         passages = list(drill.passages)
         def make_result(): return RagRetrievalResult(passages, passages, related, {}, rank_documents(passages, intent=intent, query=question))
         result = make_result(); decision = decide_answerability(passages)
-        sufficient = decision.answerable and any(is_supporting_evidence(row) for row in passages)
-        primary_ms = (time.perf_counter()-started)*1000; expanded = False
-        if not sufficient and policy.mode != "strict" and not search_depth and primary_ms < self.primary_budget_s*1000:
-            seed = retrieve_rag_candidates(con, embedder, question, search_fn=self.search_fn, limit=max(48, limit*2), search_config=config, query_vector=vector)
-            hybrid_calls += 1
-            new_ids = [d["document_id"] for d in seed.ranked_documents if d["document_id"] not in ids][:3]
+        def sufficient_evidence():
+            return (decision.answerable and any(is_supporting_evidence(row) for row in passages)
+                    and (intent.kind != "scalar_fact" or
+                         any(row.get("evidence_tier") == "DIRECT_ANSWER" for row in passages)))
+        initial_route = route
+        primary_ms = (time.perf_counter()-started)*1000
+        expansion_reason = "search_depth" if search_depth else (
+            None if sufficient_evidence() else decision.reason.value)
+        expanded = False; local_ms = global_ms = 0.0; local_embeddings = 0
+        examined = len(passages); new_ids = []
+        expansion_fts_ms = expansion_vector_ms = alternate_embedding_ms = 0.0
+        # Primary drilldown already examines every passage of each identity doc.
+        # Weak results therefore need a different content query, not a repeated
+        # scan with the same vector. At most one alternate query per document.
+        if expansion_reason and embedder and time.perf_counter()-started < self.primary_budget_s:
+            tick = time.perf_counter()
+            for document in drill.documents:
+                if time.perf_counter()-started >= self.primary_budget_s:
+                    break
+                row = con.execute("SELECT filename,title FROM documents WHERE id=?",
+                                  (document["document_id"],)).fetchone()
+                factual = build_scoped_passage_query(question, f'{row["filename"]} {row["title"]}')
+                if _meaningful_terms(factual) == _meaningful_terms(question):
+                    continue
+                alternate = retrieve_document_passages(con, embedder, question,
+                    [document["document_id"]], config=config, intent=intent, search_depth=search_depth)
+                local_embeddings += 1
+                expansion_fts_ms += alternate.timings.get("drilldown_fts_ms", 0.0)
+                expansion_vector_ms += alternate.timings.get("drilldown_vector_ms", 0.0)
+                alternate_embedding_ms += alternate.timings.get("query_embedding_ms", 0.0)
+                examined += len(alternate.passages)
+                by_chunk = {row["chunk_id"]: row for row in passages}
+                for row in alternate.passages:
+                    old = by_chunk.get(row["chunk_id"])
+                    if old is None or row.get("passage_score", 0) > old.get("passage_score", 0):
+                        by_chunk[row["chunk_id"]] = row
+                passages = list(by_chunk.values())
+                expanded = True
+            local_ms = (time.perf_counter()-tick)*1000
+            result = make_result(); decision = decide_answerability(passages)
+        if ((not sufficient_evidence() or search_depth) and policy.mode != "strict"
+                and time.perf_counter()-started < self.total_budget_s):
+            tick = time.perf_counter()
+            # Reuse the discovery seed when one exists. Identity routing may
+            # invoke exactly one global hybrid fallback, with the original vector.
+            if seed is None:
+                seed = retrieve_rag_candidates(con, embedder, question, search_fn=self.search_fn,
+                    limit=max(48, limit*2), search_config=config, query_vector=vector)
+                hybrid_calls += 1
+            new_ids = [d["document_id"] for d in seed.ranked_documents
+                       if d["document_id"] not in ids][:RAG_EXPANSION_MAX_NEW_DOCUMENTS]
             if new_ids and time.perf_counter()-started < self.total_budget_s:
-                passages += retrieve_document_passages(con, embedder, question, new_ids, query_vector=vector, config=config, intent=intent).passages
-                related, expanded = seed.metadata_related, True; result = make_result(); decision = decide_answerability(passages)
+                extra = retrieve_document_passages(con, embedder, question, new_ids,
+                    query_vector=vector, config=config, intent=intent, search_depth=search_depth)
+                expansion_fts_ms += extra.timings.get("drilldown_fts_ms", 0.0)
+                expansion_vector_ms += extra.timings.get("drilldown_vector_ms", 0.0)
+                examined += len(extra.passages)
+                passages += extra.passages
+                related, expanded = seed.metadata_related, True
+                result = make_result(); decision = decide_answerability(passages)
+            global_ms = (time.perf_counter()-tick)*1000
+        if expanded or hybrid_calls and initial_route.startswith("identity"):
+            route = "identity_expanded" if initial_route.startswith("identity") else "hybrid_expanded"
         total_ms = (time.perf_counter()-started)*1000
-        trace = ({"route": route, "primary_documents": len(ids), "drilldown_documents": len(ids), "expanded": expanded, "global_hybrid_calls": hybrid_calls, "query_embeddings": int(vector is not None), "retrieval_total_ms": total_ms},)
-        result.timings.update(drill.timings); result.timings.update(retrieval_ms=total_ms, retrieval_total_ms=total_ms, spiral_total_ms=total_ms, route=route, expanded=expanded, global_hybrid_calls=hybrid_calls, query_embeddings=int(vector is not None), query_embedding_ms=embedding_ms, spiral_trace=trace)
-        LOGGER.info("RAG retrieval request_id=%s route=%s documents=%s expanded=%s total_ms=%.1f", request_id, route, len(ids), expanded, total_ms)
+        trace = ({"route": route, "initial_route": initial_route, "final_route": route,
+                  "expansion_reason": expansion_reason, "search_depth": search_depth,
+                  "primary_documents": len(ids), "drilldown_documents": len(ids)+len(new_ids),
+                  "passages_examined": examined,
+                  "evidence_retained": sum(is_supporting_evidence(row) for row in passages),
+                  "expanded": expanded, "global_hybrid_calls": hybrid_calls,
+                  "query_embeddings": int(vector is not None)+local_embeddings,
+                  "metadata_identity_ms": identity_ms, "local_expansion_ms": local_ms,
+                  "hybrid_expansion_ms": global_ms, "primary_retrieval_ms": primary_ms,
+                  "retrieval_total_ms": total_ms},)
+        seed_timings = seed.timings if seed is not None else {}
+        result.timings.update(seed_timings)
+        result.timings.update(drill.timings)
+        result.timings.update(
+            fts_retrieval_ms=seed_timings.get("fts_retrieval_ms", 0.0) +
+                drill.timings.get("drilldown_fts_ms", 0.0) + expansion_fts_ms,
+            vector_retrieval_ms=seed_timings.get("vector_retrieval_ms", 0.0) +
+                drill.timings.get("drilldown_vector_ms", 0.0) + expansion_vector_ms,
+            alternate_embedding_ms=alternate_embedding_ms)
+        result.timings.update(retrieval_ms=total_ms, spiral_total_ms=total_ms,
+                              query_embedding_ms=embedding_ms, spiral_trace=trace, **trace[0])
+        LOGGER.info("RAG retrieval request_id=%s trace=%s", request_id, trace[0])
         return SpiralResult(result, decision, route, trace, hybrid_calls > 0, embedding_ms, vector)

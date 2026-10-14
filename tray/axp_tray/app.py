@@ -27,10 +27,10 @@ from axp_daemon.service import send_control
 
 from .background_task import TaskSchedulerBackend
 from .icons import make_icon
-from .process import cleanup_owned_processes, ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon
+from .process import cleanup_owned_processes, ensure_client, restart_daemon, start_daemon, stop_client, stop_daemon, recover_unhealthy_daemon
 from .sources_window import SourcesWindow
 from .startup import is_enabled, repair_registration, set_enabled
-from .state import read_daemon_state, should_auto_restart, tooltip
+from .state import DaemonWatchdog, read_daemon_state, tooltip
 
 LOGGER = configure_logging("axp_tray", "tray.log")
 
@@ -55,6 +55,8 @@ class TrayApplication:
         self.root.withdraw()
         self.state = read_daemon_state()
         self.icon_state = None
+        self.watchdog = DaemonWatchdog()
+        self.recovery_active = False
         self.last_restart = -60.0
         self.last_stale_lock_warning = None
         self.ui_queue = queue.Queue()
@@ -244,27 +246,36 @@ class TrayApplication:
         self.state = read_daemon_state()
         desired = read_json(self.paths["desired"], {}) or {}
         should_run = desired.get("state", "running" if self.settings["auto_start_daemon"] else "stopped") == "running"
-        restart_candidate = should_run and (self.state.get("stale") or self.state.get("state") == "stopped")
-        instance_present = daemon_instance_running(self.settings["db_path"]) if restart_candidate else False
+        instance_present = daemon_instance_running(self.settings["db_path"]) if should_run else False
         self.state["daemon_instance_present"] = instance_present
-        self.state["restart_suppressed"] = bool(restart_candidate and instance_present)
         now = time.monotonic()
-        if self.state["restart_suppressed"] and (
-                self.last_stale_lock_warning is None or now - self.last_stale_lock_warning >= 60):
-            LOGGER.warning("Daemon heartbeat stale but daemon instance is still active; duplicate restart suppressed")
-            self.last_stale_lock_warning = now
-        elif not self.state["restart_suppressed"]:
-            self.last_stale_lock_warning = None
-        if should_auto_restart(self.state, "running" if should_run else "stopped",
-                               self.settings["auto_restart_daemon"], self.last_restart, now, instance_present):
-            LOGGER.warning("Auto-restart: stale heartbeat age=%s ms old_pid=%s",
-                           self.state.get("heartbeat_age_ms"), self.state.get("pid"))
-            try:
-                process = start_daemon(self.settings)
-                self.last_restart = time.monotonic()
-                LOGGER.info("Auto-restart requested%s", f" PID {process.pid}" if hasattr(process, "pid") else "")
-            except Exception:
-                LOGGER.exception("Auto-restart failed")
+        reason = self.watchdog.reason(self.state, "running" if should_run else "stopped",
+                                      self.settings["auto_restart_daemon"], instance_present, now)
+        if reason and not self.recovery_active:
+            self.watchdog.attempted(now)
+            self.recovery_active = True
+            snapshot = dict(self.state)
+            LOGGER.warning("Watchdog decision reason=%s instance=%s pid=%s heartbeat_age_ms=%s "
+                           "worker=%s stage=%s attempt=%s", reason, snapshot.get("instance_id"),
+                           snapshot.get("pid"), snapshot.get("heartbeat_age_ms"),
+                           snapshot.get("worker_state"), snapshot.get("current_stage"),
+                           len(self.watchdog.attempts))
+            def recover():
+                try:
+                    if reason == "instance_absent":
+                        # Recheck intent and lock after leaving the UI thread.
+                        desired_now = read_json(self.paths["desired"], {}) or {}
+                        if (desired_now.get("state", "running") == "running" and
+                                not daemon_instance_running(self.settings["db_path"])):
+                            start_daemon(self.settings)
+                    else:
+                        recover_unhealthy_daemon(self.settings, snapshot, reason)
+                except Exception:
+                    LOGGER.exception("Daemon recovery failed reason=%s instance=%s", reason,
+                                     snapshot.get("instance_id"))
+                finally:
+                    self.recovery_active = False
+            threading.Thread(target=recover, name="axp-recovery", daemon=True).start()
         state_name = self.state.get("state", "stopped")
         if state_name != self.icon_state:
             self.icon.icon = make_icon(state_name)

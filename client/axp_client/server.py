@@ -183,7 +183,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                 if profile == "quality" and quality_reranker is None:
                     quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
                 acquire_started = time.perf_counter()
-                with current_readers.acquire() as (con, reader_reused):
+                with current_readers.acquire(with_timings=True) as (con, reader_reused, reader_timings):
                     db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
                     result = search(
                             con,
@@ -193,6 +193,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                             explain=True,
                             reranker=quality_reranker if profile == "quality" else None,
                         ) if q else {"results": [], "timings": {}, "candidate_counts": {}}
+                    result["timings"].update(reader_timings)
                     result["timings"]["db_acquire_ms"] = db_acquire_ms
                     result["diagnostics"] = {
                         "reader_reused": reader_reused,

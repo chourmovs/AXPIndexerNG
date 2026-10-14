@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from .document_identity import (_meaningful_terms, analyze_document_identity,
                                 fold_search_text as _fold_search_text, identity_diagnostics)
+from .database import search_reader_diagnostics
 from .fts import search as lexical_search
 from .identifiers import extract_identifiers, normalize_identifier
 from .vectors import search as vector_search
@@ -170,6 +171,7 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
     timings["fusion_ms"] = timings.pop("rrf_ms")
     timings["passage_scoring_ms"] = max(0.0, timings["total_ms"] - sum(
         timings.get(key, 0.0) for key in ("fts_retrieval_ms", "vector_retrieval_ms", "fusion_ms", "rerank_ms")))
+    catalog = search_reader_diagnostics(con)
     diagnostics = {
         "timings": timings,
         "candidate_counts": {
@@ -180,7 +182,8 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
             "min_vector_similarity": config.min_vector_similarity,
             "min_lexical_coverage": config.min_lexical_coverage,
         },
-        "total_chunks": con.execute("SELECT count(*) FROM chunks").fetchone()[0],
-        "total_vectors": con.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0],
+        "total_chunks": catalog["total_chunks"],
+        "total_vectors": catalog["total_vectors"],
+        "catalog_snapshot_stale": catalog["catalog_snapshot_stale"],
     }
     return {"results": final, **diagnostics} if explain else final

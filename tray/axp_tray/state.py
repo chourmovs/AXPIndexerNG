@@ -10,7 +10,12 @@ def read_daemon_state(stale_after_s=HEARTBEAT_STALE_AFTER_S, now_ms=None):
     value = read_json(runtime_paths()["state"], {}) or {}
     heartbeat = value.get("heartbeat_ms", 0)
     current_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    age_ms = current_ms - heartbeat if heartbeat else None
+    monotonic_heartbeat = value.get("heartbeat_monotonic")
+    if now_ms is None and isinstance(monotonic_heartbeat, (int, float)):
+        delta = time.monotonic() - monotonic_heartbeat
+        age_ms = delta * 1000 if delta >= 0 else None
+    else:
+        age_ms = current_ms - heartbeat if heartbeat else None
     value["heartbeat_age_ms"] = age_ms
     value["stale"] = age_ms is None or age_ms > stale_after_s * 1000
     return value
@@ -55,3 +60,43 @@ def should_auto_restart(state, desired_state, enabled, last_restart_monotonic, n
     return bool(
         needs_restart and now_monotonic - last_restart_monotonic >= AUTO_RESTART_COOLDOWN_S
     )
+
+
+STARTUP_GRACE_S = 180
+WORKER_STALL_AFTER_S = 1800
+
+
+class DaemonWatchdog:
+    """Monotonic, bounded recovery policy, including live lock holders."""
+    def __init__(self):
+        self.instance = None
+        self.first_seen = None
+        self.attempts = []
+        self.last_attempt = None
+
+    def reason(self, state, desired, enabled, instance_present, now):
+        if desired != "running" or not enabled or state.get("state") == "stopping":
+            return None
+        identity = state.get("instance_id")
+        if identity != self.instance or self.first_seen is None:
+            self.instance, self.first_seen = identity, now
+        self.attempts = [tick for tick in self.attempts if now - tick < 900]
+        if len(self.attempts) >= 3:
+            return None
+        cooldown = min(300, 60 * 2 ** max(0, len(self.attempts) - 1))
+        if self.last_attempt is not None and now - self.last_attempt < cooldown:
+            return None
+        if instance_present and now - self.first_seen < STARTUP_GRACE_S:
+            return None
+        if not instance_present:
+            return "instance_absent"
+        if state.get("stale"):
+            return "heartbeat_stale"
+        progress = state.get("worker_progress_monotonic")
+        if isinstance(progress, (int, float)) and now - progress > WORKER_STALL_AFTER_S:
+            return "worker_stalled"
+        return None
+
+    def attempted(self, now):
+        self.last_attempt = now
+        self.attempts.append(now)
