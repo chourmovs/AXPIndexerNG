@@ -6,6 +6,7 @@ import re
 import logging
 from dataclasses import dataclass
 
+from axp_core.tracing import span, traced, sql_rows
 from axp_core.fts import search_documents as lexical_search_documents
 from axp_core.fts import TOKEN_RE
 from axp_core.hybrid import SearchConfig, _meaningful_terms, _relevance, fold_search_text
@@ -29,6 +30,7 @@ class QueryEvidenceIntent:
     target_terms: frozenset[str]
 
 
+@traced('Normalisation et intention')
 def classify_query_evidence_intent(query):
     """Conservatively split scalar-property targets from material identity."""
     folded = query.casefold()
@@ -78,6 +80,7 @@ def detect_scalar_evidence(text, target_terms, *, proximity=220):
             "target_value_proximity": nearest}
 
 
+@traced('Classification des preuves')
 def classify_passages(passages, intent, *, neighbors=True):
     """Annotate candidate passages with factual evidence diagnostics in-place."""
     by_position = {(int(row.get("document_id", -1)), int(row.get("chunk_no", -999))): row for row in passages}
@@ -157,6 +160,7 @@ class DocumentDrilldownResult:
     documents: list[dict]
 
 
+@traced('Drilldown')
 def retrieve_document_passages(con, embedder, query, document_ids, *, query_vector=None,
                                 search_depth=0, config=None, intent=None):
     """Rank all existing chunks in a small selected-document working set."""
@@ -169,6 +173,8 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
     config = config or SearchConfig()
     intent = intent or classify_query_evidence_intent(query)
     if not ids:
+        with span("Lecture et scoring drilldown", "retrieval.drilldown_work") as measured:
+            measured.skip("no_documents")
         return DocumentDrilldownResult([], {"drilldown_total_ms": 0.0, "drilldown_fts_ms": 0.0,
                                             "drilldown_vector_ms": 0.0, "drilldown_scoring_ms": 0.0,
                                             "query_embedding_ms": 0.0}, [])
@@ -201,7 +207,8 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
             vector = query_vector
             if vector is None and embedder is not None:
                 embed_started = time.perf_counter()
-                vector = embedder.embed_query(scoped_query)
+                with span("Embedding alternatif drilldown", "embedder.embed_query"):
+                    vector = embedder.embed_query(scoped_query)
                 embedding_ms += (time.perf_counter() - embed_started) * 1000
             if vector is not None:
                 vectors.extend(vector_search_documents(con, vector, scoped_ids))
@@ -211,84 +218,86 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
         vectors = []
     vector_ms = (time.perf_counter() - tick) * 1000
     placeholders = ",".join("?" for _ in ids)
-    rows = con.execute(f"""SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,
+    rows = sql_rows(con, f"""SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,
  c.section_heading heading,d.path,d.filename,d.title,d.ingestion_mode,
  c.text snippet FROM chunks c JOIN documents d ON d.id=c.document_id
- WHERE c.document_id IN ({placeholders}) ORDER BY c.document_id,c.chunk_no""", ids).fetchall()
-    merged = {int(row["chunk_id"]): dict(row) for row in rows}
-    for item in merged.values():
-        item.setdefault("identifiers", "")
-        item.setdefault("source_id", None)
-    for kind, candidates in (("lexical", lexical), ("vector", vectors)):
-        ranks_by_document = {}
-        for candidate in candidates:
-            document_id = int(candidate["document_id"])
-            rank = ranks_by_document.get(document_id, 0) + 1
-            ranks_by_document[document_id] = rank
-            item = merged[int(candidate["chunk_id"])]
-            item.update({key: value for key, value in candidate.items() if value is not None})
-            item[f"{kind}_rank"] = rank
-            if kind == "lexical":
-                item["scoped_lexical_rank"] = rank
-    tick = time.perf_counter()
-    query_ids = {value for value, _ in extract_identifiers(query)}
-    quoted = [part for index, part in enumerate(query.split('"')) if index % 2 and part.strip()]
-    query_terms = _meaningful_terms(query)
-    document_terms = {}
-    for item in merged.values():
-        document_id = int(item["document_id"])
-        if document_id not in document_terms:
-            document_terms[document_id] = _meaningful_terms(
-                f'{item.get("title") or ""} {item.get("filename") or ""}')
-    for item in merged.values():
-        item.setdefault("lexical_rank", None)
-        item.setdefault("scoped_lexical_rank", None)
-        item.setdefault("vector_rank", None)
-        item.setdefault("vector_distance", None)
-        content_ids = {value for value, _ in extract_identifiers(item.get("snippet") or "")}
-        item["exact_identifier_match"] = bool(query_ids & content_ids)
-        item["exact_phrase_match"] = any(value.casefold() in (item.get("snippet") or "").casefold()
-                                                 for value in quoted)
-        item["exact_filename_match"] = False
-        # Terms strongly satisfied by document identity no longer penalize its individual passages.
-        passage_terms = query_terms - (query_terms & document_terms[int(item["document_id"])])
-        _relevance(item, passage_terms or query_terms, config)
-    classify_passages(list(merged.values()), intent)
-    passages = []
-    for document_rank, document_id in enumerate(ids, 1):
-        ranked = [item for item in merged.values() if int(item["document_id"]) == document_id]
-        # Scoped factual lexical evidence is a bounded drill-down-only priority, not a global score change.
-        ranked.sort(key=lambda item: (-{"DIRECT_ANSWER": 2, "STRONG_SUPPORT": 1,
-                                       "TOPICAL_ONLY": 0}.get(item.get("evidence_tier"), 0),
-                                      -int(bool(item.get("exact_phrase_match"))),
-                                      -int(item.get("scoped_lexical_rank") is not None),
-                                      item.get("scoped_lexical_rank") or 10**9,
-                                      -item["passage_score"],
-                                      -(item.get("vector_similarity") or 0), item["chunk_id"]))
-        for passage_rank, item in enumerate(ranked, 1):
-            item["document_rank"] = document_rank
-            item["passage_rank"] = passage_rank
-            item["scoped_passage_query"] = scoped_queries[document_id]
-        passages.extend(ranked)
-    scoring_ms = (time.perf_counter() - tick) * 1000
-    diagnostics = []
-    for document_rank, document_id in enumerate(ids, 1):
-        ranked = [item for item in passages if int(item["document_id"]) == document_id]
-        best = ranked[0] if ranked else {}
-        diagnostics.append({"document_rank": document_rank, "document_id": document_id, "filename": best.get("filename"),
-            "scoped_passage_query": scoped_queries[document_id],
-            "chunks_examined": len(ranked), "matching_chunks": sum(row.get("lexical_rank") is not None for row in ranked),
-            "best_chunk_no": best.get("chunk_no"), "best_page_no": best.get("page_no"),
-            "best_passage_score": best.get("passage_score", 0.0),
-            "scoped_lexical_rank": best.get("scoped_lexical_rank"),
-            "best_vector_similarity": best.get("vector_similarity"),
-            "best_content_coverage": best.get("content_lexical_coverage", 0.0)})
+ WHERE c.document_id IN ({placeholders}) ORDER BY c.document_id,c.chunk_no""", ids)
+    with span('Fusion, scoring et regroupement drilldown', 'retrieval.drilldown_scoring'):
+        merged = {int(row["chunk_id"]): dict(row) for row in rows}
+        for item in merged.values():
+            item.setdefault("identifiers", "")
+            item.setdefault("source_id", None)
+        for kind, candidates in (("lexical", lexical), ("vector", vectors)):
+            ranks_by_document = {}
+            for candidate in candidates:
+                document_id = int(candidate["document_id"])
+                rank = ranks_by_document.get(document_id, 0) + 1
+                ranks_by_document[document_id] = rank
+                item = merged[int(candidate["chunk_id"])]
+                item.update({key: value for key, value in candidate.items() if value is not None})
+                item[f"{kind}_rank"] = rank
+                if kind == "lexical":
+                    item["scoped_lexical_rank"] = rank
+        tick = time.perf_counter()
+        query_ids = {value for value, _ in extract_identifiers(query)}
+        quoted = [part for index, part in enumerate(query.split('"')) if index % 2 and part.strip()]
+        query_terms = _meaningful_terms(query)
+        document_terms = {}
+        for item in merged.values():
+            document_id = int(item["document_id"])
+            if document_id not in document_terms:
+                document_terms[document_id] = _meaningful_terms(
+                    f'{item.get("title") or ""} {item.get("filename") or ""}')
+        for item in merged.values():
+            item.setdefault("lexical_rank", None)
+            item.setdefault("scoped_lexical_rank", None)
+            item.setdefault("vector_rank", None)
+            item.setdefault("vector_distance", None)
+            content_ids = {value for value, _ in extract_identifiers(item.get("snippet") or "")}
+            item["exact_identifier_match"] = bool(query_ids & content_ids)
+            item["exact_phrase_match"] = any(value.casefold() in (item.get("snippet") or "").casefold()
+                                                     for value in quoted)
+            item["exact_filename_match"] = False
+            # Terms strongly satisfied by document identity no longer penalize its individual passages.
+            passage_terms = query_terms - (query_terms & document_terms[int(item["document_id"])])
+            _relevance(item, passage_terms or query_terms, config)
+        classify_passages(list(merged.values()), intent)
+        passages = []
+        for document_rank, document_id in enumerate(ids, 1):
+            ranked = [item for item in merged.values() if int(item["document_id"]) == document_id]
+            # Scoped factual lexical evidence is a bounded drill-down-only priority, not a global score change.
+            ranked.sort(key=lambda item: (-{"DIRECT_ANSWER": 2, "STRONG_SUPPORT": 1,
+                                           "TOPICAL_ONLY": 0}.get(item.get("evidence_tier"), 0),
+                                          -int(bool(item.get("exact_phrase_match"))),
+                                          -int(item.get("scoped_lexical_rank") is not None),
+                                          item.get("scoped_lexical_rank") or 10**9,
+                                          -item["passage_score"],
+                                          -(item.get("vector_similarity") or 0), item["chunk_id"]))
+            for passage_rank, item in enumerate(ranked, 1):
+                item["document_rank"] = document_rank
+                item["passage_rank"] = passage_rank
+                item["scoped_passage_query"] = scoped_queries[document_id]
+            passages.extend(ranked)
+        scoring_ms = (time.perf_counter() - tick) * 1000
+        diagnostics = []
+        for document_rank, document_id in enumerate(ids, 1):
+            ranked = [item for item in passages if int(item["document_id"]) == document_id]
+            best = ranked[0] if ranked else {}
+            diagnostics.append({"document_rank": document_rank, "document_id": document_id, "filename": best.get("filename"),
+                "scoped_passage_query": scoped_queries[document_id],
+                "chunks_examined": len(ranked), "matching_chunks": sum(row.get("lexical_rank") is not None for row in ranked),
+                "best_chunk_no": best.get("chunk_no"), "best_page_no": best.get("page_no"),
+                "best_passage_score": best.get("passage_score", 0.0),
+                "scoped_lexical_rank": best.get("scoped_lexical_rank"),
+                "best_vector_similarity": best.get("vector_similarity"),
+                "best_content_coverage": best.get("content_lexical_coverage", 0.0)})
     timings = {"drilldown_total_ms": (time.perf_counter() - started) * 1000,
                "drilldown_fts_ms": fts_ms, "drilldown_vector_ms": vector_ms,
                "drilldown_scoring_ms": scoring_ms, "query_embedding_ms": embedding_ms}
     return DocumentDrilldownResult(passages, timings, diagnostics)
 
 
+@traced('Classement des documents')
 def rank_documents(hits, *, intent=None, query=""):
     grouped = {}
     for hit in hits:

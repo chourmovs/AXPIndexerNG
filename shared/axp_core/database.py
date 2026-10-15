@@ -5,6 +5,7 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
+from .tracing import span, traced, current_trace
 from .metadata import IndexRebuildRequired, upgrade_v3_index_signature
 from .schema import BASE_SCHEMA, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, SOURCES_SCHEMA
 from .sources import default_label, detect_source_kind, normalize_source_path
@@ -62,9 +63,12 @@ def connect(path: str | Path, *, dimension: int | None = None, readonly: bool = 
     row = con.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
         con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
-    from .identity_index import ensure_identity_index
+    from .identity_index import ensure_identity_index, ensure_unicode_identity_index
 
     ensure_identity_index(con)
+    ensure_unicode_identity_index(con)
+    from .identity_cache import ensure_identity_generation
+    ensure_identity_generation(con)
     con.commit()
     return con
 
@@ -73,6 +77,7 @@ SEARCH_CACHE_KIB = 65_536
 SEARCH_MMAP_BYTES = 268_435_456
 
 
+@traced("Configuration reader et chargement du diagnostic catalogue")
 def configure_search_reader(con):
     """Apply bounded, read-intensive settings without affecting writer connections."""
     con.execute("PRAGMA query_only=ON")
@@ -101,6 +106,7 @@ _DIAGNOSTIC_SNAPSHOTS = OrderedDict()
 _DIAGNOSTIC_LOCK = threading.Lock()
 
 
+@traced("Catalogue : compteurs de diagnostic")
 def search_reader_diagnostics(con, *, refresh=False):
     """Return a startup snapshot; interactive requests never rescan the corpus.
 
@@ -113,9 +119,14 @@ def search_reader_diagnostics(con, *, refresh=False):
         cached = _DIAGNOSTIC_SNAPSHOTS.get(con)
         if cached is not None and not refresh:
             _DIAGNOSTIC_SNAPSHOTS.move_to_end(con)
-            return {**cached, "catalog_snapshot_stale":
+            result = {**cached, "catalog_snapshot_stale":
                     cached["catalog_snapshot_data_version"] != version or
                     cached["catalog_snapshot_total_changes"] != changes}
+            with span("Réutilisation compteurs catalogue", "database.diagnostic_snapshot") as measured:
+                measured.detail(cache="hit", generation=cached["catalog_snapshot_data_version"],
+                                invalidation_reason="any_database_write" if result["catalog_snapshot_stale"] else None,
+                                scope="startup diagnostic counts only; not identity cache or retrieval")
+            return result
     def pragma(name, default=None):
         try:
             row = con.execute(f"PRAGMA {name}").fetchone()
@@ -129,20 +140,23 @@ def search_reader_diagnostics(con, *, refresh=False):
         except sqlite3.Error:
             return None
 
-    result = {
-        "catalog_snapshot_data_version": version, "catalog_snapshot_total_changes": changes,
-        "catalog_snapshot_stale": False,
-        "sqlite_cache_size": pragma("cache_size"),
-        "sqlite_mmap_size": pragma("mmap_size", 0),
-        "sqlite_temp_store": pragma("temp_store"),
-        "total_chunks": count("chunks"),
-        "total_vectors": count("chunk_vectors"),
-        **fts_structural_diagnostics(con),
-    }
-    with _DIAGNOSTIC_LOCK:
-        _DIAGNOSTIC_SNAPSHOTS[con] = result
-        while len(_DIAGNOSTIC_SNAPSHOTS) > 8:
-            _DIAGNOSTIC_SNAPSHOTS.popitem(last=False)
+    with span("Reconstruction compteurs catalogue", "database.diagnostic_counts") as measured:
+        measured.detail(cache="miss", invalidation_reason="explicit_refresh" if refresh else "reader_startup")
+        result = {
+            "catalog_snapshot_data_version": version, "catalog_snapshot_total_changes": changes,
+            "catalog_snapshot_stale": False,
+            "sqlite_cache_size": pragma("cache_size"),
+            "sqlite_mmap_size": pragma("mmap_size", 0),
+            "sqlite_temp_store": pragma("temp_store"),
+            "total_chunks": count("chunks"),
+            "total_vectors": count("chunk_vectors"),
+            **fts_structural_diagnostics(con),
+        }
+    with span("Publication compteurs catalogue", "database.publish_diagnostics"):
+        with _DIAGNOSTIC_LOCK:
+            _DIAGNOSTIC_SNAPSHOTS[con] = result
+            while len(_DIAGNOSTIC_SNAPSHOTS) > 8:
+                _DIAGNOSTIC_SNAPSHOTS.popitem(last=False)
     return dict(result)
 
 
@@ -164,29 +178,38 @@ class SearchReaderPool:
         acquire_started = time.perf_counter()
         con = None
         reused = False
-        with self._condition:
-            while not self._closed and not self._available and self._created >= self.size:
-                self._condition.wait()
-            if self._closed:
-                raise RuntimeError("Search reader pool is closed")
-            if self._available:
-                con = self._available.pop()
-                reused = True
-            else:
-                # Reserve the slot before opening so concurrent initialization stays bounded.
-                self._created += 1
+        with span("Attente reader / verrou du pool", "SearchReaderPool.condition"):
+            with self._condition:
+                while not self._closed and not self._available and self._created >= self.size:
+                    self._condition.wait(.05)
+                    if current_trace():
+                        current_trace().check()
+                if self._closed:
+                    raise RuntimeError("Search reader pool is closed")
+                if self._available:
+                    con = self._available.pop()
+                    reused = True
+                else:
+                    # Reserve the slot before opening so concurrent initialization stays bounded.
+                    self._created += 1
         queue_ms = (time.perf_counter() - acquire_started) * 1000
         open_started = time.perf_counter()
         if con is None:
             try:
-                con = connect(self.path, readonly=True, check_same_thread=False)
-                configure_search_reader(con)
-            except Exception:
+                with span("Ouverture reader", "database.connect(readonly)"):
+                    con = connect(self.path, readonly=True, check_same_thread=False)
+                    configure_search_reader(con)
+            except BaseException:
+                if con is not None:
+                    con.close()
                 with self._condition:
                     self._created -= 1
                     self._condition.notify()
                 raise
         open_ms = 0.0 if reused else (time.perf_counter() - open_started) * 1000
+        if reused:
+            with span("Ouverture reader", "database.connect(readonly)") as measured:
+                measured.skip("reader_reused")
         try:
             if with_timings:
                 yield con, reused, {"reader_queue_wait_ms": queue_ms, "reader_open_ms": open_ms}

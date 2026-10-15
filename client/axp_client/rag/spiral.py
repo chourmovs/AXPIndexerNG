@@ -6,10 +6,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from axp_core.tracing import span, traced, sql_rows, current_trace
 from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig, _meaningful_terms, fold_search_text
 from axp_core.document_identity import analyze_document_identity
 from axp_core.identity_index import identity_candidate_ids
+from axp_core.identity_cache import identity_resolution
 from axp_core.identifiers import extract_identifiers
 from axp_core.path_keys import canonical_path_key, sql_path_prefix
 
@@ -92,7 +94,20 @@ def default_spiral_plan(*, search_depth=0, now_ms=None):
     ))
 
 
+@traced('Identité documentaire')
 def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope=None):
+    scope = scope or RetrievalScope()
+    with identity_resolution(con, question, scope, limit) as (cached, publish):
+        if cached is not None:
+            return cached
+        result = _resolve_identity_documents(con, question, limit=limit, scope=scope)
+        with span("Publication résolution identité", "identity_cache.publish") as measured:
+            publish(result)
+            measured.count(documents=len(result))
+        return result
+
+
+def _resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope=None):
     """Route explicit identities using metadata only and deterministic tuple ranking."""
     intent = classify_query_evidence_intent(question)
     terms = set(intent.identity_terms)
@@ -123,26 +138,32 @@ def resolve_identity_documents(con, question, *, limit=IDENTITY_DOCUMENTS, scope
         clauses.append("(" + " OR ".join("lower(d.path_key) LIKE ? ESCAPE '\\'"
                                            for _ in scope.path_prefixes) + ")")
         values.extend(sql_path_prefix(value) for value in scope.path_prefixes)
-    rows = con.execute("SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,"
+    rows = sql_rows(con, "SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,"
                        "s.label source_label,s.path source_path FROM documents d JOIN sources s ON s.id=d.source_id "
-                       "WHERE " + " AND ".join(clauses), values).fetchall()
-    ranked = []
-    for row in rows:
-        item = dict(row)
-        metadata = " ".join(str(item.get(key) or "") for key in ("title", "filename", "path", "path_key"))
-        folded = fold_search_text(metadata)
-        metadata_terms = _meaningful_terms(metadata)
-        id_exact = any(value.casefold() in folded for value in identifiers)
-        identity = analyze_document_identity(question, filename=item.get("filename"), title=item.get("title"),
-            source_label=item.get("source_label"), source_path=item.get("source_path"))
-        covered = terms & metadata_terms
-        complete = bool(terms and covered == terms)
-        if not (id_exact or any(identity.priority) or covered):
-            continue
-        key = (-int(id_exact), *(-value for value in identity.priority),
-               -identity.collection_coverage, -identity.metadata_identity_coverage,
-               -int(complete), -len(covered), int(item["id"]))
-        ranked.append((key, int(item["id"])))
+                       "WHERE " + " AND ".join(clauses), values)
+    with span('Normalisation, matching et scoring identité', 'spiral.identity_scoring') as measured:
+        measured.count(documents=len(rows), candidates=len(rows))
+        ranked = []
+        for row in rows:
+            if current_trace():
+                current_trace().check()
+            with span("Normalisation métadonnées et chemin", "spiral.normalize_metadata") as normalized:
+                item = dict(row)
+                metadata = " ".join(str(item.get(key) or "") for key in ("title", "filename", "path", "path_key"))
+                folded = fold_search_text(metadata)
+                metadata_terms = _meaningful_terms(metadata)
+                id_exact = any(value.casefold() in folded for value in identifiers)
+                normalized.count(documents=1)
+            identity = analyze_document_identity(question, filename=item.get("filename"), title=item.get("title"),
+                source_label=item.get("source_label"), source_path=item.get("source_path"))
+            covered = terms & metadata_terms
+            complete = bool(terms and covered == terms)
+            if not (id_exact or any(identity.priority) or covered):
+                continue
+            key = (-int(id_exact), *(-value for value in identity.priority),
+                   -identity.collection_coverage, -identity.metadata_identity_coverage,
+                   -int(complete), -len(covered), int(item["id"]))
+            ranked.append((key, int(item["id"])))
     return [document_id for _, document_id in sorted(ranked)[:max(0, min(limit, SCOPED_VECTOR_MAX_DOCUMENTS))]]
 
 

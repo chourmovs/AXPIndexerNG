@@ -1,4 +1,5 @@
-import {searchDocuments} from './api.js';
+import {searchDocuments, searchProgress, cancelSearch} from './api.js';
+import {SearchDiagnostics, SearchGeneration} from './search-diagnostics.js';
 import {createDocumentActions} from './documents.js';
 import {appendHighlighted, element} from './ui.js';
 const stopwords = new Set(['and', 'are', 'the', 'for', 'with', 'les', 'des', 'une', 'dans', 'pour', 'avec']);
@@ -20,8 +21,85 @@ function renderResult(row, terms) { const article = element('article', 'result-c
   score.title = details.join('\n'); header.append(title, score);
   const path = element('div', 'path', row.path); const source = element('small', '', `Source: ${row.source_label || row.source_path || '—'}`);
   const snippet = element('p'); appendHighlighted(snippet, row.snippet, terms); article.append(header, path, source, snippet, createDocumentActions(row.document_id)); return article; }
-export function initSearch() { const form = document.querySelector('#search-form'); const results = document.querySelector('#results');
-  form.addEventListener('submit', async event => { event.preventDefault(); const query = document.querySelector('#search-input').value.trim(); if (!query) return;
-    results.textContent = 'Searching…'; try { const rows = await searchDocuments(query); if (!rows.length) { results.textContent = 'No sufficiently relevant result.'; return; }
-      const terms = queryTerms(query); results.replaceChildren(...rows.map(row => renderResult(row, terms)));
-    } catch (_) { results.textContent = 'Search is temporarily unavailable.'; } }); }
+export function initSearch() {
+  const form = document.querySelector('#search-form'), results = document.querySelector('#results');
+  const cancel = document.querySelector('#cancel-search'), diagnostic = new SearchDiagnostics();
+  const generation = new SearchGeneration(); let active = null;
+  const stop = state => {
+    if (!state || state.done) return;
+    state.done = true; state.controller.abort(); state.pollController?.abort(); clearInterval(state.timer);
+    cancelSearch(state.token.requestId).catch(() => {});
+  };
+  cancel.addEventListener('click', () => {
+    const state = active; if (!state || state.done) return;
+    stop(state); const cancelledToken = generation.begin(state.token.requestId); cancel.hidden = true;
+    state.browser.cancellation_requested = true;
+    diagnostic.update(state.trace, {...state.browser, elapsed_ms:performance.now()-state.started});
+    results.textContent = 'Recherche annulée.';
+    const follow = async attempt => {
+      if (attempt >= 20 || !generation.accepts(cancelledToken)) return;
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 1000);
+      try {
+        const trace = await searchProgress(state.token.requestId, controller.signal);
+        if (!generation.accepts(cancelledToken)) return;
+        diagnostic.update(trace, {...state.browser, elapsed_ms:performance.now()-state.started});
+        if (trace.status !== 'running') return;
+      } catch (_) { /* The browser cancellation remains effective without progress. */ }
+      finally { clearTimeout(timeout); }
+      setTimeout(() => void follow(attempt+1), 250);
+    };
+    void follow(0);
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); const query = document.querySelector('#search-input').value.trim(); if (!query) return;
+    stop(active);
+    const requestId = crypto.randomUUID(), token = generation.begin(requestId);
+    const state = {token, controller:new AbortController(), started:performance.now(), browser:{},
+      trace:{request_id:requestId, status:'running', spans:[]}, done:false, polling:false};
+    active = state; diagnostic.reset(requestId); cancel.hidden = false; results.textContent = 'Searching…';
+    const refresh = () => {
+      if (!generation.accepts(token) || state.done) return;
+      state.browser.elapsed_ms = performance.now()-state.started;
+      diagnostic.update(state.trace, state.browser);
+    };
+    const poll = async () => {
+      if (state.polling || state.done || !generation.accepts(token)) return;
+      state.polling = true; const controller = new AbortController(); state.pollController = controller;
+      const timeout = setTimeout(() => controller.abort(), 1500);
+      try {
+        const trace = await searchProgress(requestId, controller.signal);
+        if (!state.done && generation.accepts(token)) { state.trace = trace; state.browser.progress_failed = false; refresh(); }
+      } catch (error) { if (generation.accepts(token) && !state.done && error.status !== 404) state.browser.progress_failed = true; }
+      finally { clearTimeout(timeout); state.polling = false; }
+    };
+    state.timer = setInterval(() => { refresh(); void poll(); }, 250);
+    const httpStarted = performance.now(); state.browser.browser_pre_request_ms = httpStarted-state.started;
+    try {
+      const response = await searchDocuments(query, requestId, state.controller.signal);
+      if (!generation.accepts(token) || state.done) return;
+      state.browser.http_ms = performance.now()-httpStarted;
+      const renderStarted = performance.now(), rows = response.results;
+      if (!rows.length) results.textContent = 'No sufficiently relevant result.';
+      else results.replaceChildren(...rows.map(row => renderResult(row, queryTerms(query))));
+      state.browser.render_ms = performance.now()-renderStarted;
+      state.browser.first_result_timing_method = 'Two animation frames: upper bound after a paint opportunity; render_ms measures DOM preparation only';
+      state.trace = response.request_trace;
+      state.browser.http_outside_server_ms = Math.max(0, state.browser.http_ms-state.trace.elapsed_ms);
+      // Give results a paint opportunity before building the diagnostic tree.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!generation.accepts(token)) return;
+        state.browser.first_result_ms = performance.now()-state.started;
+        state.browser.elapsed_ms = state.browser.first_result_ms;
+        diagnostic.update(state.trace, state.browser);
+      }));
+    } catch (error) {
+      if (generation.accepts(token) && !state.done) {
+        results.textContent = 'Search is temporarily unavailable.';
+        diagnostic.update(error.body?.request_trace || {...state.trace, status:'error', active_stage:null}, {...state.browser, elapsed_ms:performance.now()-state.started});
+      }
+    } finally {
+      state.done = true; clearInterval(state.timer); state.pollController?.abort();
+      if (generation.accepts(token)) cancel.hidden = true;
+    }
+  });
+}
