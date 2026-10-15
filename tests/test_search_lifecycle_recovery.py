@@ -97,13 +97,15 @@ def test_native_scoped_vector_distance_and_query_plan(tmp_path):
 
 def test_interactive_diagnostics_reuse_snapshot_and_label_changes(tmp_path):
     c = catalog(tmp_path)
-    before = search_reader_diagnostics(c)
+    before = search_reader_diagnostics(c, refresh=True)
     statements = []
     c.set_trace_callback(statements.append)
     c.execute("INSERT INTO chunks(document_id,chunk_no,text) VALUES(1,1,'new')")
     c.commit()
     current = search_reader_diagnostics(c)
-    assert current["catalog_snapshot_stale"] and current["total_chunks"] == before["total_chunks"]
+    assert current["catalog_snapshot_status"] == "sampled"
+    assert current["total_chunks"] == before["total_chunks"] == 1
+    assert current["catalog_snapshot_age_ms"] >= 0
     assert not any("count(" in sql.lower() for sql in statements)
     c.close()
 

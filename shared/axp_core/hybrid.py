@@ -111,7 +111,7 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
         lexical = lexical_search(con, query, config.lexical_candidates)
     timings["fts_retrieval_ms"] = (time.perf_counter() - t) * 1000
     t = time.perf_counter()
-    vector = vector_search(con, query_vector, config.vector_candidates)
+    vector = vector_search(con, query_vector, config.vector_candidates, timings=timings)
     timings["vector_retrieval_ms"] = (time.perf_counter() - t) * 1000
     t = time.perf_counter()
     with span('Fusion et identité des candidats', 'hybrid.fusion'):

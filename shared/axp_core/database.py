@@ -1,3 +1,4 @@
+import contextvars
 import sqlite3
 import threading
 import time
@@ -77,8 +78,8 @@ SEARCH_CACHE_KIB = 65_536
 SEARCH_MMAP_BYTES = 268_435_456
 
 
-@traced("Configuration reader et chargement du diagnostic catalogue")
-def configure_search_reader(con):
+@traced("Configuration reader sans reconstruction")
+def configure_search_reader(con, *, include_diagnostics=True):
     """Apply bounded, read-intensive settings without affecting writer connections."""
     con.execute("PRAGMA query_only=ON")
     con.execute(f"PRAGMA cache_size=-{SEARCH_CACHE_KIB}")
@@ -88,7 +89,7 @@ def configure_search_reader(con):
     except sqlite3.Error:
         # mmap is an optional SQLite/platform facility; the page cache remains usable.
         pass
-    return search_reader_diagnostics(con)
+    return search_reader_diagnostics(con) if include_diagnostics else {}
 
 
 def fts_structural_diagnostics(con):
@@ -102,31 +103,73 @@ def fts_structural_diagnostics(con):
         return {"fts_segment_count": None, "fts_index_pages": None}
 
 
+# Process-wide, path-scoped samples. Writers do not invalidate these on every
+# commit: counts are explicitly sampled/aged, never advertised as live truth.
 _DIAGNOSTIC_SNAPSHOTS = OrderedDict()
 _DIAGNOSTIC_LOCK = threading.Lock()
+DIAGNOSTIC_MAX_AGE_S = 300
 
 
-@traced("Catalogue : compteurs de diagnostic")
-def search_reader_diagnostics(con, *, refresh=False):
-    """Return a startup snapshot; interactive requests never rescan the corpus.
+def _diagnostic_key(con):
+    try:
+        path = next(row[2] for row in con.execute("PRAGMA database_list") if row[1] == "main")
+        if not path:
+            return ("memory", id(con)), None
+        path = Path(path).resolve()
+        stat = path.stat()
+        return (str(path), stat.st_dev, stat.st_ino), path
+    except (sqlite3.Error, OSError, StopIteration, TypeError):
+        return ("unavailable", id(con)), None
 
-    Counts are explicitly marked stale after a writer commit. Call refresh=True
-    from maintenance/diagnostics when exact current counts are needed.
-    """
-    version = con.execute("PRAGMA data_version").fetchone()[0]
-    changes = getattr(con, "total_changes", 0)
+
+def _collect_diagnostic_snapshot(con, key):
+    # All counts describe one WAL snapshot, including during daemon commits.
+    sampled_ms = int(time.time() * 1000)
+    started = time.perf_counter()
+    con.execute("SAVEPOINT diagnostic_counts")
+    try:
+        def count(table):
+            try:
+                return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+            except sqlite3.Error:
+                return None
+
+        result = {"total_chunks": count("chunks"), "total_vectors": count("chunk_vectors"),
+                  **fts_structural_diagnostics(con), "catalog_snapshot_sampled_ms": sampled_ms}
+    finally:
+        con.execute("RELEASE diagnostic_counts")
+    result["catalog_snapshot_build_ms"] = (time.perf_counter() - started) * 1000
     with _DIAGNOSTIC_LOCK:
-        cached = _DIAGNOSTIC_SNAPSHOTS.get(con)
-        if cached is not None and not refresh:
-            _DIAGNOSTIC_SNAPSHOTS.move_to_end(con)
-            result = {**cached, "catalog_snapshot_stale":
-                    cached["catalog_snapshot_data_version"] != version or
-                    cached["catalog_snapshot_total_changes"] != changes}
-            with span("Réutilisation compteurs catalogue", "database.diagnostic_snapshot") as measured:
-                measured.detail(cache="hit", generation=cached["catalog_snapshot_data_version"],
-                                invalidation_reason="any_database_write" if result["catalog_snapshot_stale"] else None,
-                                scope="startup diagnostic counts only; not identity cache or retrieval")
-            return result
+        state = _DIAGNOSTIC_SNAPSHOTS.setdefault(key, {})
+        state.update(snapshot=result, error=None)
+    return result
+
+
+def _refresh_diagnostics(path, key):
+    try:
+        con = connect(path, readonly=True)
+        try:
+            _collect_diagnostic_snapshot(con, key)
+        finally:
+            con.close()
+    except Exception as exc:
+        with _DIAGNOSTIC_LOCK:
+            _DIAGNOSTIC_SNAPSHOTS.setdefault(key, {})["error"] = type(exc).__name__
+    finally:
+        with _DIAGNOSTIC_LOCK:
+            state = _DIAGNOSTIC_SNAPSHOTS.setdefault(key, {})
+            state.update(refreshing=False, retry_after=time.monotonic() + DIAGNOSTIC_MAX_AGE_S)
+
+
+@traced("Catalogue : consultation du snapshot partagé")
+def search_reader_diagnostics(con, *, refresh=False):
+    """Read a shared sample immediately; schedule a single background refresh.
+
+    refresh=True is reserved for explicit developer/maintenance work. The
+    dedicated worker owns its connection; request readers are never borrowed.
+    Freshness is age-based, not inferred from unrelated catalog writes.
+    An already running rebuild is reused without waiting, even for refresh=True.
+    """
     def pragma(name, default=None):
         try:
             row = con.execute(f"PRAGMA {name}").fetchone()
@@ -134,30 +177,62 @@ def search_reader_diagnostics(con, *, refresh=False):
         except sqlite3.Error:
             return default
 
-    def count(table):
-        try:
-            return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
-        except sqlite3.Error:
-            return None
-
-    with span("Reconstruction compteurs catalogue", "database.diagnostic_counts") as measured:
-        measured.detail(cache="miss", invalidation_reason="explicit_refresh" if refresh else "reader_startup")
-        result = {
-            "catalog_snapshot_data_version": version, "catalog_snapshot_total_changes": changes,
-            "catalog_snapshot_stale": False,
-            "sqlite_cache_size": pragma("cache_size"),
-            "sqlite_mmap_size": pragma("mmap_size", 0),
-            "sqlite_temp_store": pragma("temp_store"),
-            "total_chunks": count("chunks"),
-            "total_vectors": count("chunk_vectors"),
-            **fts_structural_diagnostics(con),
-        }
-    with span("Publication compteurs catalogue", "database.publish_diagnostics"):
+    key, path = _diagnostic_key(con)
+    collect = False
+    if refresh:
+        if con.in_transaction:
+            raise ValueError("Refresh diagnostic counts outside a caller transaction")
         with _DIAGNOSTIC_LOCK:
-            _DIAGNOSTIC_SNAPSHOTS[con] = result
-            while len(_DIAGNOSTIC_SNAPSHOTS) > 8:
-                _DIAGNOSTIC_SNAPSHOTS.popitem(last=False)
-    return dict(result)
+            state = _DIAGNOSTIC_SNAPSHOTS.setdefault(key, {})
+            if not state.get("refreshing"):
+                state["refreshing"] = collect = True
+        if collect:
+            try:
+                _collect_diagnostic_snapshot(con, key)
+            finally:
+                with _DIAGNOSTIC_LOCK:
+                    _DIAGNOSTIC_SNAPSHOTS[key]["refreshing"] = False
+    launch = False
+    with _DIAGNOSTIC_LOCK:
+        state = _DIAGNOSTIC_SNAPSHOTS.setdefault(key, {})
+        _DIAGNOSTIC_SNAPSHOTS.move_to_end(key)
+        snapshot = dict(state.get("snapshot") or {})
+        age_ms = (max(0, int(time.time() * 1000) - snapshot["catalog_snapshot_sampled_ms"])
+                  if snapshot else None)
+        aged = age_ms is None or age_ms >= DIAGNOSTIC_MAX_AGE_S * 1000
+        if (not refresh and path and aged and not state.get("refreshing")
+                and time.monotonic() >= state.get("retry_after", 0)):
+            state["refreshing"] = launch = True
+        refreshing, error = state.get("refreshing", False), state.get("error")
+        # Never evict an active job: that could schedule a duplicate rebuild.
+        for old_key in list(_DIAGNOSTIC_SNAPSHOTS):
+            if len(_DIAGNOSTIC_SNAPSHOTS) <= 8:
+                break
+            if old_key != key and not _DIAGNOSTIC_SNAPSHOTS[old_key].get("refreshing"):
+                del _DIAGNOSTIC_SNAPSHOTS[old_key]
+    if launch:
+        try:
+            threading.Thread(target=contextvars.Context().run, args=(_refresh_diagnostics, path, key),
+                             name="axp-diagnostic-counts", daemon=True).start()
+        except RuntimeError as exc:
+            # Observability remains optional even if the runtime cannot start a worker.
+            refreshing, error = False, type(exc).__name__
+            with _DIAGNOSTIC_LOCK:
+                _DIAGNOSTIC_SNAPSHOTS[key].update(refreshing=False, error=error,
+                    retry_after=time.monotonic() + DIAGNOSTIC_MAX_AGE_S)
+    return {
+        "total_chunks": None, "total_vectors": None,
+        "fts_segment_count": None, "fts_index_pages": None, **snapshot,
+        "catalog_snapshot_stale": aged,
+        "catalog_snapshot_status": "unavailable" if not snapshot else "aged" if aged else "sampled",
+        "catalog_snapshot_age_ms": age_ms,
+        "catalog_snapshot_scope": "whole catalog: chunks, vectors, FTS structure",
+        "catalog_snapshot_refreshing": refreshing,
+        "catalog_snapshot_error": error,
+        "sqlite_cache_size": pragma("cache_size"),
+        "sqlite_mmap_size": pragma("mmap_size", 0),
+        "sqlite_temp_store": pragma("temp_store"),
+    }
 
 
 class SearchReaderPool:
@@ -194,11 +269,18 @@ class SearchReaderPool:
                     self._created += 1
         queue_ms = (time.perf_counter() - acquire_started) * 1000
         open_started = time.perf_counter()
+        connect_ms = configure_ms = diagnostics_ms = 0.0
         if con is None:
             try:
                 with span("Ouverture reader", "database.connect(readonly)"):
                     con = connect(self.path, readonly=True, check_same_thread=False)
-                    configure_search_reader(con)
+                    connected = time.perf_counter()
+                    connect_ms = (connected - open_started) * 1000
+                    configure_search_reader(con, include_diagnostics=False)
+                    configured = time.perf_counter()
+                    configure_ms = (configured - connected) * 1000
+                    search_reader_diagnostics(con)
+                    diagnostics_ms = (time.perf_counter() - configured) * 1000
             except BaseException:
                 if con is not None:
                     con.close()
@@ -212,7 +294,9 @@ class SearchReaderPool:
                 measured.skip("reader_reused")
         try:
             if with_timings:
-                yield con, reused, {"reader_queue_wait_ms": queue_ms, "reader_open_ms": open_ms}
+                yield con, reused, {"reader_queue_wait_ms": queue_ms, "reader_open_ms": open_ms,
+                                    "reader_connect_ms": connect_ms, "reader_configure_ms": configure_ms,
+                                    "reader_diagnostics_lookup_ms": diagnostics_ms}
             else:
                 yield con, reused
         finally:
@@ -221,8 +305,6 @@ class SearchReaderPool:
                 con.rollback()
             with self._condition:
                 if self._closed:
-                    with _DIAGNOSTIC_LOCK:
-                        _DIAGNOSTIC_SNAPSHOTS.pop(con, None)
                     con.close()
                     self._created -= 1
                 else:
@@ -237,8 +319,6 @@ class SearchReaderPool:
             self._created -= len(readers)
             self._condition.notify_all()
         for con in readers:
-            with _DIAGNOSTIC_LOCK:
-                _DIAGNOSTIC_SNAPSHOTS.pop(con, None)
             con.close()
 
 

@@ -1,0 +1,130 @@
+[
+  {
+    "variant": "before",
+    "rep": 0,
+    "wall_ms": 213.45619900000656,
+    "reader_queue_wait_ms": 0.0030139999580569565,
+    "reader_open_ms": 213.36249700004828,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 1,
+    "wall_ms": 118.1470999999874,
+    "reader_queue_wait_ms": 0.0031849999686528463,
+    "reader_open_ms": 118.10467599991625,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 2,
+    "wall_ms": 113.74190999993061,
+    "reader_queue_wait_ms": 0.004356999966148578,
+    "reader_open_ms": 113.69981699999698,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 3,
+    "wall_ms": 117.77844599998843,
+    "reader_queue_wait_ms": 0.0024729999950068304,
+    "reader_open_ms": 117.73516099992776,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 4,
+    "wall_ms": 116.73693800003093,
+    "reader_queue_wait_ms": 0.0033860000030472293,
+    "reader_open_ms": 116.69731799997862,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 5,
+    "wall_ms": 112.95535599992945,
+    "reader_queue_wait_ms": 0.002182999992328405,
+    "reader_open_ms": 112.91429499999595,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 6,
+    "wall_ms": 113.06614299996909,
+    "reader_queue_wait_ms": 0.0021330000663510873,
+    "reader_open_ms": 113.02833599995665,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "before",
+    "rep": 7,
+    "wall_ms": 113.1734849999475,
+    "reader_queue_wait_ms": 0.002374000018789957,
+    "reader_open_ms": 113.13740000002781,
+    "status": "synchronous startup count"
+  },
+  {
+    "variant": "after",
+    "rep": 0,
+    "wall_ms": 1.7003989999011537,
+    "reader_queue_wait_ms": 0.002213000016126898,
+    "reader_open_ms": 1.6298729999562056,
+    "status": "unavailable"
+  },
+  {
+    "variant": "after",
+    "rep": 1,
+    "wall_ms": 1.4406689999759692,
+    "reader_queue_wait_ms": 0.0040959999978440464,
+    "reader_open_ms": 1.3643140000567655,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 2,
+    "wall_ms": 0.9332050000239178,
+    "reader_queue_wait_ms": 0.0017319999869869207,
+    "reader_open_ms": 0.8364489999621583,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 3,
+    "wall_ms": 0.8721929999637723,
+    "reader_queue_wait_ms": 0.001623000002837216,
+    "reader_open_ms": 0.7712110000284156,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 4,
+    "wall_ms": 0.7094169999390942,
+    "reader_queue_wait_ms": 0.0013720000424655154,
+    "reader_open_ms": 0.6599029999279082,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 5,
+    "wall_ms": 0.7296779999705905,
+    "reader_queue_wait_ms": 0.0013820000503983465,
+    "reader_open_ms": 0.6799830000545626,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 6,
+    "wall_ms": 0.7432280000330138,
+    "reader_queue_wait_ms": 0.0013719999287786777,
+    "reader_open_ms": 0.6935840000323878,
+    "status": "sampled"
+  },
+  {
+    "variant": "after",
+    "rep": 7,
+    "wall_ms": 0.7574699999395307,
+    "reader_queue_wait_ms": 0.0013419999049801845,
+    "reader_open_ms": 0.7087660000024698,
+    "status": "sampled"
+  }
+]

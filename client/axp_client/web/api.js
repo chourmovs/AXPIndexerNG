@@ -4,7 +4,7 @@ export class ApiError extends Error {
 
 async function jsonRequest(url, options = {}) {
   let response;
-  try { response = await fetch(url, options); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
+  try { response = await fetch(url, options); } catch (error) { if (error.name === 'AbortError') throw error; throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
   let body = {};
   try { body = await response.json(); } catch (_) { if (!response.ok) throw new ApiError('http_error', 'AXP request failed.', response.status); }
   if (!response.ok) {
