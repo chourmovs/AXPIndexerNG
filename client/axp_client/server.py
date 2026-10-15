@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +12,7 @@ from axp_core.background import access_path_for
 from axp_core.build_info import build_info
 from axp_core.database import SearchReaderPool, connect, search_reader_diagnostics
 from axp_core.runtime import configure_logging, data_dir, load_settings, validate_loopback_host
+from axp_core.tracing import SearchCancelled, span
 from axp_daemon.embeddings import embedder_for_index
 
 from .rag.model_manager import ModelManager, ModelManagerError
@@ -29,6 +31,7 @@ from .reranker import Reranker
 from .rich_documents import RichDocumentService
 from axp_core.rich_document import RichDocumentError
 from .search import search
+from .search_diagnostics import SERVER_SCOPE, TraceRegistry
 from .skills import SkillEngine, SkillScopeUnavailableError, SkillSelectionError, SkillStore
 from .startup_state import ClientStartupState
 
@@ -95,6 +98,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
     quality_reranker = None
     search_readers = search_readers or (None if runtime else SearchReaderPool(db))
     rich_service = rich_service or (None if runtime else RichDocumentService(db))
+    search_traces = TraceRegistry()
 
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self):
@@ -149,13 +153,98 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            if urlparse(self.path).path.startswith(("/api/ask", "/api/models", "/api/skills")):
+            if urlparse(self.path).path.startswith(("/api/ask", "/api/models", "/api/skills", "/api/search")):
                 self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
 
+        def handle_search(self, url):
+            nonlocal quality_reranker
+            params = parse_qs(url.query)
+            request_id = params.get("request_id", [None])[0]
+            if request_id and not re.fullmatch(r"[a-fA-F0-9-]{16,64}", request_id):
+                return self.send_json({"error": "invalid_request_id"}, 400)
+            try:
+                trace = search_traces.start(request_id)
+            except ValueError as exc:
+                return self.send_json({"error": str(exc)}, 409)
+            except RuntimeError as exc:
+                return self.send_json({"error": str(exc)}, 503)
+            result, status = None, 200
+            explain = params.get("explain", ["0"])[0] == "1"
+            try:
+                with trace.bind(), span("Réception HTTP recherche", "Handler.handle_search"):
+                    with span("Validation et disponibilité", "Handler.validate_search"):
+                        current_embedder = runtime.embedder if runtime else embedder
+                        current_readers = runtime.search_readers if runtime else search_readers
+                        if startup_state and (current_embedder is None or current_readers is None):
+                            state = startup_state.snapshot()["search"]
+                            status = 503
+                            result = {"error": "search_initializing" if state["state"] == "initializing" else "search_unavailable",
+                                      "retryable": state["state"] == "initializing"}
+                        q = params.get("q", [""])[0]
+                        profile = params.get("profile", ["hybrid"])[0]
+                        if len(q) > MAX_QUESTION_LENGTH or profile not in ("hybrid", "fast", "quality"):
+                            result, status = {"error": "invalid_search"}, 400
+                    if result is None:
+                        with span("Préparation modèle de classement", "Reranker.__init__") as measured:
+                            if profile == "quality" and quality_reranker is None:
+                                quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
+                            else:
+                                measured.skip("quality_model_not_required_or_loaded")
+                        acquire_started = time.perf_counter()
+                        with current_readers.acquire(with_timings=True) as (con, reused, reader_timings):
+                            db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
+                            con.set_progress_handler(lambda: int(trace.cancelled.is_set()), 2000)
+                            try:
+                                result = search(con, current_embedder, q, profile=profile, explain=True,
+                                                reranker=quality_reranker if profile == "quality" else None) if q else {
+                                                    "results": [], "timings": {}, "candidate_counts": {}}
+                                trace.check()
+                                result["timings"].update(reader_timings, db_acquire_ms=db_acquire_ms)
+                                result["diagnostics"] = {"reader_reused": reused, **search_reader_diagnostics(con)}
+                            finally:
+                                con.set_progress_handler(None, 0)
+                        result["timings"]["http_search_total_ms"] = (trace.clock() - trace.started) / 1e6
+                    with span("Sérialisation des résultats", "json.dumps(results)"):
+                        encoded = json.dumps(result if explain or status != 200 else result["results"]).encode()
+                trace.finish("error" if status >= 400 else "completed")
+            except Exception as exc:
+                cancelled = trace.cancelled.is_set() or isinstance(exc, SearchCancelled)
+                trace.finish("cancelled" if cancelled else "error")
+                status = 499 if cancelled else 500
+                result = {"error": "search_cancelled" if cancelled else "search_failed"}
+                encoded = json.dumps(result).encode()
+                if not cancelled:
+                    LOGGER.exception("Search failed request_id=%s", trace.request_id)
+            diagnostic = {**trace.snapshot(), "build": _BUILD, "server_scope": SERVER_SCOPE,
+                          "pre_handler_queue_ms": None, "catalog": result.get("diagnostics"),
+                          "legacy_timings": result.get("timings", {}),
+                          "candidate_counts": result.get("candidate_counts", {})}
+            LOGGER.info("Search complete request_id=%s status=%s timings=%s diagnostics=%s", trace.request_id,
+                        trace.status, result.get("timings"), result.get("diagnostics"))
+            if explain or status != 200:
+                # Reuse the already encoded results; only the small trace envelope is encoded now.
+                encoded = encoded[:-1] + b', "request_trace":' + json.dumps(diagnostic).encode() + b'}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Request-ID", trace.request_id)
+            self.end_headers()
+            try:
+                self.wfile.write(encoded)
+            except (BrokenPipeError, ConnectionResetError):
+                trace.cancelled.set()
+
         def do_GET(self):
             url = urlparse(self.path)
+            if url.path == "/api/search/progress":
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                trace = search_traces.get(parse_qs(url.query).get("request_id", [""])[0])
+                return self.send_json({**trace.snapshot(), "build": _BUILD, "server_scope": SERVER_SCOPE}
+                                      if trace else {"error": "trace_not_found"}, 200 if trace else 404)
             if url.path == "/health":
                 return self.send_json({"status": "ok", "pid": os.getpid()})
             if url.path == "/api/version":
@@ -169,41 +258,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     "phase": "ready", "server": {"state": "ready"},
                     "search": {"state": "ready"}, "local_ai": {"state": "ready"}})
             if url.path == "/api/search":
-                http_started = time.perf_counter()
-                nonlocal quality_reranker
-                current_embedder = runtime.embedder if runtime else embedder
-                current_readers = runtime.search_readers if runtime else search_readers
-                if startup_state and (current_embedder is None or current_readers is None):
-                    status = startup_state.snapshot()["search"]
-                    code = "search_initializing" if status["state"] == "initializing" else "search_unavailable"
-                    return self.send_json({"error": code, "retryable": status["state"] == "initializing"}, 503)
-                q = parse_qs(url.query).get("q", [""])[0]
-                explain = parse_qs(url.query).get("explain", ["0"])[0] == "1"
-                profile = parse_qs(url.query).get("profile", ["hybrid"])[0]
-                if profile == "quality" and quality_reranker is None:
-                    quality_reranker = Reranker(cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
-                acquire_started = time.perf_counter()
-                with current_readers.acquire(with_timings=True) as (con, reader_reused, reader_timings):
-                    db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
-                    result = search(
-                            con,
-                            current_embedder,
-                            q,
-                            profile=profile,
-                            explain=True,
-                            reranker=quality_reranker if profile == "quality" else None,
-                        ) if q else {"results": [], "timings": {}, "candidate_counts": {}}
-                    result["timings"].update(reader_timings)
-                    result["timings"]["db_acquire_ms"] = db_acquire_ms
-                    result["diagnostics"] = {
-                        "reader_reused": reader_reused,
-                        **search_reader_diagnostics(con),
-                    }
-                    LOGGER.info("Search complete query_length=%s timings=%s candidate_counts=%s diagnostics=%s",
-                                len(q), result.get("timings"), result.get("candidate_counts"),
-                                result.get("diagnostics"))
-                    result["timings"]["http_search_total_ms"] = (time.perf_counter() - http_started) * 1000
-                    return self.send_json(result if explain else result["results"])
+                return self.handle_search(url)
             if url.path == "/api/ask/health":
                 if not _is_loopback(self.client_address[0]):
                     return self.send_json({"error": "ask is only available locally"}, 403)
@@ -286,6 +341,7 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                     ]
                     return self.send_json({"document": dict(doc), "chunks": chunks})
             names = {"/": "index.html", "/app.js": "app.js", "/api.js": "api.js", "/search.js": "search.js",
+                     "/search-diagnostics.js": "search-diagnostics.js",
                      "/ask.js": "ask.js", "/documents.js": "documents.js", "/ui.js": "ui.js",
                      "/style.css": "style.css"}
             if url.path not in names:
@@ -303,6 +359,13 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
 
         def do_POST(self):
             url = urlparse(self.path)
+            if url.path == "/api/search/cancel":
+                if not self.local_action_allowed():
+                    return self.send_json({"error": "forbidden_origin"}, 403)
+                trace = search_traces.get(parse_qs(url.query).get("request_id", [""])[0])
+                if trace:
+                    trace.cancelled.set()
+                return self.send_json({"status": "cancellation_requested" if trace else "not_found"})
             parts = url.path.strip("/").split("/")
             current_rag = runtime.rag_service if runtime else rag_service
             current_manager = runtime.model_manager if runtime else model_manager

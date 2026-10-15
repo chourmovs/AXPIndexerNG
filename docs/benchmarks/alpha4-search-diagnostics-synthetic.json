@@ -1,0 +1,1949 @@
+{
+  "before": [
+    {
+      "kind": "setup",
+      "synthetic": true,
+      "setup_ms": 236.459246999857,
+      "writer_activity": false,
+      "code_root": "/workspace/work/baseline-repo"
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "domino sequence",
+      "elapsed_ms": 352.49643500014827,
+      "reader_reused": false,
+      "reader": {
+        "reader_queue_wait_ms": 0.004557000011118362,
+        "reader_open_ms": 2.425305999850025
+      },
+      "timings": {
+        "query_embedding_ms": 0.004026000169687904,
+        "fts_retrieval_ms": 0.36637399989558617,
+        "vector_retrieval_ms": 2.965372000062416,
+        "rerank_ms": 0.0,
+        "total_ms": 350.01612499991097,
+        "fusion_ms": 7.040030999860392,
+        "passage_scoring_ms": 11.600865000218619,
+        "drilldown_total_ms": 1.5807790000508248,
+        "drilldown_fts_ms": 0.5175730000246404,
+        "drilldown_vector_ms": 0.22232599985727575,
+        "drilldown_scoring_ms": 0.758926999878895,
+        "document_ranking_ms": 0.39657899992562307,
+        "metadata_identity_ms": 325.4605499998888,
+        "presentation_ms": 2.399747000026764,
+        "search_total_ms": 350.01612499991097
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "domino sequence",
+      "elapsed_ms": 360.74348900001496,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0016319997939717723,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.002693999931580038,
+        "fts_retrieval_ms": 0.17845899992607883,
+        "vector_retrieval_ms": 2.7211330000227463,
+        "rerank_ms": 0.0,
+        "total_ms": 360.70166600006814,
+        "fusion_ms": 5.874248000054649,
+        "passage_scoring_ms": 12.064762999898448,
+        "drilldown_total_ms": 0.9468309999647317,
+        "drilldown_fts_ms": 0.2108290000251145,
+        "drilldown_vector_ms": 0.06784299989703868,
+        "drilldown_scoring_ms": 0.6245940001008421,
+        "document_ranking_ms": 0.39663899997322005,
+        "metadata_identity_ms": 338.00680800004557,
+        "presentation_ms": 1.6782560001047386,
+        "search_total_ms": 360.70166600006814
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "domino sequence",
+      "elapsed_ms": 349.3700699998499,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0021029998151789187,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0029939999421912944,
+        "fts_retrieval_ms": 0.2140430001418281,
+        "vector_retrieval_ms": 2.5059770000552817,
+        "rerank_ms": 0.0,
+        "total_ms": 349.3093580000277,
+        "fusion_ms": 6.103644000177155,
+        "passage_scoring_ms": 12.036961999683626,
+        "drilldown_total_ms": 0.9132399998179608,
+        "drilldown_fts_ms": 0.18757299994831556,
+        "drilldown_vector_ms": 0.05773699990641035,
+        "drilldown_scoring_ms": 0.6282599999849481,
+        "document_ranking_ms": 0.3985519999787357,
+        "metadata_identity_ms": 326.53477000008024,
+        "presentation_ms": 1.7113760000029288,
+        "search_total_ms": 349.3093580000277
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "densité MTBE",
+      "elapsed_ms": 370.1546010001948,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.002072999905067263,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.003344999868204468,
+        "fts_retrieval_ms": 0.24538100001336716,
+        "vector_retrieval_ms": 2.590344000054756,
+        "rerank_ms": 0.0,
+        "total_ms": 370.10735100011516,
+        "fusion_ms": 6.7539670001224295,
+        "passage_scoring_ms": 12.130692999789972,
+        "drilldown_total_ms": 1.9603329999426933,
+        "drilldown_fts_ms": 0.35299299997859634,
+        "drilldown_vector_ms": 0.1872530001492123,
+        "drilldown_scoring_ms": 1.3235500000519096,
+        "document_ranking_ms": 0.7123169998521917,
+        "metadata_identity_ms": 344.72022399995694,
+        "presentation_ms": 3.497474999903716,
+        "search_total_ms": 370.10735100011516
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "densité MTBE",
+      "elapsed_ms": 383.2107079999787,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0016620001588307787,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.003074000005653943,
+        "fts_retrieval_ms": 0.18627099984769302,
+        "vector_retrieval_ms": 2.4243940001724695,
+        "rerank_ms": 0.0,
+        "total_ms": 383.16993600005844,
+        "fusion_ms": 5.641166000032172,
+        "passage_scoring_ms": 14.372360999914235,
+        "drilldown_total_ms": 1.7468600001393497,
+        "drilldown_fts_ms": 0.2990819998558436,
+        "drilldown_vector_ms": 0.10710199990171532,
+        "drilldown_scoring_ms": 1.275608000014472,
+        "document_ranking_ms": 0.7302340000023833,
+        "metadata_identity_ms": 357.01175400004104,
+        "presentation_ms": 3.2854260000476643,
+        "search_total_ms": 383.16993600005844
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "densité MTBE",
+      "elapsed_ms": 347.59461800013014,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.001612999994904385,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0029140001061023213,
+        "fts_retrieval_ms": 0.25074799987123697,
+        "vector_retrieval_ms": 2.5533190000714967,
+        "rerank_ms": 0.0,
+        "total_ms": 347.55373600000894,
+        "fusion_ms": 6.1300439999740775,
+        "passage_scoring_ms": 11.758411000073465,
+        "drilldown_total_ms": 1.9899569999779487,
+        "drilldown_fts_ms": 0.29704899998250767,
+        "drilldown_vector_ms": 0.08479799998895032,
+        "drilldown_scoring_ms": 1.5445039998667198,
+        "document_ranking_ms": 0.6952510000246548,
+        "metadata_identity_ms": 323.1799810000666,
+        "presentation_ms": 3.516042999990532,
+        "search_total_ms": 347.55373600000894
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 358.8256599998658,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.10407700005998777,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0028849999580415897,
+        "fts_retrieval_ms": 0.17265099995711353,
+        "vector_retrieval_ms": 2.71785700010696,
+        "rerank_ms": 0.0,
+        "total_ms": 358.68570899992847,
+        "fusion_ms": 5.704351000076713,
+        "passage_scoring_ms": 10.9853619999285,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0033349999739584746,
+        "metadata_identity_ms": 338.8758000000962,
+        "presentation_ms": 0.06938499996067549,
+        "search_total_ms": 358.68570899992847
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 377.46458900005564,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.001562000079502468,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0036559999898599926,
+        "fts_retrieval_ms": 0.22329700004775077,
+        "vector_retrieval_ms": 2.468281000119532,
+        "rerank_ms": 0.0,
+        "total_ms": 377.4235780001618,
+        "fusion_ms": 5.880086999923151,
+        "passage_scoring_ms": 10.68147199998748,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.004045999958179891,
+        "metadata_identity_ms": 357.8874929999074,
+        "presentation_ms": 0.08095199996205338,
+        "search_total_ms": 377.4235780001618
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 366.0235689999354,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0026739999157143757,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0030749999950785423,
+        "fts_retrieval_ms": 0.20690299993475492,
+        "vector_retrieval_ms": 3.4328979998008435,
+        "rerank_ms": 0.0,
+        "total_ms": 365.98905599998943,
+        "fusion_ms": 6.406922999985909,
+        "passage_scoring_ms": 11.506409000276108,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.003696000021591317,
+        "metadata_identity_ms": 343.8680550000299,
+        "presentation_ms": 0.0980979998530529,
+        "search_total_ms": 365.98905599998943
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    }
+  ],
+  "after": [
+    {
+      "kind": "setup",
+      "synthetic": true,
+      "setup_ms": 34.11294300008194,
+      "writer_activity": false,
+      "code_root": "/workspace/AXPIndexerNG"
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "domino sequence",
+      "elapsed_ms": 15.072353000050498,
+      "reader_reused": false,
+      "reader": {
+        "reader_queue_wait_ms": 0.021912999955020496,
+        "reader_open_ms": 2.694082000061826
+      },
+      "timings": {
+        "query_embedding_ms": 0.015122999911909574,
+        "fts_retrieval_ms": 0.4413179999573913,
+        "vector_retrieval_ms": 3.6112089999278396,
+        "rerank_ms": 0.0,
+        "total_ms": 12.295395000137432,
+        "fusion_ms": 3.5150830001384747,
+        "passage_scoring_ms": 2.126133000047048,
+        "drilldown_total_ms": 0.6219399999736197,
+        "drilldown_fts_ms": 0.23268199993253802,
+        "drilldown_vector_ms": 0.15987200004019542,
+        "drilldown_scoring_ms": 0.13229999990471697,
+        "document_ranking_ms": 0.24725299999772687,
+        "metadata_identity_ms": 1.2949169999956212,
+        "presentation_ms": 1.0989519998929609,
+        "search_total_ms": 12.295395000137432
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 73,
+      "trace_export_ms": 0.32504199998584227,
+      "trace_bytes": 24809,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "domino sequence",
+      "elapsed_ms": 6.105918999992355,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.010316000043530948,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.010616000054142205,
+        "fts_retrieval_ms": 0.2004830000714719,
+        "vector_retrieval_ms": 2.39677199988364,
+        "rerank_ms": 0.0,
+        "total_ms": 6.048322999959055,
+        "fusion_ms": 2.0466440000745934,
+        "passage_scoring_ms": 0.4419090000737924,
+        "drilldown_total_ms": 0.43220399993515457,
+        "drilldown_fts_ms": 0.16416800008300925,
+        "drilldown_vector_ms": 0.07684700017307478,
+        "drilldown_scoring_ms": 0.13627599992105388,
+        "document_ranking_ms": 0.07038599983388849,
+        "metadata_identity_ms": 0.1271329999781301,
+        "presentation_ms": 0.6697920000533486,
+        "search_total_ms": 6.048322999959055
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 54,
+      "trace_export_ms": 0.19908100011889474,
+      "trace_bytes": 18300,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "domino sequence",
+      "elapsed_ms": 5.916583000043829,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008702999821252888,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.009203999979945365,
+        "fts_retrieval_ms": 0.2004830000714719,
+        "vector_retrieval_ms": 2.33595100007733,
+        "rerank_ms": 0.0,
+        "total_ms": 5.871384999863949,
+        "fusion_ms": 2.0726230000036594,
+        "passage_scoring_ms": 0.4286579999188689,
+        "drilldown_total_ms": 0.36227800001142896,
+        "drilldown_fts_ms": 0.13340200007405656,
+        "drilldown_vector_ms": 0.06875399981254304,
+        "drilldown_scoring_ms": 0.10824399987541256,
+        "document_ranking_ms": 0.0655589999496442,
+        "metadata_identity_ms": 0.11173899997629633,
+        "presentation_ms": 0.6030409999766562,
+        "search_total_ms": 5.871384999863949
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 54,
+      "trace_export_ms": 0.19583599987527123,
+      "trace_bytes": 18329,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "densité MTBE",
+      "elapsed_ms": 33.39846099993338,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008543000149074942,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.009333999969385331,
+        "fts_retrieval_ms": 0.2511000000140484,
+        "vector_retrieval_ms": 2.3402480001095682,
+        "rerank_ms": 0.0,
+        "total_ms": 33.33886199993685,
+        "fusion_ms": 27.83660500017504,
+        "passage_scoring_ms": 0.6389539998963301,
+        "drilldown_total_ms": 0.8747029999085498,
+        "drilldown_fts_ms": 0.27724900019165943,
+        "drilldown_vector_ms": 0.24343800009773986,
+        "drilldown_scoring_ms": 0.22735400011697493,
+        "document_ranking_ms": 0.2682150000055117,
+        "metadata_identity_ms": 0.6028709999554849,
+        "presentation_ms": 1.431192999916675,
+        "search_total_ms": 33.33886199993685
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 69,
+      "trace_export_ms": 0.2815459999965242,
+      "trace_bytes": 23443,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "densité MTBE",
+      "elapsed_ms": 6.493315000170696,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.010455000165165984,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.010676000101739191,
+        "fts_retrieval_ms": 0.21926199997324147,
+        "vector_retrieval_ms": 2.3612499999217107,
+        "rerank_ms": 0.0,
+        "total_ms": 6.422628000109398,
+        "fusion_ms": 2.1201350000410457,
+        "passage_scoring_ms": 0.4541250002603192,
+        "drilldown_total_ms": 0.6018899998707639,
+        "drilldown_fts_ms": 0.2444100000502658,
+        "drilldown_vector_ms": 0.09636599997975281,
+        "drilldown_scoring_ms": 0.18381799986855185,
+        "document_ranking_ms": 0.1057299998592498,
+        "metadata_identity_ms": 0.15531399981227878,
+        "presentation_ms": 0.9696960000837862,
+        "search_total_ms": 6.422628000109398
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 54,
+      "trace_export_ms": 0.20983799981877382,
+      "trace_bytes": 18399,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "densité MTBE",
+      "elapsed_ms": 6.890566000038234,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.009273999921788345,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.010045999943031347,
+        "fts_retrieval_ms": 0.26027400008388213,
+        "vector_retrieval_ms": 2.374249000013151,
+        "rerank_ms": 0.0,
+        "total_ms": 6.8353620001744275,
+        "fusion_ms": 2.1176010000090173,
+        "passage_scoring_ms": 0.5667059999723278,
+        "drilldown_total_ms": 0.7712159999755386,
+        "drilldown_fts_ms": 0.27384399982111063,
+        "drilldown_vector_ms": 0.09958999999071239,
+        "drilldown_scoring_ms": 0.3141849999792612,
+        "document_ranking_ms": 0.11515500000314205,
+        "metadata_identity_ms": 0.16355700017811614,
+        "presentation_ms": 1.204730999916137,
+        "search_total_ms": 6.8353620001744275
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 54,
+      "trace_export_ms": 0.21036799989815336,
+      "trace_bytes": 18352,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 6.267973999911192,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.010015000043495093,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.010115000122823403,
+        "fts_retrieval_ms": 0.16920600000958075,
+        "vector_retrieval_ms": 2.388781000036033,
+        "rerank_ms": 0.0,
+        "total_ms": 6.219111000064004,
+        "fusion_ms": 2.5216720000571513,
+        "passage_scoring_ms": 0.5401949999850331,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.008654000112073845,
+        "metadata_identity_ms": 0.36376999992171477,
+        "presentation_ms": 0.08404699997299758,
+        "search_total_ms": 6.219111000064004
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 43,
+      "trace_export_ms": 0.20825500018872845,
+      "trace_bytes": 14834,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 5.507354999963354,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.009784999974726816,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.009814999884838471,
+        "fts_retrieval_ms": 0.16869499995664228,
+        "vector_retrieval_ms": 2.466198000092845,
+        "rerank_ms": 0.0,
+        "total_ms": 5.462577999878704,
+        "fusion_ms": 2.0739050000884163,
+        "passage_scoring_ms": 0.4515719997471024,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0076110000009066425,
+        "metadata_identity_ms": 0.08506900007887452,
+        "presentation_ms": 0.0778880000780191,
+        "search_total_ms": 5.462577999878704
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 34,
+      "trace_export_ms": 0.13308100005815504,
+      "trace_bytes": 11797,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 5.37972200004333,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008513000011589611,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.008331999879374052,
+        "fts_retrieval_ms": 0.25529599997753394,
+        "vector_retrieval_ms": 2.385565999929895,
+        "rerank_ms": 0.0,
+        "total_ms": 5.339872000149626,
+        "fusion_ms": 1.9661419999010832,
+        "passage_scoring_ms": 0.43833300014739507,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.007782000011502532,
+        "metadata_identity_ms": 0.08098200009953871,
+        "presentation_ms": 0.07887900005698611,
+        "search_total_ms": 5.339872000149626
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 34,
+      "trace_export_ms": 0.13485399995261105,
+      "trace_bytes": 11800,
+      "traced": true
+    },
+    {
+      "kind": "overhead",
+      "pairs": 40,
+      "disabled_median_ms": 5.516107499943246,
+      "enabled_median_ms": 6.262916500077154,
+      "export_median_ms": 0.20259149994217296,
+      "disabled_samples_ms": [
+        6.594177000124546,
+        6.378902999813363,
+        4.945816000144987,
+        5.279048999909719,
+        6.362618000139264,
+        5.0706050001281255,
+        5.466642999863325,
+        6.2392910001563,
+        5.4172590000689524,
+        5.581957999993392,
+        5.8967729999039875,
+        4.766665000033754,
+        6.117958000004364,
+        6.758745999832172,
+        4.711742000154118,
+        5.528726999955325,
+        6.416218000140361,
+        4.831554000020333,
+        5.386131000022942,
+        5.566793999832953,
+        4.944754000007379,
+        6.146129999933692,
+        5.7589749999351625,
+        4.641865999928996,
+        5.286290999947596,
+        6.393463999984306,
+        4.685701999960656,
+        5.212608999954682,
+        5.654507000144804,
+        5.468996999979936,
+        5.543809999835503,
+        5.880978999812214,
+        5.324318000020867,
+        5.503487999931167,
+        5.683189999899696,
+        4.680445000076361,
+        6.143165000139561,
+        5.8043540000198846,
+        4.837032000068575,
+        5.268452999871442
+      ],
+      "enabled_samples_ms": [
+        6.165539999983594,
+        6.540136000012353,
+        5.323907000047257,
+        7.12143400005516,
+        7.026690999964558,
+        5.547766000063348,
+        6.0077300001921685,
+        6.475597999951788,
+        5.745853999997053,
+        6.5263149999736925,
+        6.687108000051012,
+        5.73960600013379,
+        7.085860999950455,
+        8.477373999994597,
+        5.792425999970874,
+        6.084547000000384,
+        6.589309999981197,
+        5.239699999947334,
+        5.908289999979388,
+        6.463429999939763,
+        5.19913799985261,
+        7.047512999861283,
+        7.068404000165174,
+        5.493814000146813,
+        6.205850000014834,
+        6.616860999884011,
+        5.538041999898269,
+        6.035481999788317,
+        6.921443000010186,
+        5.6453030001648585,
+        6.319983000139473,
+        6.867661000114822,
+        5.385770999964734,
+        7.0380090000981,
+        6.910236000067016,
+        5.348695000066073,
+        6.005788000038592,
+        7.182818000046609,
+        5.807537999999113,
+        6.5320229998633295
+      ],
+      "export_samples_ms": [
+        0.2153859998088592,
+        0.20866499994554033,
+        0.13601499995274935,
+        0.2025960000082705,
+        0.37068999995426566,
+        0.1393500001540815,
+        0.2013150001403119,
+        0.23248100001183047,
+        0.1743230000101903,
+        0.20258699987607542,
+        0.2035969998814835,
+        0.1394799999161478,
+        0.20421899989742087,
+        0.2729729999373376,
+        0.1356960001430707,
+        0.2237879998574499,
+        0.2033570001458429,
+        0.13713799990000552,
+        0.201163999918208,
+        0.2026069998919411,
+        0.1352150000002439,
+        0.23701800000708317,
+        0.20427899994501786,
+        0.14095300002736622,
+        0.22512100008498237,
+        0.20459899997149478,
+        0.13524399992093095,
+        0.23209100004351058,
+        0.19912100015062606,
+        0.14216499994290643,
+        0.20022300009259197,
+        0.20561099995575205,
+        0.13884999998481362,
+        0.2020960000663763,
+        0.24427900007140124,
+        0.16427800005658355,
+        0.20074300005035184,
+        0.20666300019911432,
+        0.13621600010083057,
+        0.2107289999457862
+      ]
+    }
+  ],
+  "before-writer": [
+    {
+      "kind": "setup",
+      "synthetic": true,
+      "setup_ms": 41.067306000059034,
+      "writer_activity": true,
+      "code_root": "/workspace/work/baseline-repo"
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "domino sequence",
+      "elapsed_ms": 363.20477200001733,
+      "reader_reused": false,
+      "reader": {
+        "reader_queue_wait_ms": 0.002153999957954511,
+        "reader_open_ms": 3.0082979999406234
+      },
+      "timings": {
+        "query_embedding_ms": 0.003274999926361488,
+        "fts_retrieval_ms": 0.5705430000944034,
+        "vector_retrieval_ms": 6.474808999882953,
+        "rerank_ms": 0.0,
+        "total_ms": 360.15342900009273,
+        "fusion_ms": 9.83622000012474,
+        "passage_scoring_ms": 13.904430999900796,
+        "drilldown_total_ms": 1.2282069999400846,
+        "drilldown_fts_ms": 0.2526420000776852,
+        "drilldown_vector_ms": 0.1188399999136891,
+        "drilldown_scoring_ms": 0.786918999892805,
+        "document_ranking_ms": 0.35780099983639957,
+        "metadata_identity_ms": 327.14021999981924,
+        "presentation_ms": 1.9738130001769605,
+        "search_total_ms": 360.15342900009273
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "domino sequence",
+      "elapsed_ms": 345.0346839999838,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.00240400004258845,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0034950001008837717,
+        "fts_retrieval_ms": 0.16865399993548635,
+        "vector_retrieval_ms": 2.9052520001187077,
+        "rerank_ms": 0.0,
+        "total_ms": 344.99357200002123,
+        "fusion_ms": 5.810364000126356,
+        "passage_scoring_ms": 11.348748000045816,
+        "drilldown_total_ms": 1.1415559999932157,
+        "drilldown_fts_ms": 0.24085500012915873,
+        "drilldown_vector_ms": 0.059741000086432905,
+        "drilldown_scoring_ms": 0.748651000094469,
+        "document_ranking_ms": 0.4819690000203991,
+        "metadata_identity_ms": 322.42627400000856,
+        "presentation_ms": 2.052051999953619,
+        "search_total_ms": 344.99357200002123
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "domino sequence",
+      "elapsed_ms": 353.3358740000949,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.00206300001082127,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0029540001378336456,
+        "fts_retrieval_ms": 0.2905090000240307,
+        "vector_retrieval_ms": 2.6562460000150168,
+        "rerank_ms": 0.0,
+        "total_ms": 353.2974549998471,
+        "fusion_ms": 6.889715999932378,
+        "passage_scoring_ms": 11.226061000115806,
+        "drilldown_total_ms": 0.9034960000917636,
+        "drilldown_fts_ms": 0.17888100001073326,
+        "drilldown_vector_ms": 0.06035100000190141,
+        "drilldown_scoring_ms": 0.6251449999581382,
+        "document_ranking_ms": 0.353835000169056,
+        "metadata_identity_ms": 330.39886799997475,
+        "presentation_ms": 1.5948909999679017,
+        "search_total_ms": 353.2974549998471
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "densité MTBE",
+      "elapsed_ms": 352.59726699996463,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.002182999878641567,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0031350000426755287,
+        "fts_retrieval_ms": 0.2400519999810058,
+        "vector_retrieval_ms": 2.586481000207641,
+        "rerank_ms": 0.0,
+        "total_ms": 352.5504950000595,
+        "fusion_ms": 6.016195000029256,
+        "passage_scoring_ms": 11.2024959998962,
+        "drilldown_total_ms": 2.8799839999464893,
+        "drilldown_fts_ms": 0.42503199983912054,
+        "drilldown_vector_ms": 0.1816849999158876,
+        "drilldown_scoring_ms": 2.1258840001792123,
+        "document_ranking_ms": 0.7589680001274246,
+        "metadata_identity_ms": 327.5788040000407,
+        "presentation_ms": 4.759985999953642,
+        "search_total_ms": 352.5504950000595
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "densité MTBE",
+      "elapsed_ms": 403.3247319998736,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0017830000160756754,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.04716100011137314,
+        "fts_retrieval_ms": 0.20957700007784297,
+        "vector_retrieval_ms": 3.156913000111672,
+        "rerank_ms": 0.0,
+        "total_ms": 403.28289800004313,
+        "fusion_ms": 6.747782000047664,
+        "passage_scoring_ms": 12.077577999662026,
+        "drilldown_total_ms": 1.8418839999867487,
+        "drilldown_fts_ms": 0.30237700002544443,
+        "drilldown_vector_ms": 0.08223499980886118,
+        "drilldown_scoring_ms": 1.3622590001887147,
+        "document_ranking_ms": 1.045550999833722,
+        "metadata_identity_ms": 376.74170299987964,
+        "presentation_ms": 4.020618999902581,
+        "search_total_ms": 403.28289800004313
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "densité MTBE",
+      "elapsed_ms": 392.6986720000514,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0016520000372111099,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.003484999979264103,
+        "fts_retrieval_ms": 0.2938650000032794,
+        "vector_retrieval_ms": 2.691138000045612,
+        "rerank_ms": 0.0,
+        "total_ms": 392.6556060000621,
+        "fusion_ms": 6.949156000018775,
+        "passage_scoring_ms": 13.953143999742679,
+        "drilldown_total_ms": 1.7374369999743067,
+        "drilldown_fts_ms": 0.31609799998477683,
+        "drilldown_vector_ms": 0.08799299985184916,
+        "drilldown_scoring_ms": 1.2712519999240612,
+        "document_ranking_ms": 0.8245669998814265,
+        "metadata_identity_ms": 365.17876599987176,
+        "presentation_ms": 3.3895650001340982,
+        "search_total_ms": 392.6556060000621
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 349.6640019998267,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0019229998997616349,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.00405600007979956,
+        "fts_retrieval_ms": 0.1791210002011212,
+        "vector_retrieval_ms": 2.7512890001162305,
+        "rerank_ms": 0.0,
+        "total_ms": 349.60111700002017,
+        "fusion_ms": 5.914952000011908,
+        "passage_scoring_ms": 10.934840999652806,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0032350001220038394,
+        "metadata_identity_ms": 329.32952099986323,
+        "presentation_ms": 0.06961500002944376,
+        "search_total_ms": 349.60111700002017
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 352.895867999905,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.001832999942052993,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.004176999937044457,
+        "fts_retrieval_ms": 0.20853499995610036,
+        "vector_retrieval_ms": 2.5135189998763963,
+        "rerank_ms": 0.0,
+        "total_ms": 352.86253799995393,
+        "fusion_ms": 6.031948999861925,
+        "passage_scoring_ms": 10.879258000159098,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.003043999868168612,
+        "metadata_identity_ms": 332.911465999814,
+        "presentation_ms": 0.0682729998970899,
+        "search_total_ms": 352.86253799995393
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 337.1351060000052,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.0018829998680303106,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0030950000109442044,
+        "fts_retrieval_ms": 0.20272699998713506,
+        "vector_retrieval_ms": 2.6830360000076325,
+        "rerank_ms": 0.0,
+        "total_ms": 337.1001030000116,
+        "fusion_ms": 5.526375000044936,
+        "passage_scoring_ms": 10.718873999849166,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0042159999793511815,
+        "metadata_identity_ms": 317.485680000118,
+        "presentation_ms": 0.09413199995833565,
+        "search_total_ms": 337.1001030000116
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 0,
+      "trace_export_ms": 0,
+      "trace_bytes": 0,
+      "traced": false
+    }
+  ],
+  "writer": [
+    {
+      "kind": "setup",
+      "synthetic": true,
+      "setup_ms": 38.19124799997553,
+      "writer_activity": true,
+      "code_root": "/workspace/AXPIndexerNG"
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "domino sequence",
+      "elapsed_ms": 17.031835000125284,
+      "reader_reused": false,
+      "reader": {
+        "reader_queue_wait_ms": 0.02775200005089573,
+        "reader_open_ms": 3.2242439999663475
+      },
+      "timings": {
+        "query_embedding_ms": 0.017054999943866278,
+        "fts_retrieval_ms": 1.4367520000178047,
+        "vector_retrieval_ms": 3.3311250001588633,
+        "rerank_ms": 0.0,
+        "total_ms": 13.709543000004487,
+        "fusion_ms": 3.4911370000827446,
+        "passage_scoring_ms": 2.72983699960605,
+        "drilldown_total_ms": 0.7216000001335487,
+        "drilldown_fts_ms": 0.28692299997601367,
+        "drilldown_vector_ms": 0.17059800006791193,
+        "drilldown_scoring_ms": 0.15342200003942708,
+        "document_ranking_ms": 0.2474139998867031,
+        "metadata_identity_ms": 1.271312000199032,
+        "presentation_ms": 1.2288569998872845,
+        "search_total_ms": 13.709543000004487
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": false,
+      "trace_spans": 73,
+      "trace_export_ms": 0.41239400002268667,
+      "trace_bytes": 24798,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "domino sequence",
+      "elapsed_ms": 7.251280999980736,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.011608000022533815,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.01164800005426514,
+        "fts_retrieval_ms": 0.27547600006982975,
+        "vector_retrieval_ms": 3.2150199999705364,
+        "rerank_ms": 0.0,
+        "total_ms": 7.1882960000948515,
+        "fusion_ms": 2.259534999893731,
+        "passage_scoring_ms": 0.4368509999039816,
+        "drilldown_total_ms": 0.38540299988198967,
+        "drilldown_fts_ms": 0.14587100008611742,
+        "drilldown_vector_ms": 0.07525399996666238,
+        "drilldown_scoring_ms": 0.10890500016103033,
+        "document_ranking_ms": 0.07435299994540401,
+        "metadata_identity_ms": 0.15199000017673825,
+        "presentation_ms": 0.6468779999977414,
+        "search_total_ms": 7.1882960000948515
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 54,
+      "trace_export_ms": 0.19898099981219275,
+      "trace_bytes": 18332,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "domino sequence",
+      "elapsed_ms": 25.946108999960416,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008643000001029577,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.009023000075103482,
+        "fts_retrieval_ms": 0.2293170000484679,
+        "vector_retrieval_ms": 20.98245700017287,
+        "rerank_ms": 0.0,
+        "total_ms": 25.889252999832024,
+        "fusion_ms": 2.7775080000083108,
+        "passage_scoring_ms": 0.6363509999118833,
+        "drilldown_total_ms": 0.4976220000116882,
+        "drilldown_fts_ms": 0.19552599997041398,
+        "drilldown_vector_ms": 0.10000199995374714,
+        "drilldown_scoring_ms": 0.13318099991010968,
+        "document_ranking_ms": 0.08178399980351969,
+        "metadata_identity_ms": 0.21854000010534946,
+        "presentation_ms": 0.8251479998762079,
+        "search_total_ms": 25.889252999832024
+      },
+      "ids": [
+        1
+      ],
+      "scores": [
+        0.662
+      ],
+      "result_count": 1,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 54,
+      "trace_export_ms": 0.29767000000902044,
+      "trace_bytes": 18346,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "densité MTBE",
+      "elapsed_ms": 9.431927000150608,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.011486999937915243,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.011847999985548086,
+        "fts_retrieval_ms": 0.3043300000626914,
+        "vector_retrieval_ms": 3.2281090000196855,
+        "rerank_ms": 0.0,
+        "total_ms": 9.369001000095523,
+        "fusion_ms": 2.801194000085161,
+        "passage_scoring_ms": 0.7312559996535128,
+        "drilldown_total_ms": 0.9207519999563374,
+        "drilldown_fts_ms": 0.3011349999724189,
+        "drilldown_vector_ms": 0.2406529999916529,
+        "drilldown_scoring_ms": 0.23270099995897908,
+        "document_ranking_ms": 0.28929700010849047,
+        "metadata_identity_ms": 0.608048999993116,
+        "presentation_ms": 1.5364930000032473,
+        "search_total_ms": 9.369001000095523
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 69,
+      "trace_export_ms": 0.2556360000198765,
+      "trace_bytes": 23383,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "densité MTBE",
+      "elapsed_ms": 6.6326450000815385,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.009574999921824201,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.009634999969421187,
+        "fts_retrieval_ms": 0.20997699994040886,
+        "vector_retrieval_ms": 2.386908000062249,
+        "rerank_ms": 0.0,
+        "total_ms": 6.550741999944876,
+        "fusion_ms": 2.1344560000216006,
+        "passage_scoring_ms": 0.4796360001364519,
+        "drilldown_total_ms": 0.6831719999809138,
+        "drilldown_fts_ms": 0.3088270000262128,
+        "drilldown_vector_ms": 0.09447200000067824,
+        "drilldown_scoring_ms": 0.18324699999539007,
+        "document_ranking_ms": 0.10374699991189118,
+        "metadata_identity_ms": 0.17527499994685058,
+        "presentation_ms": 1.0219450000477082,
+        "search_total_ms": 6.550741999944876
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 54,
+      "trace_export_ms": 0.20228499988661497,
+      "trace_bytes": 18365,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "densité MTBE",
+      "elapsed_ms": 6.530530999953044,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.009163999948214041,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.015813999880265328,
+        "fts_retrieval_ms": 0.23742899998069333,
+        "vector_retrieval_ms": 2.3744190000343224,
+        "rerank_ms": 0.0,
+        "total_ms": 6.4815969999472145,
+        "fusion_ms": 2.0864840000740514,
+        "passage_scoring_ms": 0.4645019998861244,
+        "drilldown_total_ms": 0.6168720001369365,
+        "drilldown_fts_ms": 0.24045299983299628,
+        "drilldown_vector_ms": 0.11800799984484911,
+        "drilldown_scoring_ms": 0.1784199998837721,
+        "document_ranking_ms": 0.10180399999626388,
+        "metadata_identity_ms": 0.12399699994602997,
+        "presentation_ms": 0.9875729999748728,
+        "search_total_ms": 6.4815969999472145
+      },
+      "ids": [
+        2,
+        1
+      ],
+      "scores": [
+        0.662,
+        0.156
+      ],
+      "result_count": 2,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 54,
+      "trace_export_ms": 0.2006530000926432,
+      "trace_bytes": 18367,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 0,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 5.665683999950488,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008383000022149645,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.008974000138550764,
+        "fts_retrieval_ms": 0.1554049999867857,
+        "vector_retrieval_ms": 2.5051669999811566,
+        "rerank_ms": 0.0,
+        "total_ms": 5.6248619998768845,
+        "fusion_ms": 2.061175000108051,
+        "passage_scoring_ms": 0.42602399980751215,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0073609999162727036,
+        "metadata_identity_ms": 0.2856820001397864,
+        "presentation_ms": 0.06903400003466231,
+        "search_total_ms": 5.6248619998768845
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 43,
+      "trace_export_ms": 0.16232500001933658,
+      "trace_bytes": 14849,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 1,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 5.697901999837995,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.007821000053809257,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.0090730000010808,
+        "fts_retrieval_ms": 0.1535720000447327,
+        "vector_retrieval_ms": 2.794743999857019,
+        "rerank_ms": 0.0,
+        "total_ms": 5.657822999864948,
+        "fusion_ms": 1.99717899999996,
+        "passage_scoring_ms": 0.4294090001621953,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0077719998898828635,
+        "metadata_identity_ms": 0.08381700013160298,
+        "presentation_ms": 0.07654599994566524,
+        "search_total_ms": 5.657822999864948
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 34,
+      "trace_export_ms": 0.13196899999456946,
+      "trace_bytes": 11819,
+      "traced": true
+    },
+    {
+      "kind": "search",
+      "run": 2,
+      "query": "zzqv_unobtainium",
+      "elapsed_ms": 5.367672999909701,
+      "reader_reused": true,
+      "reader": {
+        "reader_queue_wait_ms": 0.008452999963992625,
+        "reader_open_ms": 0.0
+      },
+      "timings": {
+        "query_embedding_ms": 0.008351999895239715,
+        "fts_retrieval_ms": 0.15936099998725695,
+        "vector_retrieval_ms": 2.4356720000469068,
+        "rerank_ms": 0.0,
+        "total_ms": 5.3259999999681895,
+        "fusion_ms": 1.9766379998600314,
+        "passage_scoring_ms": 0.4081070001120679,
+        "drilldown_total_ms": 0.0,
+        "drilldown_fts_ms": 0.0,
+        "drilldown_vector_ms": 0.0,
+        "drilldown_scoring_ms": 0.0,
+        "document_ranking_ms": 0.0075519999427342555,
+        "metadata_identity_ms": 0.10192400009145786,
+        "presentation_ms": 0.07721700012552901,
+        "search_total_ms": 5.3259999999681895
+      },
+      "ids": [],
+      "scores": [],
+      "result_count": 0,
+      "catalog_snapshot_stale": true,
+      "trace_spans": 34,
+      "trace_export_ms": 0.13406299990492698,
+      "trace_bytes": 11814,
+      "traced": true
+    }
+  ],
+  "migration": {
+    "synthetic": true,
+    "documents": 2000,
+    "writer_connect_and_unicode_backfill_ms": 68.14958099994328
+  },
+  "sql_plans": [
+    {
+      "sql": "SELECT value FROM metadata WHERE key='index_signature'",
+      "plan": [
+        [
+          3,
+          0,
+          39,
+          "SEARCH metadata USING INDEX sqlite_autoindex_metadata_1 (key=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT k, v FROM 'main'.'chunks_fts_config'",
+      "plan": [
+        [
+          2,
+          0,
+          213,
+          "SCAN main.chunks_fts_config"
+        ]
+      ]
+    },
+    {
+      "sql": "WITH ranked AS (\n SELECT rowid chunk_id,bm25(chunks_fts,1.0,4.0,3.0,4.0,8.0) bm25_score\n FROM chunks_fts WHERE chunks_fts MATCH '\"domino\" OR \"sequence\"' ORDER BY bm25_score,rowid LIMIT 100\n )\n SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,\n d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers,\n ranked.bm25_score\n FROM ranked JOIN chunks c ON c.id=ranked.chunk_id JOIN documents d ON d.id=c.document_id\n JOIN sources s ON s.id=d.source_id\n ORDER BY ranked.bm25_score,ranked.chunk_id",
+      "plan": [
+        [
+          2,
+          0,
+          0,
+          "CO-ROUTINE ranked"
+        ],
+        [
+          6,
+          2,
+          156,
+          "SCAN chunks_fts VIRTUAL TABLE INDEX 0:M5"
+        ],
+        [
+          22,
+          2,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        [
+          35,
+          0,
+          82,
+          "SCAN ranked"
+        ],
+        [
+          38,
+          0,
+          45,
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          41,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          44,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT v.rowid chunk_id,v.distance vector_distance,c.document_id,c.chunk_no,c.page_no,\n c.section_heading heading,d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,\n c.text snippet,c.identifiers\n FROM chunk_vectors v JOIN chunks c ON c.id=v.rowid JOIN documents d ON d.id=c.document_id\n JOIN sources s ON s.id=d.source_id\n WHERE embedding MATCH x'00000000000000002549123e' AND k=100 ORDER BY distance",
+      "plan": [
+        [
+          8,
+          0,
+          49,
+          "SCAN v VIRTUAL TABLE INDEX 0:3{___}___"
+        ],
+        [
+          14,
+          0,
+          45,
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          17,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          20,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          41,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT 1 FROM sqlite_master WHERE name='identity_generation'",
+      "plan": [
+        [
+          2,
+          0,
+          216,
+          "SCAN sqlite_master"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT token,revision FROM identity_generation WHERE singleton=1",
+      "plan": [
+        [
+          2,
+          0,
+          33,
+          "SEARCH identity_generation USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT 1 FROM sqlite_master WHERE name='document_identity_fts'",
+      "plan": [
+        [
+          2,
+          0,
+          216,
+          "SCAN sqlite_master"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT k, v FROM 'main'.'document_identity_fts_config'",
+      "plan": [
+        [
+          2,
+          0,
+          213,
+          "SCAN main.document_identity_fts_config"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT rowid FROM document_identity_fts WHERE document_identity_fts MATCH '\"domino\"* OR \"sequence\"*'",
+      "plan": [
+        [
+          2,
+          0,
+          156,
+          "SCAN document_identity_fts VIRTUAL TABLE INDEX 0:M5"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT 1 FROM sqlite_master WHERE name='document_identity_unicode_fts'",
+      "plan": [
+        [
+          2,
+          0,
+          216,
+          "SCAN sqlite_master"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT k, v FROM 'main'.'document_identity_unicode_fts_config'",
+      "plan": [
+        [
+          2,
+          0,
+          213,
+          "SCAN main.document_identity_unicode_fts_config"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT rowid FROM document_identity_unicode_fts WHERE document_identity_unicode_fts MATCH '\"domino\"* OR \"sequence\"*'",
+      "plan": [
+        [
+          2,
+          0,
+          156,
+          "SCAN document_identity_unicode_fts VIRTUAL TABLE INDEX 0:M1"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT d.id,d.title,d.filename,d.path,d.path_key,d.modified_unix_ms,s.label source_label,s.path source_path FROM documents d JOIN sources s ON s.id=d.source_id WHERE 1=1 AND d.id IN (SELECT value FROM json_each('[1]'))",
+      "plan": [
+        [
+          4,
+          0,
+          91,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          8,
+          0,
+          0,
+          "LIST SUBQUERY 1"
+        ],
+        [
+          10,
+          8,
+          0,
+          "SCAN json_each VIRTUAL TABLE INDEX 1:"
+        ],
+        [
+          25,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT d.id document_id,c.id chunk_id,c.chunk_no,c.page_no,\n c.section_heading heading,d.path,d.filename,d.title,d.ingestion_mode,d.source_id,\n s.label source_label,s.path source_path,c.text snippet,c.identifiers\n FROM documents d JOIN sources s ON s.id=d.source_id\n LEFT JOIN chunks c ON c.id=(SELECT min(c0.id) FROM chunks c0 WHERE c0.document_id=d.id)\n WHERE d.id IN (1)",
+      "plan": [
+        [
+          4,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          7,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          10,
+          0,
+          45,
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        ],
+        [
+          13,
+          0,
+          0,
+          "CORRELATED SCALAR SUBQUERY 1"
+        ],
+        [
+          18,
+          13,
+          53,
+          "SEARCH c0 USING COVERING INDEX sqlite_autoindex_chunks_1 (document_id=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT title,filename FROM documents WHERE id=1",
+      "plan": [
+        [
+          2,
+          0,
+          33,
+          "SEARCH documents USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,\n d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers,\n bm25(chunks_fts,1.0,4.0,3.0,4.0,8.0) bm25_score\n FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN documents d ON d.id=c.document_id\n JOIN sources s ON s.id=d.source_id\n WHERE chunks_fts MATCH '\"domino\" OR \"sequence\"' AND c.document_id IN (1) ORDER BY bm25_score,c.id",
+      "plan": [
+        [
+          7,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          11,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          14,
+          0,
+          156,
+          "SCAN chunks_fts VIRTUAL TABLE INDEX 0:M5"
+        ],
+        [
+          19,
+          0,
+          45,
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          43,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT v.rowid chunk_id,coalesce(vec_distance_cosine(v.embedding,x'00000000000000002549123e'),1.0) vector_distance,\n c.document_id,c.chunk_no,c.page_no,c.section_heading heading,d.path,d.filename,d.title,\n d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers\n FROM chunks c CROSS JOIN chunk_vectors v ON v.rowid=c.id\n JOIN documents d ON d.id=c.document_id JOIN sources s ON s.id=d.source_id\n WHERE c.document_id IN (1)",
+      "plan": [
+        [
+          7,
+          0,
+          61,
+          "SEARCH c USING INDEX sqlite_autoindex_chunks_1 (document_id=?)"
+        ],
+        [
+          12,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          16,
+          0,
+          33,
+          "SCAN v VIRTUAL TABLE INDEX 3:2!___"
+        ],
+        [
+          21,
+          0,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    {
+      "sql": "SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,\n c.section_heading heading,d.path,d.filename,d.title,d.ingestion_mode,\n c.text snippet FROM chunks c JOIN documents d ON d.id=c.document_id\n WHERE c.document_id IN (1) ORDER BY c.document_id,c.chunk_no",
+      "plan": [
+        [
+          5,
+          0,
+          45,
+          "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          9,
+          0,
+          61,
+          "SEARCH c USING INDEX sqlite_autoindex_chunks_1 (document_id=?)"
+        ]
+      ]
+    }
+  ],
+  "validation": {
+    "full_suite_passed": 448,
+    "full_suite_preexisting_failures": 5,
+    "targeted_passed": 69,
+    "browser": "Browser checks passed: live progress, successive requests, old responses, JSON copy fallback, routine tree, channel failure, cancellation, persisted panel.",
+    "notes": "Synthetic fixture only: 2000 documents, 6000 chunks/vectors, deterministic 3D test embedding. No user corpus available."
+  }
+}

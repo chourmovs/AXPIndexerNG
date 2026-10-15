@@ -1,4 +1,5 @@
 import time
+from .tracing import span, traced
 from dataclasses import dataclass
 
 from .document_identity import (_meaningful_terms, analyze_document_identity,
@@ -96,45 +97,52 @@ def _relevance(item, query_terms, config):
     return accepted
 
 
+@traced("Fusion hybride")
 def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile="hybrid", reranker=None, explain=False):
     started = time.perf_counter()
     config = config or SearchConfig(rrf_k=rrf_k)
     timings = {"query_embedding_ms": 0.0}
     t = time.perf_counter()
-    lexical = [] if profile == "fast" else lexical_search(con, query, config.lexical_candidates)
+    if profile == "fast":
+        with span("FTS globale", "axp_core.fts.search") as measured:
+            measured.skip("fast_profile")
+        lexical = []
+    else:
+        lexical = lexical_search(con, query, config.lexical_candidates)
     timings["fts_retrieval_ms"] = (time.perf_counter() - t) * 1000
     t = time.perf_counter()
     vector = vector_search(con, query_vector, config.vector_candidates)
     timings["vector_retrieval_ms"] = (time.perf_counter() - t) * 1000
     t = time.perf_counter()
-    merged = {}
-    for kind, rows in (("lexical", lexical), ("vector", vector)):
-        for rank, row in enumerate(rows, 1):
-            item = merged.setdefault(row["chunk_id"], dict(row))
-            item.setdefault("lexical_rank", None)
-            item.setdefault("vector_rank", None)
-            item.setdefault("bm25_score", None)
-            item.setdefault("vector_distance", None)
-            item.setdefault("rrf_score", 0.0)
-            item[f"{kind}_rank"] = rank
-            item["rrf_score"] += 1 / (config.rrf_k + rank)
-            item.update({k: v for k, v in row.items() if v is not None})
-    query_ids = {x for x, _ in extract_identifiers(query)}
-    quoted = [part for i, part in enumerate(query.split('"')) if i % 2 and part.strip()]
-    for item in merged.values():
-        item_ids = {normalize_identifier(x) for x in item.get("identifiers", "").split()}
-        identity = analyze_document_identity(query, filename=item.get("filename") or item.get("path"),
-            title=item.get("title"), source_label=item.get("source_label"), source_path=item.get("source_path"))
-        item["exact_identifier_match"] = bool(query_ids & item_ids)
-        item["exact_filename_match"] = identity.filename_identity_match
-        item.update(identity_diagnostics(identity))
-        item["exact_phrase_match"] = any(x.casefold() in item["snippet"].casefold() for x in quoted)
-        item["exact_priority"] = sum(
-            (item["exact_identifier_match"], item["exact_filename_match"], item["exact_phrase_match"])
-        )
-    ranked = sorted(merged.values(), key=lambda x: (-x["exact_priority"], -x["rrf_score"], x["chunk_id"]))
-    for rank, item in enumerate(ranked, 1):
-        item["rrf_rank"] = rank
+    with span('Fusion et identité des candidats', 'hybrid.fusion'):
+        merged = {}
+        for kind, rows in (("lexical", lexical), ("vector", vector)):
+            for rank, row in enumerate(rows, 1):
+                item = merged.setdefault(row["chunk_id"], dict(row))
+                item.setdefault("lexical_rank", None)
+                item.setdefault("vector_rank", None)
+                item.setdefault("bm25_score", None)
+                item.setdefault("vector_distance", None)
+                item.setdefault("rrf_score", 0.0)
+                item[f"{kind}_rank"] = rank
+                item["rrf_score"] += 1 / (config.rrf_k + rank)
+                item.update({k: v for k, v in row.items() if v is not None})
+        query_ids = {x for x, _ in extract_identifiers(query)}
+        quoted = [part for i, part in enumerate(query.split('"')) if i % 2 and part.strip()]
+        for item in merged.values():
+            item_ids = {normalize_identifier(x) for x in item.get("identifiers", "").split()}
+            identity = analyze_document_identity(query, filename=item.get("filename") or item.get("path"),
+                title=item.get("title"), source_label=item.get("source_label"), source_path=item.get("source_path"))
+            item["exact_identifier_match"] = bool(query_ids & item_ids)
+            item["exact_filename_match"] = identity.filename_identity_match
+            item.update(identity_diagnostics(identity))
+            item["exact_phrase_match"] = any(x.casefold() in item["snippet"].casefold() for x in quoted)
+            item["exact_priority"] = sum(
+                (item["exact_identifier_match"], item["exact_filename_match"], item["exact_phrase_match"])
+            )
+        ranked = sorted(merged.values(), key=lambda x: (-x["exact_priority"], -x["rrf_score"], x["chunk_id"]))
+        for rank, item in enumerate(ranked, 1):
+            item["rrf_rank"] = rank
     timings["rrf_ms"] = (time.perf_counter() - t) * 1000
     timings["rerank_ms"] = 0.0
     if profile == "quality":
@@ -150,23 +158,24 @@ def search(con, query, query_vector, limit=20, rrf_k=60, *, config=None, profile
         for rank, item in enumerate(head, 1):
             item["rerank_rank"] = rank
         timings["rerank_ms"] = (time.perf_counter() - t) * 1000
-    for item in ranked:
-        item.setdefault("reranker_score", None)
-        item.setdefault("rerank_rank", None)
-    unfiltered_count = len(ranked)
-    query_terms = _meaningful_terms(query)
-    ranked = [item for item in ranked if _relevance(item, query_terms, config)]
-    if profile == "quality":
-        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"],
-                                   -(x["reranker_score"] if x["reranker_score"] is not None else float("-inf")),
-                                   -x["evidence_score"], -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
-    else:
-        # Preserve the PR40 hybrid ordering exactly; reranking is quality-only.
-        ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["passage_score"],
-                                   -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
-    final = diversify(ranked, limit, config.max_chunks_per_document)
-    for rank, item in enumerate(final, 1):
-        item["final_rank"] = rank
+    with span('Filtrage, scoring et diversification', 'hybrid.filter_rank'):
+        for item in ranked:
+            item.setdefault("reranker_score", None)
+            item.setdefault("rerank_rank", None)
+        unfiltered_count = len(ranked)
+        query_terms = _meaningful_terms(query)
+        ranked = [item for item in ranked if _relevance(item, query_terms, config)]
+        if profile == "quality":
+            ranked.sort(key=lambda x: (-x["meaningful_exact_priority"],
+                                       -(x["reranker_score"] if x["reranker_score"] is not None else float("-inf")),
+                                       -x["evidence_score"], -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
+        else:
+            # Preserve the PR40 hybrid ordering exactly; reranking is quality-only.
+            ranked.sort(key=lambda x: (-x["meaningful_exact_priority"], -x["passage_score"],
+                                       -x["convergence_score"], -x["rrf_score"], x["chunk_id"]))
+        final = diversify(ranked, limit, config.max_chunks_per_document)
+        for rank, item in enumerate(final, 1):
+            item["final_rank"] = rank
     timings["total_ms"] = (time.perf_counter() - started) * 1000
     timings["fusion_ms"] = timings.pop("rrf_ms")
     timings["passage_scoring_ms"] = max(0.0, timings["total_ms"] - sum(

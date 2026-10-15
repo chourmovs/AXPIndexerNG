@@ -7,10 +7,19 @@ async function jsonRequest(url, options = {}) {
   try { response = await fetch(url, options); } catch (_) { throw new ApiError('network_error', 'AXP is temporarily unavailable.'); }
   let body = {};
   try { body = await response.json(); } catch (_) { if (!response.ok) throw new ApiError('http_error', 'AXP request failed.', response.status); }
-  if (!response.ok) throw new ApiError(body.error || 'http_error', body.error || 'AXP request failed.', response.status);
+  if (!response.ok) {
+    const error = new ApiError(body.error || 'http_error', body.error || 'AXP request failed.', response.status);
+    error.body = body; throw error;
+  }
   return body;
 }
-export const searchDocuments = query => jsonRequest(`/api/search?q=${encodeURIComponent(query)}`);
+export const searchDocuments = (query, requestId, signal) => jsonRequest(
+  `/api/search?q=${encodeURIComponent(query)}${requestId ? `&explain=1&request_id=${encodeURIComponent(requestId)}` : ''}`,
+  {signal, cache:'no-store'});
+export const searchProgress = (requestId, signal) => jsonRequest(
+  `/api/search/progress?request_id=${encodeURIComponent(requestId)}`, {cache:'no-store', signal});
+export const cancelSearch = requestId => jsonRequest(
+  `/api/search/cancel?request_id=${encodeURIComponent(requestId)}`, {method:'POST'});
 export const getBuildInfo = () => jsonRequest('/api/version', {cache: 'no-store'});
 export const getStartup = () => jsonRequest('/api/startup', {cache: 'no-store'});
 export const askHealth = () => jsonRequest('/api/ask/health', {cache: 'no-store'});

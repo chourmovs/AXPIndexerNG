@@ -13,7 +13,14 @@
   <section id="search-panel"><h2>Search documents</h2>
     <div id="search-startup" class="health startup-status" aria-live="polite">◐ Preparing local search…<small>Search will become available automatically.</small></div>
     <form id="search-form"><label class="sr-only" for="search-input">Search indexed documents</label>
-      <input id="search-input" placeholder="Search indexed documents" disabled><button disabled>Search</button></form>
+      <input id="search-input" maxlength="4000" placeholder="Search indexed documents" disabled><button disabled>Search</button>
+      <button id="cancel-search" type="button" class="secondary" hidden>Annuler</button></form>
+    <details id="search-diagnostics" open><summary>Diagnostic de la recherche</summary>
+      <div id="search-diagnostic-summary" role="status">Lancez une recherche pour afficher le diagnostic.</div>
+      <button id="copy-search-diagnostic" type="button" class="secondary">Copier le diagnostic en JSON texte</button>
+      <textarea id="search-diagnostic-json" aria-label="Diagnostic JSON à copier" rows="8" readonly hidden></textarea>
+      <div id="search-diagnostic-tree"></div>
+    </details>
     <section id="results" aria-live="polite"></section>
   </section>
   <section id="ask-panel" hidden><div class="panel-heading"><div><h2>Ask AXP</h2><p class="muted">Local AI · indexed sources only</p></div>

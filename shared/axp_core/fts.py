@@ -1,3 +1,4 @@
+from .tracing import span, traced, sql_rows
 import re
 
 from .identifiers import extract_identifiers
@@ -8,6 +9,7 @@ BM25_WEIGHTS = (1.0, 4.0, 3.0, 4.0, 8.0)
 TOKEN_RE = re.compile(r"[^\W_]+(?:[-._/][^\W_]+)*", re.UNICODE)
 
 
+@traced('Normalisation FTS')
 def build_query(query):
     """Convert user text into quoted FTS atoms; no user MATCH syntax survives."""
     tokens = [m.group(0) for m in TOKEN_RE.finditer(query or "")]
@@ -22,13 +24,13 @@ def build_query(query):
     return " OR ".join(dict.fromkeys(terms))
 
 
+@traced('FTS globale')
 def search(con, query, limit=20):
     match = build_query(query)
     if not match or limit <= 0:
         return []
     limit = min(int(limit), 500)
-    rows = con.execute(
-        """WITH ranked AS (
+    rows = sql_rows(con, """WITH ranked AS (
  SELECT rowid chunk_id,bm25(chunks_fts,?,?,?,?,?) bm25_score
  FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25_score,rowid LIMIT ?
  )
@@ -37,12 +39,13 @@ def search(con, query, limit=20):
  ranked.bm25_score
  FROM ranked JOIN chunks c ON c.id=ranked.chunk_id JOIN documents d ON d.id=c.document_id
  JOIN sources s ON s.id=d.source_id
- ORDER BY ranked.bm25_score,ranked.chunk_id""",
-        (*BM25_WEIGHTS, match, limit),
-    ).fetchall()
-    return [dict(r) for r in rows]
+ ORDER BY ranked.bm25_score,ranked.chunk_id""", (*BM25_WEIGHTS, match, limit))
+    with span("Conversion des lignes", "rows_to_dict") as measured:
+        measured.count(candidates=len(rows))
+        return [dict(r) for r in rows]
 
 
+@traced('FTS avec périmètre')
 def search_scoped(con, query, *, source_ids=None, path_prefixes=None, extensions=None,
                   modified_after_ms=None, modified_before_ms=None, limit=20):
     """Run FTS with document restrictions applied before the ranked LIMIT."""
@@ -63,8 +66,7 @@ def search_scoped(con, query, *, source_ids=None, path_prefixes=None, extensions
         clauses.append("d.modified_unix_ms>=?"); values.append(int(modified_after_ms))
     if modified_before_ms is not None:
         clauses.append("d.modified_unix_ms<?"); values.append(int(modified_before_ms))
-    rows = con.execute(
-        f"""WITH ranked AS (
+    rows = sql_rows(con, f"""WITH ranked AS (
  SELECT chunks_fts.rowid chunk_id,bm25(chunks_fts,?,?,?,?,?) bm25_score
  FROM chunks_fts JOIN chunks c0 ON c0.id=chunks_fts.rowid
  JOIN documents d ON d.id=c0.document_id WHERE {' AND '.join(clauses)}
@@ -73,12 +75,13 @@ def search_scoped(con, query, *, source_ids=None, path_prefixes=None, extensions
  d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,
  c.text snippet,c.identifiers,ranked.bm25_score
  FROM ranked JOIN chunks c ON c.id=ranked.chunk_id JOIN documents d ON d.id=c.document_id
- JOIN sources s ON s.id=d.source_id ORDER BY ranked.bm25_score,ranked.chunk_id""",
-        (*BM25_WEIGHTS, *values, min(int(limit), 2000)),
-    ).fetchall()
-    return [dict(row) for row in rows]
+ JOIN sources s ON s.id=d.source_id ORDER BY ranked.bm25_score,ranked.chunk_id""", (*BM25_WEIGHTS, *values, min(int(limit), 2000)))
+    with span("Conversion des lignes", "rows_to_dict") as measured:
+        measured.count(candidates=len(rows))
+        return [dict(row) for row in rows]
 
 
+@traced('FTS par document')
 def search_documents(con, query, document_ids):
     """Return every lexical match in the selected documents (no global cap)."""
     ids = sorted({int(value) for value in document_ids})
@@ -86,13 +89,12 @@ def search_documents(con, query, document_ids):
     if not ids or not match:
         return []
     placeholders = ",".join("?" for _ in ids)
-    rows = con.execute(
-        f"""SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,
+    rows = sql_rows(con, f"""SELECT c.id chunk_id,c.document_id,c.chunk_no,c.page_no,c.section_heading heading,
  d.path,d.filename,d.title,d.ingestion_mode,d.source_id,s.label source_label,s.path source_path,c.text snippet,c.identifiers,
  bm25(chunks_fts,?,?,?,?,?) bm25_score
  FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN documents d ON d.id=c.document_id
  JOIN sources s ON s.id=d.source_id
- WHERE chunks_fts MATCH ? AND c.document_id IN ({placeholders}) ORDER BY bm25_score,c.id""",
-        (*BM25_WEIGHTS, match, *ids),
-    ).fetchall()
-    return [dict(row) for row in rows]
+ WHERE chunks_fts MATCH ? AND c.document_id IN ({placeholders}) ORDER BY bm25_score,c.id""", (*BM25_WEIGHTS, match, *ids))
+    with span("Conversion des lignes", "rows_to_dict") as measured:
+        measured.count(candidates=len(rows))
+        return [dict(row) for row in rows]

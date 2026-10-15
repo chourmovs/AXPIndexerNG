@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
 from .fts import TOKEN_RE
 from .identifiers import extract_identifiers
+from .tracing import traced
 
 QUERY_STOPWORDS = {
     "avec", "dans", "des", "est", "les", "par", "pour", "que", "quel", "quelle", "quels",
@@ -30,6 +32,18 @@ GENERIC_IDENTITY_TERMS = {
 }
 
 
+def _memoized_normalization(fn):
+    # Content-addressed, immutable values need no catalog invalidation. Long body
+    # strings bypass this cache; 2048 entries * 512 characters bound each cache.
+    cached = functools.lru_cache(maxsize=2048)(fn)
+    @functools.wraps(fn)
+    def normalize(value, **kwargs):
+        value = str(value or "")
+        return cached(value, **kwargs) if len(value) <= 512 else fn(value, **kwargs)
+    return normalize
+
+
+@_memoized_normalization
 def fold_search_text(value):
     decomposed = unicodedata.normalize("NFKD", str(value or ""))
     return "".join(character for character in decomposed
@@ -42,6 +56,7 @@ def _canonical_term(value):
     return value[:-1] if len(value) > 4 and value.endswith("s") else value
 
 
+@_memoized_normalization
 def _ordered_terms(value, *, meaningful=True):
     terms = []
     for match in TOKEN_RE.finditer(str(value or "")):
@@ -53,9 +68,10 @@ def _ordered_terms(value, *, meaningful=True):
             if not meaningful or ((len(canonical) >= 3 or compound_component)
                                   and canonical not in QUERY_STOPWORDS):
                 terms.append(canonical)
-    return terms
+    return tuple(terms)
 
 
+@_memoized_normalization
 def _meaningful_terms(value):
     """Return the historical search term set used by passage/query logic.
 
@@ -70,7 +86,7 @@ def _meaningful_terms(value):
         variants = (token, *re.split(r"[-._/\\]+", token))
         terms.update(_canonical_term(part) for part in variants
                      if len(part) >= 3 and _canonical_term(part) not in QUERY_STOPWORDS)
-    return terms
+    return frozenset(terms)
 
 
 def _is_phrase(query_terms, metadata_terms):
@@ -97,6 +113,7 @@ class DocumentIdentityMatch:
     priority: tuple[int, int, int, int]
 
 
+@traced("Matching nom, titre et collection")
 def analyze_document_identity(query, *, filename="", title="", source_label="", source_path=""):
     """Analyze explicit identity against one bounded document candidate."""
     query_ordered = _ordered_terms(query)

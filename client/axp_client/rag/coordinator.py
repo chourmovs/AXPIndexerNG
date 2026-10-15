@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from contextlib import nullcontext
+from axp_core.tracing import SearchCancelled, Trace, current_trace, span, traced
 from axp_core.document_identity import _meaningful_terms, analyze_document_identity
 from axp_core.fts import search_scoped
 from axp_core.hybrid import SearchConfig
@@ -30,6 +32,7 @@ class RetrievalCoordinator:
                  total_budget_s=RAG_TOTAL_RETRIEVAL_BUDGET_S):
         self.search_fn, self.primary_budget_s, self.total_budget_s = search_fn, primary_budget_s, total_budget_s
 
+    @traced("RAG : routage identité")
     def _identity(self, con, question, policy):
         try:
             ids = resolve_identity_documents(con, question, limit=RAG_FAST_IDENTITY_MAX_DOCUMENTS,
@@ -43,6 +46,8 @@ class RetrievalCoordinator:
         strong = []
         for document_id in ids:
             row = con.execute("SELECT d.filename,d.title,s.label source_label,s.path source_path FROM documents d JOIN sources s ON s.id=d.source_id WHERE d.id=?", (document_id,)).fetchone()
+            if row is None:  # A writer may delete a routed document before hydration.
+                continue
             match = analyze_document_identity(question, filename=row["filename"], title=row["title"], source_label=row["source_label"], source_path=row["source_path"])
             if any(match.priority): strong.append((tuple(match.priority), document_id))
         if not strong: return [], None
@@ -51,6 +56,23 @@ class RetrievalCoordinator:
         return ids, "identity_fast_path" if len(ids) == 1 else "identity_ambiguous"
 
     def retrieve(self, con, embedder, question, *, policy=None, search_depth=0, limit=24, search_config=None, request_id="-"):
+        existing = current_trace()
+        trace = existing or Trace(None if request_id == "-" else request_id)
+        try:
+            with nullcontext() if existing else trace.bind():
+                result = self._retrieve(con, embedder, question, policy=policy, search_depth=search_depth,
+                                        limit=limit, search_config=search_config, request_id=trace.request_id)
+        except BaseException as exc:
+            if not existing:
+                trace.finish("cancelled" if trace.cancelled.is_set() or isinstance(exc, (SearchCancelled, KeyboardInterrupt)) else "error")
+            raise
+        if not existing:
+            trace.finish()
+        result.retrieval.timings["request_trace"] = trace.snapshot()
+        return result
+
+    @traced("Récupération RAG et budgets")
+    def _retrieve(self, con, embedder, question, *, policy=None, search_depth=0, limit=24, search_config=None, request_id="-"):
         policy, config, started = policy or RetrievalPolicy(), search_config or SearchConfig(), time.perf_counter()
         # Existing Skill schema/compiler remains wire-compatible; its old plan is
         # consumed as constraints, never as an execution-stage recipe.
@@ -60,7 +82,11 @@ class RetrievalCoordinator:
                           RetrievalScope())
             policy = RetrievalPolicy(scope=scoped,
                                      mode="prefer" if policy.allow_global_fallback else "strict")
-        tick = time.perf_counter(); vector = embedder.embed_query(question) if embedder else None
+        tick = time.perf_counter()
+        with span("Embedding requête RAG", "embedder.embed_query") as measured:
+            vector = embedder.embed_query(question) if embedder else None
+            if embedder is None:
+                measured.skip("no_embedder")
         embedding_ms = (time.perf_counter()-tick)*1000
         intent = classify_query_evidence_intent(question)
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -163,6 +189,9 @@ class RetrievalCoordinator:
         total_ms = (time.perf_counter()-started)*1000
         trace = ({"route": route, "initial_route": initial_route, "final_route": route,
                   "expansion_reason": expansion_reason, "search_depth": search_depth,
+                  "expansion_status": ("performed" if expanded else "not_needed" if not expansion_reason else
+                      "budget_exhausted" if total_ms >= self.total_budget_s * 1000 else
+                      "strict_scope" if policy.mode == "strict" else "no_new_candidates_or_query"),
                   "primary_documents": len(ids), "drilldown_documents": len(ids)+len(new_ids),
                   "passages_examined": examined,
                   "evidence_retained": sum(is_supporting_evidence(row) for row in passages),
