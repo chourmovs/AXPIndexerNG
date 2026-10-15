@@ -202,7 +202,17 @@ def make_handler(db, embedder=None, open_file=open_with_default_application, rag
                                                     "results": [], "timings": {}, "candidate_counts": {}}
                                 trace.check()
                                 result["timings"].update(reader_timings, db_acquire_ms=db_acquire_ms)
-                                result["diagnostics"] = {"reader_reused": reused, **search_reader_diagnostics(con)}
+                                identity = next((row["details"] for row in trace.snapshot()["spans"]
+                                    if row["routine"] == "identity_cache.identity_resolution"), {})
+                                result["diagnostics"] = {
+                                    "reader_reused": reused, **search_reader_diagnostics(con),
+                                    "search_data": {"status": "available"},
+                                    "identity_cache": {"status": identity.get("cache", "not_used"),
+                                        "age_ms": identity.get("age_ms"),
+                                        "generation": identity.get("generation"),
+                                        "invalidation_reason": identity.get("invalidation_reason"),
+                                        "scope": "identity results for this query and scope"},
+                                }
                             finally:
                                 con.set_progress_handler(None, 0)
                         result["timings"]["http_search_total_ms"] = (trace.clock() - trace.started) / 1e6

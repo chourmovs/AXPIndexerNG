@@ -38,7 +38,13 @@ export class SearchDiagnostics {
     if (browser.progress_failed) lines.push('Canal de progression indisponible ; la recherche continue.');
     if (browser.cancellation_requested) lines.push('Requête annulée côté navigateur ; annulation serveur demandée. Le statut serveur est celui de la dernière progression reçue.');
     if (trace.truncated) lines.push('Trace tronquée : limite de mémoire atteinte.');
-    if (trace.catalog) lines.push(`Compteurs catalogue : ${trace.catalog.total_chunks ?? '?'} passages, ${trace.catalog.total_vectors ?? '?'} vecteurs · snapshot ancien : ${trace.catalog.catalog_snapshot_stale ? 'oui (compteurs seulement)' : 'non'}.`);
+    if (trace.catalog) {
+      const c = trace.catalog, identity = c.identity_cache;
+      lines.push(c.catalog_snapshot_status === 'unavailable' ? 'Compteurs indisponibles ; calcul en arrière-plan.' :
+        `Compteurs échantillonnés : ${c.total_chunks ?? '?'} passages, ${c.total_vectors ?? '?'} vecteurs · état ${c.catalog_snapshot_status || 'inconnu'} · âge ${milliseconds(c.catalog_snapshot_age_ms)}.`);
+      lines.push(`Portée des compteurs : ${c.catalog_snapshot_scope || 'non renseignée'}. Données de recherche : ${c.search_data?.status || 'non renseigné'}.`);
+      if (identity) lines.push(`Cache identité : ${identity.status} · âge ${milliseconds(identity.age_ms)} · génération ${identity.generation || '—'} · ${identity.invalidation_reason || 'sans invalidation'}.`);
+    }
     if (trace.spans?.length) lines.push('Coûts propres les plus élevés : ' + [...trace.spans].sort((a,b) => b.self_ms-a.self_ms)
       .slice(0,3).map(row => `${row.name} (${milliseconds(row.self_ms)})`).join(' ; '));
     this.summary.replaceChildren(...lines.map(text => element('p', '', text)));

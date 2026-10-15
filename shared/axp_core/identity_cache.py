@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
 
@@ -70,7 +71,9 @@ def identity_resolution(con, question, scope, limit):
                     _condition.wait(.05)
                     if current_trace():
                         current_trace().check()
-                cached = _results.get(key)
+                entry = _results.get(key)
+                cached = entry[0] if entry is not None else None
+                age_ms = max(0.0, (time.monotonic() - entry[1]) * 1000) if entry is not None else None
                 reason = "cold" if db not in _latest else (
                     "identity_metadata_changed" if _latest[db] != generation else "query_not_cached")
                 _latest[db] = generation
@@ -83,12 +86,13 @@ def identity_resolution(con, question, scope, limit):
                     _building.add(key)
                     claimed = True
             measured.detail(cache="hit" if cached is not None else "miss", generation=f"{generation[0]}:{generation[1]}",
-                            invalidation_reason=None if cached is not None else reason)
+                            invalidation_reason=None if cached is not None else reason, age_ms=age_ms)
             measured.count(documents=len(cached) if cached is not None else 0)
             def publish(ids):
                 if claimed:
                     with _condition:
-                        _results[key] = tuple(ids)
+                        _results[key] = (tuple(ids), time.monotonic())
+                        measured.detail(age_ms=0.0)
                         _results.move_to_end(key)
                         while len(_results) > MAX_ENTRIES:
                             _results.popitem(last=False)

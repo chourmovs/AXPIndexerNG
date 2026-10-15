@@ -1,0 +1,741 @@
+{
+  "base_commit": "61480d6",
+  "user_reference_commit_available": false,
+  "user_corpus_available": false,
+  "synthetic": true,
+  "server_path": "axp_client.search.search on direct connection; excludes HTTP and reader acquisition",
+  "scenarios": {
+    "name": {
+      "before": {
+        "cold_connection": {
+          "n": 3,
+          "median": 565.3821739999785,
+          "min": 561.1428439999884,
+          "max": 597.3888409999972,
+          "iqr": 18.122998500004428
+        },
+        "warm": {
+          "n": 3,
+          "median": 419.81424400000833,
+          "min": 407.16352600000505,
+          "max": 435.78047099998685,
+          "iqr": 14.308472499990899
+        }
+      },
+      "after": {
+        "cold_connection": {
+          "n": 3,
+          "median": 454.25866000005044,
+          "min": 413.67642199998045,
+          "max": 464.88512899998113,
+          "iqr": 25.604353500000343
+        },
+        "warm": {
+          "n": 3,
+          "median": 456.4813879999292,
+          "min": 428.9386519999425,
+          "max": 560.2377239999896,
+          "iqr": 65.64953600002355
+        }
+      }
+    },
+    "hybrid": {
+      "before": {
+        "cold_connection": {
+          "n": 3,
+          "median": 495.99411899998813,
+          "min": 488.7721210000109,
+          "max": 583.5461610000152,
+          "iqr": 47.38702000000217
+        },
+        "warm": {
+          "n": 3,
+          "median": 388.8846970000088,
+          "min": 386.6373049999936,
+          "max": 406.2984340000071,
+          "iqr": 9.830564500006744
+        }
+      },
+      "after": {
+        "cold_connection": {
+          "n": 3,
+          "median": 481.41398699999627,
+          "min": 433.34909800000787,
+          "max": 525.3569189999325,
+          "iqr": 46.00391049996233
+        },
+        "warm": {
+          "n": 3,
+          "median": 447.34942200000205,
+          "min": 436.08280600005855,
+          "max": 450.76582800004417,
+          "iqr": 7.341510999992806
+        }
+      }
+    },
+    "identified": {
+      "before": {
+        "cold_connection": {
+          "n": 3,
+          "median": 527.7481770000065,
+          "min": 505.5642089999992,
+          "max": 536.8944009999836,
+          "iqr": 15.665095999992218
+        },
+        "warm": {
+          "n": 3,
+          "median": 405.49873399999115,
+          "min": 401.80415800000446,
+          "max": 417.11049799999955,
+          "iqr": 7.653169999997544
+        }
+      },
+      "after": {
+        "cold_connection": {
+          "n": 3,
+          "median": 436.49980800000776,
+          "min": 422.1921639999664,
+          "max": 463.5392430000138,
+          "iqr": 20.673539500023708
+        },
+        "warm": {
+          "n": 3,
+          "median": 456.94720899996355,
+          "min": 448.4012299999449,
+          "max": 480.58874400010154,
+          "iqr": 16.093757000078313
+        }
+      }
+    },
+    "multiple": {
+      "before": {
+        "cold_connection": {
+          "n": 3,
+          "median": 523.1642690000058,
+          "min": 519.2424459999927,
+          "max": 526.4624609999942,
+          "iqr": 3.6100075000007337
+        },
+        "warm": {
+          "n": 3,
+          "median": 405.666956999994,
+          "min": 401.07599700002083,
+          "max": 411.7413479999925,
+          "iqr": 5.3326754999858395
+        }
+      },
+      "after": {
+        "cold_connection": {
+          "n": 3,
+          "median": 442.75345500000185,
+          "min": 439.55915600008666,
+          "max": 495.3996450000204,
+          "iqr": 27.920244499966884
+        },
+        "warm": {
+          "n": 3,
+          "median": 443.49326799999744,
+          "min": 440.09054499997546,
+          "max": 446.59324099995956,
+          "iqr": 3.251347999992049
+        }
+      }
+    },
+    "absent": {
+      "before": {
+        "cold_connection": {
+          "n": 3,
+          "median": 538.685025999996,
+          "min": 504.4089700000143,
+          "max": 683.8712530000066,
+          "iqr": 89.73114149999617
+        },
+        "warm": {
+          "n": 3,
+          "median": 421.51277300001766,
+          "min": 406.6361069999971,
+          "max": 424.05060000001527,
+          "iqr": 8.707246500009092
+        }
+      },
+      "after": {
+        "cold_connection": {
+          "n": 3,
+          "median": 468.8568460001079,
+          "min": 417.4195029999055,
+          "max": 651.7717259999927,
+          "iqr": 117.17611150004359
+        },
+        "warm": {
+          "n": 3,
+          "median": 451.45553600002586,
+          "min": 429.852176000054,
+          "max": 454.6538980000605,
+          "iqr": 12.40086100000326
+        }
+      }
+    }
+  },
+  "raw_samples": {
+    "before": [
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 561.1428439999884
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 435.78047099998685
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 565.3821739999785
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 407.16352600000505
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 597.3888409999972
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 419.81424400000833
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 583.5461610000152
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 388.8846970000088
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 488.7721210000109
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 386.6373049999936
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 495.99411899998813
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 406.2984340000071
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 505.5642089999992
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 401.80415800000446
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 536.8944009999836
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 417.11049799999955
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 527.7481770000065
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 405.49873399999115
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 519.2424459999927
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 405.666956999994
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 523.1642690000058
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 411.7413479999925
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 526.4624609999942
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 401.07599700002083
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 538.685025999996
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 421.51277300001766
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 683.8712530000066
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 424.05060000001527
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 504.4089700000143
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 406.6361069999971
+      }
+    ],
+    "after": [
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 454.25866000005044
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 560.2377239999896
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 464.88512899998113
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 456.4813879999292
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 413.67642199998045
+      },
+      {
+        "query": "DOMINO",
+        "scenario": "name",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 428.9386519999425
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 433.34909800000787
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 436.08280600005855
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 525.3569189999325
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 450.76582800004417
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 481.41398699999627
+      },
+      {
+        "query": "reactor pressure",
+        "scenario": "hybrid",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 447.34942200000205
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 422.1921639999664
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 448.4012299999449
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 463.5392430000138
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 480.58874400010154
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 436.49980800000776
+      },
+      {
+        "query": "DOMINO pressure",
+        "scenario": "identified",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 456.94720899996355
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 439.55915600008666
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 440.09054499997546
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 442.75345500000185
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 443.49326799999744
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 495.3996450000204
+      },
+      {
+        "query": "DOMINO storage pressure",
+        "scenario": "multiple",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 1,
+        "answerable": true,
+        "search_total_ms": 446.59324099995956
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 0,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 651.7717259999927
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 0,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 451.45553600002586
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 1,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 468.8568460001079
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 1,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 454.6538980000605
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "cold_connection",
+        "rep": 2,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 417.4195029999055
+      },
+      {
+        "query": "unobtainium calibration",
+        "scenario": "absent",
+        "temperature": "warm",
+        "rep": 2,
+        "top": 47,
+        "answerable": false,
+        "search_total_ms": 429.852176000054
+      }
+    ]
+  },
+  "reader_open": {
+    "before": {
+      "n": 7,
+      "median": 113.69981699999698,
+      "min": 112.91429499999595,
+      "max": 118.10467599991625,
+      "iqr": 4.133371499960958
+    },
+    "after": {
+      "n": 7,
+      "median": 0.7087660000024698,
+      "min": 0.6599029999279082,
+      "max": 1.3643140000567655,
+      "iqr": 0.11704649995181171
+    }
+  }
+}

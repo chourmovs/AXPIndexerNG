@@ -21,6 +21,15 @@ function renderResult(row, terms) { const article = element('article', 'result-c
   score.title = details.join('\n'); header.append(title, score);
   const path = element('div', 'path', row.path); const source = element('small', '', `Source: ${row.source_label || row.source_path || '—'}`);
   const snippet = element('p'); appendHighlighted(snippet, row.snippet, terms); article.append(header, path, source, snippet, createDocumentActions(row.document_id)); return article; }
+function diagnosticSummary(diagnostics) {
+  const d = diagnostics || {}; const counts = d.catalog_snapshot_status;
+  const age = d.catalog_snapshot_age_ms == null ? '—' : `${(d.catalog_snapshot_age_ms / 1000).toFixed(1)} s`;
+  const text = !counts || counts === 'unavailable' ? 'Compteurs indisponibles' :
+    `Compteurs échantillonnés${counts === 'aged' ? ' (anciens)' : ''} : ${d.total_chunks ?? '—'} passages, ${d.total_vectors ?? '—'} vecteurs — âge ${age}`;
+  return element('small', 'search-diagnostics', `${text}${d.catalog_snapshot_refreshing ? ' — calcul en arrière-plan' : ''}. ` +
+    `Portée : ${d.catalog_snapshot_scope || 'catalogue entier'}. ` +
+    `Cache identité : ${d.identity_cache?.status || 'non renseigné'}, âge ${d.identity_cache?.age_ms == null ? '—' : `${d.identity_cache.age_ms.toFixed(1)} ms`}. Données de recherche disponibles.`);
+}
 export function initSearch() {
   const form = document.querySelector('#search-form'), results = document.querySelector('#results');
   const cancel = document.querySelector('#cancel-search'), diagnostic = new SearchDiagnostics();
@@ -79,8 +88,7 @@ export function initSearch() {
       if (!generation.accepts(token) || state.done) return;
       state.browser.http_ms = performance.now()-httpStarted;
       const renderStarted = performance.now(), rows = response.results;
-      if (!rows.length) results.textContent = 'No sufficiently relevant result.';
-      else results.replaceChildren(...rows.map(row => renderResult(row, queryTerms(query))));
+      results.replaceChildren(...(rows.length ? rows.map(row => renderResult(row, queryTerms(query))) : [element('p', '', 'No sufficiently relevant result.')]), diagnosticSummary(response.diagnostics));
       state.browser.render_ms = performance.now()-renderStarted;
       state.browser.first_result_timing_method = 'Two animation frames: upper bound after a paint opportunity; render_ms measures DOM preparation only';
       state.trace = response.request_trace;
@@ -88,8 +96,16 @@ export function initSearch() {
       // Give results a paint opportunity before building the diagnostic tree.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (!generation.accepts(token)) return;
-        state.browser.first_result_ms = performance.now()-state.started;
-        state.browser.elapsed_ms = state.browser.first_result_ms;
+        state.browser.first_result_ms = rows.length ? performance.now()-state.started : null;
+        state.browser.elapsed_ms = performance.now()-state.started;
+        const measurement = {request:requestId, query, result_count:rows.length,
+          browser_response_ms:renderStarted-state.started,
+          browser_dom_ready_ms:renderStarted-state.started+state.browser.render_ms,
+          browser_first_result_ms:state.browser.first_result_ms,
+          first_result_definition:'two animation frames after final result DOM insertion',
+          server_timings:response.timings};
+        window.axpSearchMeasurement = measurement;
+        window.dispatchEvent(new CustomEvent('axp-search-measured', {detail:measurement}));
         diagnostic.update(state.trace, state.browser);
       }));
     } catch (error) {
