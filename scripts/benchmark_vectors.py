@@ -6,6 +6,7 @@ is not a cold disk cache. No OS cache flush, daemon control or corpus mutation.
 """
 import argparse
 import json
+import math
 import platform
 import sqlite3
 import statistics
@@ -70,6 +71,7 @@ def summary(values):
     values = sorted(values)
     quartiles = statistics.quantiles(values, n=4, method="inclusive") if len(values) > 1 else [values[0]] * 3
     return {"n": len(values), "median": statistics.median(values), "min": values[0], "max": values[-1],
+            "p50": statistics.median(values), "p95": values[math.ceil(.95 * len(values)) - 1],
             "iqr": quartiles[2] - quartiles[0]}
 
 
@@ -91,6 +93,11 @@ def run(args):
     con = connect(args.db, readonly=True)
     try:
         configure_search_reader(con, include_diagnostics=False)
+        # Connection-local only: never change persistent catalog settings.
+        for name, value in getattr(args, "sqlite_settings", {}).items():
+            if name not in {"cache_size", "mmap_size", "temp_store"} or not isinstance(value, int):
+                raise ValueError("unsupported SQLite setting")
+            con.execute(f"PRAGMA {name}={value}")
         embedder = None
         if args.vectors_json:
             queries = json.loads(args.vectors_json.read_text(encoding="utf-8"))
@@ -109,6 +116,10 @@ def run(args):
             raise ValueError("--full-search requires the catalog embedder or --synthetic")
         if not queries:
             raise ValueError("At least one query/vector pair is required")
+        if getattr(args, "save_vectors", None):
+            args.save_vectors.parent.mkdir(parents=True, exist_ok=True)
+            with args.save_vectors.open("x", encoding="utf-8") as stream:
+                json.dump(queries, stream, ensure_ascii=False, indent=2)
         rows = []
         # Do not run EQP/counts before measuring the first vector invocation.
         for entry in queries:
@@ -187,6 +198,7 @@ def main():
     parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--query", action="append")
     parser.add_argument("--vectors-json", type=Path, help='JSON list of {"query":str,"vector":[float,...]}')
+    parser.add_argument("--save-vectors", type=Path, help="export query vectors for tuning; requires a new file")
     parser.add_argument("--synthetic", action="store_true", help="only for benchmark_recovery.py fixture")
     parser.add_argument("--full-search", action="store_true")
     parser.add_argument("--environment-label", default="daemon state unobserved")
@@ -197,6 +209,8 @@ def main():
         parser.error("choose --synthetic or --vectors-json")
     if args.output.resolve() == args.db.resolve():
         parser.error("output must differ from the catalog")
+    if args.save_vectors and args.save_vectors.resolve() in {args.db.resolve(), args.output.resolve()}:
+        parser.error("save-vectors must differ from catalog and output")
     result = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
