@@ -204,7 +204,9 @@ def run(args):
         finally:
             # Release the native memory-mapped USearch view before deleting the workspace.
             # It is essential to close NumPy mappings, not merely to flush their contents.
-            del reopened, index
+            # The persistence probe closes its own view; only the ANN index
+            # and two NumPy mappings remain live in this outer scope.
+            del index
             gc.collect()
             for mapped in (matrix, keys):
                 if mapped is None:
