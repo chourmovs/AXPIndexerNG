@@ -13,6 +13,7 @@ for folder in (ROOT, ROOT / "shared", ROOT / "daemon", ROOT / "client"):
 
 from axp_client.search import search  # noqa: E402
 from axp_core.database import SearchReaderPool, connect  # noqa: E402
+from axp_core.performance import summarize_latency_rows  # noqa: E402
 from axp_daemon.embeddings import embedder_for_index  # noqa: E402
 
 QUERIES = (
@@ -27,13 +28,20 @@ QUERIES = (
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, type=Path)
+    parser.add_argument("--repeats", type=int, default=1, help="warm searches per query after one cold reader")
+    parser.add_argument("--query", action="append", help="custom query; repeat to supply a suite")
+    parser.add_argument("--summary", action="store_true", help="append p50/p95/p99 JSON summaries")
     args = parser.parse_args()
+    if args.repeats < 1:
+        parser.error("--repeats must be >= 1")
+    observed = []
     with connect(args.db, readonly=True) as con:
         embedder = embedder_for_index(con)
-    for query in QUERIES:
+    for query in (args.query or QUERIES):
         pool = SearchReaderPool(args.db, size=2)
         try:
-            for temperature in ("cold", "warm"):
+            for ordinal in range(args.repeats + 1):
+                temperature = "cold_reader" if ordinal == 0 else "warm_reader"
                 acquire_started = time.perf_counter()
                 with pool.acquire() as (con, reused):
                     db_acquire_ms = (time.perf_counter() - acquire_started) * 1000
@@ -42,6 +50,7 @@ def main():
                     row = {
                         "query": query,
                         "cold/warm": temperature,
+                        "iteration": ordinal,
                         "reader_reused": reused,
                         "db_acquire_ms": db_acquire_ms,
                         "fts_ms": timing.get("fts_retrieval_ms", 0.0),
@@ -54,8 +63,13 @@ def main():
                         "top_document": result["results"][0]["filename"] if result["results"] else None,
                     }
                     print(json.dumps(row, ensure_ascii=False))
+                    observed.append(row)
         finally:
             pool.close()
+    if args.summary:
+        print(json.dumps({"type": "summary", "samples": len(observed),
+                          "note": "cold_reader is a fresh pool, not a flushed OS cache; warm_reader retains the process/cache",
+                          "latency": summarize_latency_rows(observed)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

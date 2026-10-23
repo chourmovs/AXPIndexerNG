@@ -222,7 +222,8 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
  c.section_heading heading,d.path,d.filename,d.title,d.ingestion_mode,
  c.text snippet FROM chunks c JOIN documents d ON d.id=c.document_id
  WHERE c.document_id IN ({placeholders}) ORDER BY c.document_id,c.chunk_no""", ids)
-    with span('Fusion, scoring et regroupement drilldown', 'retrieval.drilldown_scoring'):
+    with span('Fusion, scoring et regroupement drilldown', 'retrieval.drilldown_scoring') as measured:
+        measured.count(chunks_examined=len(rows), documents=len(ids), lexical_hits=len(lexical), vector_hits=len(vectors))
         merged = {int(row["chunk_id"]): dict(row) for row in rows}
         for item in merged.values():
             item.setdefault("identifiers", "")
@@ -262,9 +263,13 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
             passage_terms = query_terms - (query_terms & document_terms[int(item["document_id"])])
             _relevance(item, passage_terms or query_terms, config)
         classify_passages(list(merged.values()), intent)
+        # Build document buckets once: the previous nested scans were O(documents * chunks).
+        by_document = {document_id: [] for document_id in ids}
+        for item in merged.values():
+            by_document[int(item["document_id"])].append(item)
         passages = []
         for document_rank, document_id in enumerate(ids, 1):
-            ranked = [item for item in merged.values() if int(item["document_id"]) == document_id]
+            ranked = by_document[document_id]
             # Scoped factual lexical evidence is a bounded drill-down-only priority, not a global score change.
             ranked.sort(key=lambda item: (-{"DIRECT_ANSWER": 2, "STRONG_SUPPORT": 1,
                                            "TOPICAL_ONLY": 0}.get(item.get("evidence_tier"), 0),
@@ -280,8 +285,10 @@ def retrieve_document_passages(con, embedder, query, document_ids, *, query_vect
             passages.extend(ranked)
         scoring_ms = (time.perf_counter() - tick) * 1000
         diagnostics = []
+        # Passages are already grouped in document order: reuse the bucket instead of
+        # rescanning the entire passage pool once per selected document.
         for document_rank, document_id in enumerate(ids, 1):
-            ranked = [item for item in passages if int(item["document_id"]) == document_id]
+            ranked = by_document[document_id]
             best = ranked[0] if ranked else {}
             diagnostics.append({"document_rank": document_rank, "document_id": document_id, "filename": best.get("filename"),
                 "scoped_passage_query": scoped_queries[document_id],
