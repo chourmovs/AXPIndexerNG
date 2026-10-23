@@ -204,8 +204,7 @@ def run(args):
         finally:
             # Release the native memory-mapped USearch view before deleting the workspace.
             # It is essential to close NumPy mappings, not merely to flush their contents.
-            reopened = None
-            index = None
+            del reopened, index
             gc.collect()
             for mapped in (matrix, keys):
                 if mapped is None:
