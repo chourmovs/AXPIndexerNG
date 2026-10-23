@@ -36,3 +36,68 @@ def test_usearch_optional_integration_smoke(tmp_path):
     path = tmp_path / "candidate.usearch"
     index.save(path)
     assert path.is_file() and path.stat().st_size > 0
+
+
+
+def _benchmark_args(db, queries_json, tmp_path):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        db=db, max_vectors=24, queries_json=queries_json, query_count=4, top_k=4,
+        connectivity=8, expansion_add=32, expansion_search=32, dtype="f32",
+        batch_size=8, seed=42, index_output=None, output=None,
+    )
+
+
+def _synthetic_ann_catalog(tmp_path):
+    import math
+    from axp_core.database import connect
+    from axp_core.metadata import ensure_index_signature
+    from axp_core.vectors import upsert
+
+    db = tmp_path / "synthetic-ann.db"
+    with connect(db, dimension=2) as con:
+        ensure_index_signature(con, "synthetic-2d", 2)
+        for chunk_id in range(1, 33):
+            theta = 2 * math.pi * chunk_id / 32
+            upsert(con, chunk_id, [math.cos(theta), math.sin(theta)])
+        con.commit()
+    return db
+
+
+def test_full_benchmark_closes_windows_mmaps(tmp_path, monkeypatch):
+    """Exercises the actual benchmark and temporary-directory cleanup on Windows."""
+    pytest.importorskip("usearch")
+    pytest.importorskip("sqlite_vec")
+    from scripts import benchmark_ann
+
+    db = _synthetic_ann_catalog(tmp_path)
+    queries = tmp_path / "queries.json"
+    queries.write_text('[{"query":"north","vector":[1.0,0.0]}]', encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(benchmark_ann.tempfile, "tempdir", str(workspace))
+    report = benchmark_ann.run(_benchmark_args(db, queries, tmp_path))
+
+    assert report["sample_vectors"] == 24
+    assert report["persisted_reopen_ok"]
+    assert report["queries"] == 1
+    assert report["latency"]["ann_ms"]["n"] == 1
+    assert not list(workspace.glob("axp-ann-benchmark-*"))
+
+
+def test_failed_benchmark_releases_windows_mmaps(tmp_path, monkeypatch):
+    """A primary exception must not be replaced by WinError 32 during cleanup."""
+    pytest.importorskip("usearch")
+    pytest.importorskip("sqlite_vec")
+    from scripts import benchmark_ann
+
+    db = _synthetic_ann_catalog(tmp_path)
+    malformed = tmp_path / "bad-queries.json"
+    malformed.write_text('[{"query":"wrong dimension","vector":[1.0]}]', encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(benchmark_ann.tempfile, "tempdir", str(workspace))
+    with pytest.raises(ValueError, match="wrong dimension"):
+        benchmark_ann.run(_benchmark_args(db, malformed, tmp_path))
+    assert not list(workspace.glob("axp-ann-benchmark-*"))

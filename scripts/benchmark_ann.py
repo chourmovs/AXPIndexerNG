@@ -9,10 +9,12 @@ No live database writes, no embeddings regenerated, no production switch.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import platform
 import random
+import shutil
 import sys
 import tempfile
 import time
@@ -77,8 +79,12 @@ def run(args):
         rng = random.Random(args.seed)
         query_samples = []
         started = time.perf_counter()
-        with tempfile.TemporaryDirectory(prefix="axp-ann-benchmark-") as scratch:
-            keys = np.memmap(Path(scratch) / "ids.dat", mode="w+", dtype=np.int64, shape=(selected,))
+        # Windows keeps mapped files locked until their mappings are explicitly closed.
+        # TemporaryDirectory would attempt deletion before local memmap references expire.
+        scratch = Path(tempfile.mkdtemp(prefix="axp-ann-benchmark-"))
+        keys = matrix = index = reopened = None
+        try:
+            keys = np.memmap(scratch / "ids.dat", mode="w+", dtype=np.int64, shape=(selected,))
             matrix = np.memmap(Path(scratch) / "vectors.dat", mode="w+", dtype=np.float32,
                                shape=(selected, dimension))
             position = 0
@@ -194,6 +200,24 @@ def run(args):
                     "No SQLite Vec1 implementation or winner decision is claimed in this PR",
                 ],
             }
+
+        finally:
+            # Release the native memory-mapped USearch view before deleting the workspace.
+            # It is essential to close NumPy mappings, not merely to flush their contents.
+            # The persistence probe closes its own view; only the ANN index
+            # and two NumPy mappings remain live in this outer scope.
+            del index
+            gc.collect()
+            for mapped in (matrix, keys):
+                if mapped is None:
+                    continue
+                mapped.flush()
+                mapping = getattr(mapped, "_mmap", None)
+                if mapping is not None and not mapping.closed:
+                    mapping.close()
+            matrix = keys = None
+            gc.collect()
+            shutil.rmtree(scratch)
 
 
 def main():
